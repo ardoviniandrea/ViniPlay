@@ -521,6 +521,111 @@
             border-radius: 50%;
             display: inline-block;
         }
+
+        /* --- NEW: VOD Page Styles --- */
+        .vod-item {
+            background-color: #1f2937; /* bg-gray-800 */
+            border-radius: 0.5rem; /* rounded-lg */
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); /* shadow-lg */
+            transition: all 0.2s;
+            cursor: pointer;
+            transform: scale(1);
+            position: relative; /* For the badge */
+        }
+        .vod-item:hover {
+            box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1); /* shadow-xl */
+            transform: scale(1.05);
+            z-index: 10;
+        }
+        .vod-item-poster {
+            width: 100%;
+            background-color: #374151; /* bg-gray-700 */
+            aspect-ratio: 2 / 3; /* For vertical movie posters */
+        }
+        .vod-item-poster img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .vod-item-info {
+            padding: 0.5rem 0.75rem; /* p-2 p-3 */
+        }
+        .vod-item-title {
+            font-size: 0.875rem; /* text-sm */
+            font-weight: 600; /* font-semibold */
+            color: white;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .vod-item-type {
+            font-size: 0.75rem; /* text-xs */
+            color: #9ca3af; /* text-gray-400 */
+            text-transform: capitalize;
+        }
+        .vod-type-badge {
+            position: absolute;
+            top: 0.5rem; /* top-2 */
+            left: 0.5rem; /* left-2 */
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            font-size: 0.75rem; /* text-xs */
+            font-weight: 700; /* font-bold */
+            padding: 0.25rem 0.5rem; /* py-1 px-2 */
+            border-radius: 0.25rem; /* rounded */
+        }
+
+        /* --- NEW: Group Filter Modal Styles --- */
+        .group-filter-tab-btn.active { 
+            background-color: #3b82f6; 
+            color: white; 
+        }
+        .group-filter-tab-btn {
+            font-size: 0.875rem; /* text-sm */
+            font-weight: 500; /* font-medium */
+            padding: 0.5rem 1rem; /* py-2 px-4 */
+            color: #d1d5db; /* text-gray-300 */
+            border-radius: 0.375rem; /* rounded-md */
+            transition: all 0.2s;
+        }
+        .group-filter-tab-btn:not(.active):hover {
+            background-color: #374151; /* hover:bg-gray-700 */
+        }
+        .group-filter-item {
+            background-color: #374151; /* bg-gray-700 */
+            padding: 0.75rem; /* p-3 */
+            border-radius: 0.375rem; /* rounded-md */
+            border: 1px solid #4b5563; /* border-gray-600 */
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .group-filter-item.selected {
+            background-color: #2563eb; /* bg-blue-600 */
+            border-color: #3b82f6; /* border-blue-500 */
+            color: white;
+        }
+        .group-filter-item:not(.selected):hover {
+            background-color: #4b5563; /* hover:bg-gray-600 */
+        }
+        
+        /* --- NEW: VOD Details Modal Styles --- */
+        #vod-episode-list .episode-item {
+            @apply p-3 flex justify-between items-center border-b border-gray-700/50;
+        }
+        #vod-episode-list .episode-item:last-child {
+            @apply border-b-0;
+        }
+        #vod-episode-list .episode-item:hover {
+            @apply bg-gray-700/50;
+        }
+        #vod-episode-list .episode-item-play-btn {
+            @apply text-blue-400 hover:text-blue-300 p-2 rounded-full;
+        }
+
+
+
+        
         /* --- NEW: Immersive Mode Styles --- */
         #app-container.multiview-immersive #main-header,
         #app-container.multiview-immersive #multiview-header {
@@ -605,6 +710,7 @@
                     <button id="tab-multiview" class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Multi-View</button>
                     <button id="tab-player" class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Player</button>
                     <button id="tab-dvr" class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">DVR</button>
+                    <button id="tab-vod" class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">VODs</button>
                     <button id="tab-activity" class="tab-button hidden text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Activity</button>
                     <button id="tab-notifications" class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Notifications</button>
                     <button id="tab-settings" class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Settings</button>
@@ -861,6 +967,31 @@
                             </table>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            </div> <div id="page-vod" class="hidden flex-grow flex-col overflow-hidden">
+                <div id="vod-filter-bar" class="flex-shrink-0 bg-gray-800 p-2 sm:p-4 border-b border-gray-700 flex flex-col sm:flex-row items-stretch sm:items-center sm:justify-between gap-3 z-30">
+                    <div class="flex items-center gap-2 sm:gap-3">
+                        <button id="vod-type-all" class="vod-type-btn tab-button active text-sm sm:text-base font-medium py-2 px-4 rounded-md transition-colors">All</button>
+                        <button id="vod-type-movies" class="vod-type-btn tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Movies</button>
+                        <button id="vod-type-series" class="vod-type-btn tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Series</button>
+                    </div>
+                    <div class="relative w-full sm:w-auto grid grid-cols-1 sm:flex sm:items-center sm:justify-end gap-2">
+                        <select id="vod-group-filter" class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500">
+                            <option value="all">All Categories</option>
+                        </select>
+                        <input type="search" id="vod-search-input" placeholder="Search VOD..." class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500 sm:w-48">
+                    </div>
+                </div>
+                <div id="vod-grid-container" class="flex-grow bg-gray-900 overflow-y-auto custom-scrollbar p-4 md:p-6">
+                    <div id="vod-no-results" class="hidden text-center text-gray-500 p-10">
+                        <span data-icon="warning" class="mx-auto h-12 w-12 text-gray-600"></span>
+                        <h3 class="mt-2 text-sm font-medium">No VOD Content Found</h3>
+                        <p class="mt-1 text-sm">No movies or series were found from your active sources, or your filters match no results.</p>
+                    </div>
+                    <div id="vod-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 md:gap-6">
+                        </div>
                 </div>
             </div>
 
@@ -1246,6 +1377,9 @@
             <button id="mobile-nav-dvr" class="text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors">
                 <span class="flex items-center gap-2"><span data-icon="dvr"></span> DVR</span>
             </button>
+            <button id="mobile-nav-vod" class="text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors">
+                <span class="flex items-center gap-2"><span data-icon="multiview"></span> VODs</span>
+            </button>
             <!-- NEW: Admin Activity Tab (Mobile) -->
             <button id="mobile-nav-activity" class="hidden text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors">
                 <span class="flex items-center gap-2"><span data-icon="info"></span> Activity</span>
@@ -1574,6 +1708,85 @@
             </div>
             <div class="bg-gray-700/50 px-6 py-4 flex justify-end gap-4 rounded-b-lg flex-shrink-0">
                 <button type="button" id="hardware-info-modal-close-btn" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="group-filter-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[60] p-4">
+        <div class="bg-gray-800 rounded-lg shadow-xl w-full max-w-3xl flex flex-col" style="height: 80vh;">
+            <div class="p-4 border-b border-gray-700 flex-shrink-0 flex justify-between items-center">
+                <h3 class="text-xl font-bold text-white">M3U Group Filter</h3>
+                <button type="button" id="group-filter-close-btn" class="text-gray-400 hover:text-white p-2 rounded-full text-2xl">&times;</button>
+            </div>
+            <div class="p-4 flex-shrink-0 border-b border-gray-700">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                    <div class="flex space-x-1 sm:space-x-4">
+                        <button id="group-filter-tab-live" data-type="live" class="group-filter-tab-btn tab-button active">Live</button>
+                        <button id="group-filter-tab-movies" data-type="movie" class="group-filter-tab-btn tab-button">VOD - Movies</button>
+                        <button id="group-filter-tab-series" data-type="series" class="group-filter-tab-btn tab-button">VOD - Series</button>
+                    </div>
+                    <div class="flex gap-2">
+                        <button id="group-filter-select-all" class="bg-gray-700 hover:bg-gray-600 text-white text-sm font-bold py-2 px-3 rounded-md">Select All</button>
+                        <button id="group-filter-deselect-all" class="bg-gray-700 hover:bg-gray-600 text-white text-sm font-bold py-2 px-3 rounded-md">Deselect All</button>
+                    </div>
+                </div>
+                <input type="search" id="group-filter-search" placeholder="Filter groups..." class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500 mt-4">
+            </div>
+            <div id="group-filter-list" class="p-4 flex-grow overflow-y-auto custom-scrollbar grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                </div>
+            <div class="bg-gray-700/50 px-6 py-4 flex justify-end gap-4 rounded-b-lg flex-shrink-0">
+                <button type="button" id="group-filter-cancel-btn" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
+                <button type="button" id="group-filter-save-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Save and Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="vod-details-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[60] p-4">
+        <div id="vod-details-container" class="bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl flex flex-col relative" style="max-height: 90vh;">
+            <button id="vod-details-close-btn" class="absolute top-3 right-3 p-2 text-gray-400 hover:text-white rounded-full hover:bg-gray-700 transition-colors z-20">
+                <span data-icon="close" class="w-6 h-6"></span>
+            </button>
+    
+            <div id="vod-details-backdrop" class="absolute inset-0 w-full h-full overflow-hidden rounded-lg">
+                <img id="vod-details-backdrop-img" src="" class="w-full h-full object-cover object-center opacity-20" style="filter: blur(10px);">
+                <div class="absolute inset-0 bg-gradient-to-t from-gray-800 via-gray-800/80 to-transparent"></div>
+            </div>
+    
+            <div id="vod-details-content" class="relative flex-grow flex flex-col overflow-y-auto custom-scrollbar">
+                <div class="p-6 md:p-8 flex flex-col md:flex-row gap-6">
+                    <img id="vod-details-poster" src="" class="w-48 h-72 object-cover rounded-md shadow-lg flex-shrink-0 bg-gray-700">
+                    <div class="flex-grow pt-4">
+                        <h2 id="vod-details-title" class="text-3xl font-bold text-white mb-2"></h2>
+                        <div id="vod-details-meta" class="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-gray-400 mb-4">
+                            <span id="vod-details-year"></span>
+                            <span id="vod-details-rating" class="font-bold text-yellow-400"></span>
+                            <span id="vod-details-type" class="font-semibold text-purple-400"></span>
+                            <span id="vod-details-duration"></span>
+                        </div>
+                        <p class="text-sm mb-2"><strong class="text-gray-300">Genre:</strong> <span id="vod-details-genre"></span></p>
+                        <p class="text-sm mb-2"><strong class="text-gray-300">Director:</strong> <span id="vod-details-director"></span></p>
+                        <p class="text-sm mb-4"><strong class="text-gray-300">Cast:</strong> <span id="vod-details-cast"></span></p>
+                        <p id="vod-details-desc" class="text-base text-gray-300 mb-6"></p>
+    
+                        <div id="vod-details-movie-actions" class="hidden">
+                            <button id="vod-play-movie-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-md text-lg flex items-center gap-2">
+                                <span data-icon="play"></span> Play Movie
+                            </button>
+                        </div>
+                    </div>
+                </div>
+    
+                <div id="vod-details-series-actions" class="hidden px-6 md:px-8 pb-6">
+                    <div class="flex justify-between items-center mb-4">
+                         <h3 class="text-xl font-bold text-white">Episodes</h3>
+                        <div class="flex-shrink-0">
+                            <label for="vod-season-select" class="sr-only">Select Season</label>
+                            <select id="vod-season-select" class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"></select>
+                        </div>
+                    </div>
+                    <div id="vod-episode-list" class="max-h-60 overflow-y-auto custom-scrollbar bg-gray-900/50 rounded-md border border-gray-700">
+                        </div>
+                </div>
             </div>
         </div>
     </div>
