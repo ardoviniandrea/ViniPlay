@@ -403,10 +403,38 @@ const openSourceEditor = (sourceType, source = null) => {
     UIElements.sourceEditorUrlContainer.classList.toggle('hidden', activeTab !== 'url');
     UIElements.sourceEditorFileContainer.classList.toggle('hidden', activeTab !== 'file');
     UIElements.sourceEditorXcContainer.classList.toggle('hidden', activeTab !== 'xc');
+
+    // --- NEW: Add "Filter Groups" button and hidden input ---
+    const filterGroupBtnHTML = `
+        <div id="source-editor-filter-groups-container" class="mt-4 ${activeTab === 'file' ? 'hidden' : ''}">
+            <label class="block text-sm font-medium text-gray-400">Group Filtering</label>
+            <p class="text-xs text-gray-500 mb-2">Select which groups to import. If none are selected, all groups will be imported.</p>
+            <button type="button" id="source-editor-filter-groups-btn" class="w-full bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">
+                Select Groups
+            </button>
+            <input type="hidden" id="source-editor-selected-groups" value="[]">
+        </div>
+    `;
+    // Remove old button if it exists, then add the new one
+    const oldBtnContainer = document.getElementById('source-editor-filter-groups-container');
+    if (oldBtnContainer) {
+        oldBtnContainer.remove();
+    }
+    UIElements.sourceEditorRefreshContainer.insertAdjacentHTML('beforebegin', filterGroupBtnHTML);
+
+    // Populate hidden input with existing selected groups if editing
+    if (source && source.selectedGroups) {
+        document.getElementById('source-editor-selected-groups').value = JSON.stringify(source.selectedGroups);
+        const count = source.selectedGroups.length;
+        document.getElementById('source-editor-filter-groups-btn').textContent = count > 0 ? `${count} Groups Selected` : 'Select Groups';
+    }
     
     // Hide refresh interval for file-based sources
     UIElements.sourceEditorRefreshContainer.classList.toggle('hidden', activeTab === 'file');
     UIElements.sourceEditorFileInfo.classList.add('hidden'); // Hide file info by default
+    document.getElementById('source-editor-filter-groups-container').classList.toggle('hidden', activeTab === 'file');
+
+    
 
     // Populate the form fields based on the source data
     if (source) {
@@ -590,6 +618,12 @@ export function setupSettingsEventListeners() {
             }));
             formData.append('refreshHours', UIElements.sourceEditorRefreshInterval.value);
         }
+
+        // --- NEW: Add selected groups to the form data ---
+        const selectedGroupsInput = document.getElementById('source-editor-selected-groups');
+        if (selectedGroupsInput) {
+            formData.append('selectedGroups', selectedGroupsInput.value || '[]');
+        }
         
         if (id) formData.append('id', id);
 
@@ -628,6 +662,150 @@ export function setupSettingsEventListeners() {
                 showNotification('URL is reachable and valid!', false);
             }
         }
+
+        // --- NEW: Group Filter Modal Logic ---
+
+    // 1. Add listener to the "Select Groups" button in the source editor
+    // We must use event delegation on the modal body since the button is added dynamically
+    UIElements.sourceEditorModal.addEventListener('click', async (e) => {
+        if (e.target.id === 'source-editor-filter-groups-btn') {
+            const btn = e.target;
+            const originalContent = btn.innerHTML;
+            setButtonLoadingState(btn, true, 'Fetching...');
+
+            const body = {
+                type: currentSourceTypeForEditor,
+                url: UIElements.sourceEditorUrl.value,
+                xc: JSON.stringify({
+                    server: UIElements.sourceEditorXcUrl.value,
+                    username: UIElements.sourceEditorXcUsername.value,
+                    password: UIElements.sourceEditorXcPassword.value,
+                })
+            };
+
+            if ((body.type === 'url' && !body.url) && (body.type === 'xc' && !JSON.parse(body.xc).server)) {
+                showNotification('Please enter a URL or XC server address first.', true);
+                setButtonLoadingState(btn, false, originalContent);
+                return;
+            }
+
+            const res = await apiFetch('/api/sources/fetch-groups', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+
+            if (res && res.ok) {
+                const data = await res.json();
+                const selectedGroups = JSON.parse(document.getElementById('source-editor-selected-groups').value || '[]');
+                populateGroupFilterModal(data.groups, selectedGroups);
+                openModal(UIElements.groupFilterModal);
+            } else {
+                showNotification('Could not fetch groups. Please check the URL or XC credentials.', true);
+            }
+            setButtonLoadingState(btn, false, originalContent);
+        }
+    });
+
+    // 2. Helper function to populate the group filter modal
+    const populateGroupFilterModal = (allGroups, selectedGroups) => {
+        const groups = { live: [], movie: [], series: [] };
+
+        // Categorize groups
+        allGroups.forEach(group => {
+            const gLower = group.toLowerCase();
+            if (gLower.includes('movie') || gLower.includes('film') || gLower.includes('vod')) {
+                groups.movie.push(group);
+            } else if (gLower.includes('series') || gLower.includes('show') || gLower.includes('tv')) {
+                groups.series.push(group);
+            } else {
+                groups.live.push(group);
+            }
+        });
+
+        // Store categorized groups on the modal element for easy access
+        UIElements.groupFilterModal.dataset.groups = JSON.stringify(groups);
+        
+        // Set counts on tabs
+        UIElements.groupFilterTabLive.textContent = `Live (${groups.live.length})`;
+        UIElements.groupFilterTabMovies.textContent = `VOD - Movies (${groups.movie.length})`;
+        UIElements.groupFilterTabSeries.textContent = `VOD - Series (${groups.series.length})`;
+
+        // Trigger the rendering for the default "live" tab
+        updateGroupFilterList('live', selectedGroups);
+    };
+
+    // 3. Helper function to render the list for the active tab and search query
+    const updateGroupFilterList = (type, selectedGroups, searchTerm = '') => {
+        const listEl = UIElements.groupFilterList;
+        const groups = JSON.parse(UIElements.groupFilterModal.dataset.groups || '{}')[type] || [];
+        
+        const filteredGroups = groups.filter(g => g.toLowerCase().includes(searchTerm.toLowerCase()));
+
+        if (filteredGroups.length === 0) {
+            listEl.innerHTML = `<p class="text-gray-500 col-span-full text-center">No groups found for this type${searchTerm ? ' matching "' + searchTerm + '"' : ''}.</p>`;
+            return;
+        }
+
+        listEl.innerHTML = filteredGroups.map(group => `
+            <div class="group-filter-item ${selectedGroups.includes(group) ? 'selected' : ''}" data-group-name="${group}">
+                ${group}
+            </div>
+        `).join('');
+    };
+
+    // 4. Event Listeners for the Group Filter Modal
+    UIElements.groupFilterModal.addEventListener('click', (e) => {
+        const item = e.target.closest('.group-filter-item');
+        if (item) {
+            item.classList.toggle('selected');
+        }
+    });
+
+    const switchGroupFilterTab = (type) => {
+        UIElements.groupFilterTabLive.classList.toggle('active', type === 'live');
+        UIElements.groupFilterTabMovies.classList.toggle('active', type === 'movie');
+        UIElements.groupFilterTabSeries.classList.toggle('active', type === 'series');
+        // Get currently selected groups
+        const selectedGroups = Array.from(UIElements.groupFilterList.querySelectorAll('.group-filter-item.selected')).map(el => el.dataset.groupName);
+        updateGroupFilterList(type, selectedGroups, UIElements.groupFilterSearch.value);
+    };
+    UIElements.groupFilterTabLive.addEventListener('click', () => switchGroupFilterTab('live'));
+    UIElements.groupFilterTabMovies.addEventListener('click', () => switchGroupFilterTab('movie'));
+    UIElements.groupFilterTabSeries.addEventListener('click', () => switchGroupFilterTab('series'));
+
+    UIElements.groupFilterSearch.addEventListener('input', () => {
+        const activeTab = document.querySelector('.group-filter-tab-btn.active').dataset.type;
+        const selectedGroups = Array.from(UIElements.groupFilterList.querySelectorAll('.group-filter-item.selected')).map(el => el.dataset.groupName);
+        updateGroupFilterList(activeTab, selectedGroups, UIElements.groupFilterSearch.value);
+    });
+
+    UIElements.groupFilterSelectAll.addEventListener('click', () => {
+        UIElements.groupFilterList.querySelectorAll('.group-filter-item').forEach(el => el.classList.add('selected'));
+    });
+    UIElements.groupFilterDeselectAll.addEventListener('click', () => {
+        UIElements.groupFilterList.querySelectorAll('.group-filter-item').forEach(el => el.classList.remove('selected'));
+    });
+
+    UIElements.groupFilterCancelBtn.addEventListener('click', () => closeModal(UIElements.groupFilterModal));
+    UIElements.groupFilterCloseBtn.addEventListener('click', () => closeModal(UIElements.groupFilterModal));
+
+    UIElements.groupFilterSaveBtn.addEventListener('click', () => {
+        const selectedGroups = Array.from(UIElements.groupFilterList.querySelectorAll('.group-filter-item.selected')).map(el => el.dataset.groupName);
+        const hiddenInput = document.getElementById('source-editor-selected-groups');
+        hiddenInput.value = JSON.stringify(selectedGroups);
+        
+        const btnText = selectedGroups.length > 0 ? `${selectedGroups.length} Groups Selected` : 'Select Groups';
+        document.getElementById('source-editor-filter-groups-btn').textContent = btnText;
+        
+        closeModal(UIElements.groupFilterModal);
+    });
+
+    // --- END NEW Group Filter Modal Logic ---
+
+
+
+        
         // apiFetch handles error notifications automatically
         
         setButtonLoadingState(UIElements.testSourceUrlBtn, false, originalContent);
