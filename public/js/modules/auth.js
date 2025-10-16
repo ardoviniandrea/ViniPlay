@@ -136,6 +136,42 @@ const initializeUIElements = () => {
     UIElements.refreshActivityBtn = document.getElementById('refresh-activity-btn');
     UIElements.historySearchInput = document.getElementById('history-search-input');
 
+    // --- NEW: VOD Elements (Page & Details Modal) ---
+    UIElements.tabVod = document.getElementById('tab-vod');
+    UIElements.mobileNavVod = document.getElementById('mobile-nav-vod');
+    UIElements.pageVod = document.getElementById('page-vod');
+    UIElements.vodFilterBar = document.getElementById('vod-filter-bar');
+    UIElements.vodTypeAll = document.getElementById('vod-type-all');
+    UIElements.vodTypeMovies = document.getElementById('vod-type-movies');
+    UIElements.vodTypeSeries = document.getElementById('vod-type-series');
+    UIElements.vodGroupFilter = document.getElementById('vod-group-filter');
+    UIElements.vodSearchInput = document.getElementById('vod-search-input');
+    UIElements.vodGridContainer = document.getElementById('vod-grid-container');
+    UIElements.vodNoResults = document.getElementById('vod-no-results');
+    UIElements.vodGrid = document.getElementById('vod-grid');
+    UIElements.vodDetailsModal = document.getElementById('vod-details-modal');
+    UIElements.vodDetailsContainer = document.getElementById('vod-details-container');
+    UIElements.vodDetailsCloseBtn = document.getElementById('vod-details-close-btn');
+    UIElements.vodDetailsBackdrop = document.getElementById('vod-details-backdrop');
+    UIElements.vodDetailsBackdropImg = document.getElementById('vod-details-backdrop-img');
+    UIElements.vodDetailsContent = document.getElementById('vod-details-content');
+    UIElements.vodDetailsPoster = document.getElementById('vod-details-poster');
+    UIElements.vodDetailsTitle = document.getElementById('vod-details-title');
+    UIElements.vodDetailsMeta = document.getElementById('vod-details-meta');
+    UIElements.vodDetailsYear = document.getElementById('vod-details-year');
+    UIElements.vodDetailsRating = document.getElementById('vod-details-rating');
+    UIElements.vodDetailsType = document.getElementById('vod-details-type');
+    UIElements.vodDetailsDuration = document.getElementById('vod-details-duration');
+    UIElements.vodDetailsGenre = document.getElementById('vod-details-genre');
+    UIElements.vodDetailsDirector = document.getElementById('vod-details-director');
+    UIElements.vodDetailsCast = document.getElementById('vod-details-cast');
+    UIElements.vodDetailsDesc = document.getElementById('vod-details-desc');
+    UIElements.vodDetailsMovieActions = document.getElementById('vod-details-movie-actions');
+    UIElements.vodPlayMovieBtn = document.getElementById('vod-play-movie-btn');
+    UIElements.vodDetailsSeriesActions = document.getElementById('vod-details-series-actions');
+    UIElements.vodSeasonSelect = document.getElementById('vod-season-select');
+    UIElements.vodEpisodeList = document.getElementById('vod-episode-list');
+    // --- END VOD Elements ---
 
     // Settings Buttons
     UIElements.addM3uBtn = document.getElementById('add-m3u-btn');
@@ -148,6 +184,19 @@ const initializeUIElements = () => {
     UIElements.processingStatusBackgroundBtn = document.getElementById('processing-status-background-btn');
     UIElements.processingStatusCloseRefreshBtn = document.getElementById('processing-status-close-refresh-btn');
 
+    // --- NEW: Group Filter Modal Elements ---
+    UIElements.groupFilterModal = document.getElementById('group-filter-modal');
+    UIElements.groupFilterCloseBtn = document.getElementById('group-filter-close-btn');
+    UIElements.groupFilterTabLive = document.getElementById('group-filter-tab-live');
+    UIElements.groupFilterTabMovies = document.getElementById('group-filter-tab-movies');
+    UIElements.groupFilterTabSeries = document.getElementById('group-filter-tab-series');
+    UIElements.groupFilterSelectAll = document.getElementById('group-filter-select-all');
+    UIElements.groupFilterDeselectAll = document.getElementById('group-filter-deselect-all');
+    UIElements.groupFilterSearch = document.getElementById('group-filter-search');
+    UIElements.groupFilterList = document.getElementById('group-filter-list');
+    UIElements.groupFilterCancelBtn = document.getElementById('group-filter-cancel-btn');
+    UIElements.groupFilterSaveBtn = document.getElementById('group-filter-save-btn');
+    // --- END Group Filter Elements ---
     
 };
 
