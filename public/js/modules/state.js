@@ -23,6 +23,8 @@ export const appState = {
 export const guideState = {
     channels: [],
     programs: {},
+    vodMovies: [],
+    vodSeries: [],
     settings: {
         // Add a default for channelColumnWidth
         channelColumnWidth: window.innerWidth < 768 ? 64 : 180, // Default based on screen size
@@ -67,4 +69,55 @@ export const adminState = {
 export const UIElements = {
     // --- **FIX: Add the new element for notification settings** ---
     notificationSettings: document.getElementById('notification-settings-container'),
+
+    // --- NEW: VOD Page Elements ---
+    tabVod: null,
+    mobileNavVod: null,
+    pageVod: null,
+    vodFilterBar: null,
+    vodTypeAll: null,
+    vodTypeMovies: null,
+    vodTypeSeries: null,
+    vodGroupFilter: null,
+    vodSearchInput: null,
+    vodGridContainer: null,
+    vodNoResults: null,
+    vodGrid: null,
+
+    // --- NEW: VOD Details Modal ---
+    vodDetailsModal: null,
+    vodDetailsContainer: null,
+    vodDetailsCloseBtn: null,
+    vodDetailsBackdrop: null,
+    vodDetailsBackdropImg: null,
+    vodDetailsContent: null,
+    vodDetailsPoster: null,
+    vodDetailsTitle: null,
+    vodDetailsMeta: null,
+    vodDetailsYear: null,
+    vodDetailsRating: null,
+    vodDetailsType: null,
+    vodDetailsDuration: null,
+    vodDetailsGenre: null,
+    vodDetailsDirector: null,
+    vodDetailsCast: null,
+    vodDetailsDesc: null,
+    vodDetailsMovieActions: null,
+    vodPlayMovieBtn: null,
+    vodDetailsSeriesActions: null,
+    vodSeasonSelect: null,
+    vodEpisodeList: null,
+
+    // --- NEW: Group Filter Modal ---
+    groupFilterModal: null,
+    groupFilterCloseBtn: null,
+    groupFilterTabLive: null,
+    groupFilterTabMovies: null,
+    groupFilterTabSeries: null,
+    groupFilterSelectAll: null,
+    groupFilterDeselectAll: null,
+    groupFilterSearch: null,
+    groupFilterList: null,
+    groupFilterCancelBtn: null,
+    groupFilterSaveBtn: null,
 };
