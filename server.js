@@ -654,11 +654,15 @@ async function processAndMergeSources(req) {
                         url: streamUrl
                     };
 
-                    // VOD Detection Rules (based on XC provider conventions)
-                    if (streamUrl.includes('/movie/')) {
+                    // VOD Detection Rules (now checks URL and Group Title)
+                    const groupLower = groupTitle.toLowerCase();
+                    const isMovie = streamUrl.includes('/movie/') || groupLower.includes('movie') || (groupLower.includes('vod') && !groupLower.includes('series'));
+                    const isSeries = streamUrl.includes('/series/') || groupLower.includes('series') || (groupLower.includes('vod') && groupLower.includes('series'));
+
+                    if (isMovie) {
                         mergedVodMovies.push(baseVodObject);
                         movieCount++;
-                    } else if (streamUrl.includes('/series/')) {
+                    } else if (isSeries) {
                         mergedVodSeries.push(baseVodObject);
                         seriesCount++;
                     } else {
@@ -673,9 +677,11 @@ async function processAndMergeSources(req) {
                             const extinfEnd = processedExtInf.indexOf(' ') + 1;
                             processedExtInf = processedExtInf.slice(0, extinfEnd) + `tvg-id="${uniqueChannelId}" ` + processedExtInf.slice(extinfEnd);
                         }
-                        // Inject source name
-                        processedExtInf += ` vini-source="${source.name}"`;
                         
+                        // Inject source name (Corrected Position)
+                        const extinfEndWithId = processedExtInf.indexOf(' ') + 1;
+                        processedExtInf = processedExtInf.slice(0, extinfEndWithId) + `vini-source="${source.name}" ` + processedExtInf.slice(extinfEndWithId);
+
                         mergedLiveM3uContent += processedExtInf + '\n' + streamUrl + '\n';
                         liveChannelIdSet.add(uniqueChannelId);
                     }
