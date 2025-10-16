@@ -300,6 +300,45 @@ export const playChannel = (url, name, channelId) => {
     }
 };
 
+
+/**
+ * NEW: Plays a VOD (Movie or Episode) in the main player modal.
+ * This function bypasses mpegts.js and uses the native <video> element
+ * for playback, which allows seeking.
+ * @param {string} url - The direct URL to the VOD file (e.g., .mp4, .mkv).
+ * @param {string} title - The title of the VOD to display.
+ */
+export const playVOD = async (url, title) => {
+    console.log(`[VOD_PLAYER] Attempting to play VOD: ${title}`);
+    
+    // 1. Stop any current stream (live or VOD)
+    // This function is safe to call even if no player is active.
+    // It will clean up appState.player if it exists, or just reset the video src.
+    await stopAndCleanupPlayer();
+
+    // 2. Set up the player modal
+    UIElements.videoTitle.textContent = title;
+
+    // 3. Play the VOD
+    // We do NOT use mpegts.js here. We set the src attribute directly
+    // on the video element to let the browser handle playback.
+    UIElements.videoElement.src = url;
+    UIElements.videoElement.load();
+    
+    // 4. Show the modal
+    openModal(UIElements.videoModal);
+
+    // 5. Try to play
+    try {
+        await UIElements.videoElement.play();
+        console.log(`[VOD_PLAYER] Playing: ${title}`);
+    } catch (err) {
+        console.error("[VOD_PLAYER] Error trying to play VOD:", err);
+        showNotification("Could not play the selected video.", true);
+        stopAndCleanupPlayer(); // Clean up on failure
+    }
+};
+
 /**
  * Sets up event listeners for the video player.
  */
