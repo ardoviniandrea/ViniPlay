@@ -455,12 +455,16 @@ async function proceedWithRouteChange(path) {
         }
 
         if (!appState.isNavigating) {
-            console.log('[UI] Refreshing TV Guide data on tab switch.');
-            const config = await fetchConfig();
-            if (config) {
-                Object.assign(guideState.settings, config.settings || {});
-                finalizeGuideLoad(true);
-            }
+                console.log('[UI] Refreshing TV Guide data on tab switch.');
+                const config = await fetchConfig();
+                if (config) {
+                    Object.assign(guideState.settings, config.settings || {});
+                    // --- FIX: Add VOD data to the global state ---
+                    guideState.vodMovies = config.vodMovies || [];
+                    guideState.vodSeries = config.vodSeries || [];
+                    // --- END FIX ---
+                    finalizeGuideLoad(true);
+                }
         } else {
             console.log('[UI] Skipping soft refresh because a navigation action is in progress.');
         }
@@ -535,8 +539,12 @@ export async function refreshGuideAfterProcessing() {
 
     // 2. Update the global state
     if (config) {
-        Object.assign(guideState.settings, config.settings || {});
-    }
+            Object.assign(guideState.settings, config.settings || {});
+            // --- FIX: Add VOD data to the global state ---
+            guideState.vodMovies = config.vodMovies || [];
+            guideState.vodSeries = config.vodSeries || [];
+            // --- END FIX ---
+        }
 
     // 3. Close the modal
     closeModal(UIElements.processingStatusModal);
