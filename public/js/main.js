@@ -19,6 +19,7 @@ import { loadAndScheduleNotifications, subscribeUserToPush, navigateToProgramInG
 import { setupDvrEventListeners, handleDvrChannelClick, initDvrPage } from './modules/dvr.js';
 import { handleMultiViewChannelClick, populateChannelSelector, initMultiView } from './modules/multiview.js';
 import { setupDirectPlayerEventListeners, initDirectPlayer } from './modules/player_direct.js';
+import { initVodPage } from './modules/vod.js';
 import { ICONS } from './modules/icons.js'; // MODIFIED: Import the new icon library
 //-- ENHANCEMENT: Import the new handler for channel selector clicks from the admin page.
 import { initActivityPage, setupAdminEventListeners, handleActivityUpdate, handleAdminChannelClick } from './modules/admin.js';
@@ -185,6 +186,11 @@ export async function initMainApp() {
 
         console.log('[MAIN] Configuration loaded:', config);
         Object.assign(guideState.settings, config.settings || {}); // Merge server settings into guideState
+
+        // --- NEW: Load VOD data into state ---
+        guideState.vodMovies = config.vodMovies || [];
+        guideState.vodSeries = config.vodSeries || [];
+        console.log(`[MAIN] Loaded ${guideState.vodMovies.length} movies and ${guideState.vodSeries.length} series episodes.`);
 
         // Restore UI dimensions from settings
         restoreDimensions();
@@ -412,6 +418,7 @@ function setupCoreEventListeners() {
     setupTabListener(UIElements.tabMultiview, 'multiview', initMultiView);
     setupTabListener(UIElements.tabPlayer, 'player', initDirectPlayer);
     setupTabListener(UIElements.tabDvr, 'dvr', initDvrPage);
+    setupTabListener(UIElements.tabVod, 'vod', initVodPage);
     setupTabListener(UIElements.tabActivity, 'activity', initActivityPage); // NEW
     setupTabListener(UIElements.tabNotifications, 'notifications', loadAndScheduleNotifications);
     setupTabListener(UIElements.tabSettings, 'settings');
@@ -425,6 +432,7 @@ function setupCoreEventListeners() {
     UIElements.mobileNavMultiview?.addEventListener('click', () => switchTab('multiview'));
     UIElements.mobileNavPlayer?.addEventListener('click', () => switchTab('player'));
     UIElements.mobileNavDvr?.addEventListener('click', () => switchTab('dvr'));
+    UIElements.mobileNavVod?.addEventListener('click', () => switchTab('vod'));
     UIElements.mobileNavActivity?.addEventListener('click', () => switchTab('activity')); // NEW
     UIElements.mobileNavNotifications?.addEventListener('click', () => switchTab('notifications'));
     UIElements.mobileNavSettings?.addEventListener('click', () => switchTab('settings'));
