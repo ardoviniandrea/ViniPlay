@@ -263,7 +263,7 @@ const showSetupScreen = () => {
  */
 const showApp = (user) => {
     appState.currentUser = user;
-    
+
     const authContainer = document.getElementById('auth-container');
     const appContainer = document.getElementById('app-container');
 
@@ -271,23 +271,25 @@ const showApp = (user) => {
     appContainer.classList.remove('hidden');
     appContainer.classList.add('flex'); // Ensure flex display for app layout
 
-    initializeUIElements();
+    // --- CORRECTED POSITION ---
+    // This line MUST be here, before the 'if' block below
+    initializeUIElements(); // Ensure UI elements are found BEFORE initializing the main app
     console.log('[AUTH_UI] UI Elements initialized.');
+    // --- END CORRECTED POSITION ---
 
     console.log(`[AUTH_UI] Displaying main app for user: ${user.username} (Admin: ${user.isAdmin}, DVR: ${user.canUseDvr})`);
 
-    // MODIFIED: Removed redundant visibility toggling from this function.
-    // This will now be handled exclusively by proceedWithRouteChange in ui.js,
-    // which acts as the single source of truth for UI state based on routes and permissions.
-    // This prevents race conditions during app initialization.
+    // Visibility toggling is handled by proceedWithRouteChange
+
     UIElements.userDisplay.textContent = user.username;
     UIElements.userDisplay.classList.remove('hidden');
-    
+
     console.log(`[AUTH_UI] User display set to: ${user.username}.`);
 
+    // The 'if' block now runs AFTER initializeUIElements()
     if (!appState.appInitialized) {
         console.log('[AUTH_UI] Main app not initialized yet, calling initMainApp().');
-        initMainApp();
+        initMainApp(); // initMainApp triggers the first route change
         appState.appInitialized = true;
     } else {
         console.log('[AUTH_UI] Main app already initialized.');
