@@ -337,11 +337,20 @@ function openVodDetails(item) {
         UIElements.vodDetailsMovieActions.classList.remove('hidden');
         UIElements.vodDetailsSeriesActions.classList.add('hidden');
 
-        // Attach play button listener
+        // --- Attach play button listener ---
+        // Ensure we use the 'item' passed directly to openVodDetails
+        const movieUrl = item.url;
+        const movieName = item.name;
+        console.log(`[VOD_DETAILS] Setting up play button for Movie: "${movieName}" URL: ${movieUrl}`); // Add log
+
+        // Remove any previous listener to be safe (though generally not needed if assigned directly)
+        UIElements.vodPlayMovieBtn.onclick = null;
         UIElements.vodPlayMovieBtn.onclick = () => {
-            playVOD(item.url, item.name);
+            console.log(`[VOD_DETAILS] Play button clicked for: "${movieName}"`); // Add log
+            playVOD(movieUrl, movieName); // Use variables captured in this scope
             closeModal(UIElements.vodDetailsModal);
         };
+        // --- End Play Button Logic ---
 
     } else if (item.type === 'series') {
         // Show series info and episode list
