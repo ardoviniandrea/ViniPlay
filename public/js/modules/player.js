@@ -309,33 +309,55 @@ export const playChannel = (url, name, channelId) => {
  * @param {string} title - The title of the VOD to display.
  */
 export const playVOD = async (url, title) => {
-    console.log(`[VOD_PLAYER] Attempting to play VOD: ${title}`);
-    
-    // 1. Stop any current stream (live or VOD)
-    // This function is safe to call even if no player is active.
-    // It will clean up appState.player if it exists, or just reset the video src.
-    await stopAndCleanupPlayer();
+    console.log(`[VOD_PLAYER] Attempting to play VOD: "${title}" URL: ${url}`);
 
-    // 2. Set up the player modal
+    // Ensure mpegts player is stopped if it was active
+    if (appState.player) {
+        console.log('[VOD_PLAYER] Destroying active mpegts player before playing VOD.');
+        // We still need to potentially stop a server-side ffmpeg stream if one was running
+        if (currentLocalStreamUrl) {
+            await stopStream(currentLocalStreamUrl);
+            currentLocalStreamUrl = null;
+        }
+        appState.player.destroy();
+        appState.player = null;
+        // Clear intervals associated with mpegts player
+        if (streamInfoInterval) {
+            clearInterval(streamInfoInterval);
+            streamInfoInterval = null;
+        }
+        if (UIElements.streamInfoOverlay) {
+            UIElements.streamInfoOverlay.classList.add('hidden');
+        }
+    }
+
+    // Set up the player modal title
     UIElements.videoTitle.textContent = title;
 
-    // 3. Play the VOD
-    // We do NOT use mpegts.js here. We set the src attribute directly
-    // on the video element to let the browser handle playback.
+    // Directly set the source for native playback
     UIElements.videoElement.src = url;
-    UIElements.videoElement.load();
-    
-    // 4. Show the modal
+    UIElements.videoElement.load(); // Request browser to load the new source
+
+    // Show the modal
     openModal(UIElements.videoModal);
 
-    // 5. Try to play
+    // Try to play after load starts
     try {
+        // Ensure volume is set (might have been reset)
+        UIElements.videoElement.volume = parseFloat(localStorage.getItem('iptvPlayerVolume') || 0.5);
         await UIElements.videoElement.play();
-        console.log(`[VOD_PLAYER] Playing: ${title}`);
+        console.log(`[VOD_PLAYER] Playback started for: "${title}"`);
+        // Ensure local state tracking is cleared for VOD
+        setLocalPlayerState(null, null, null);
+        currentLocalStreamUrl = null;
     } catch (err) {
         console.error("[VOD_PLAYER] Error trying to play VOD:", err);
-        showNotification("Could not play the selected video.", true);
-        stopAndCleanupPlayer(); // Clean up on failure
+        showNotification(`Could not play the selected video: ${err.message}`, true);
+        // Clean up the video element source on failure
+        UIElements.videoElement.src = "";
+        UIElements.videoElement.removeAttribute('src');
+        UIElements.videoElement.load();
+        closeModal(UIElements.videoModal); // Close modal on failure
     }
 };
 
