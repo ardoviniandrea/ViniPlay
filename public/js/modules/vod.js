@@ -189,20 +189,19 @@ function renderVodGrid() {
     });
 
     // --- NEW: PAGINATION LOGIC ---
-    
-    // 3. Update pagination state
-    const { pagination } = vodState;
-    pagination.totalItems = fullFilteredList.length;
-    pagination.totalPages = Math.ceil(pagination.totalItems / pagination.pageSize) || 1;
-    
+
+    // 3. Update pagination state directly on the shared vodState
+    vodState.pagination.totalItems = fullFilteredList.length;
+    vodState.pagination.totalPages = Math.ceil(vodState.pagination.totalItems / vodState.pagination.pageSize) || 1;
+
     // Ensure currentPage is valid
-    if (pagination.currentPage > pagination.totalPages) {
-        pagination.currentPage = 1;
+    if (vodState.pagination.currentPage > vodState.pagination.totalPages) {
+        vodState.pagination.currentPage = 1; // Reset if current page is out of bounds
     }
-    
-    // 4. Slice the filtered list to get the items for the current page
-    const startIndex = (pagination.currentPage - 1) * pagination.pageSize;
-    const endIndex = startIndex + pagination.pageSize;
+
+    // 4. Slice the filtered list using the updated state
+    const startIndex = (vodState.pagination.currentPage - 1) * vodState.pagination.pageSize;
+    const endIndex = startIndex + vodState.pagination.pageSize;
     vodState.filteredLibrary = fullFilteredList.slice(startIndex, endIndex);
     
     // 5. Render the *paginated* items
