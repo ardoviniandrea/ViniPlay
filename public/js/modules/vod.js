@@ -58,7 +58,8 @@ function parseVODLibrary() {
     // 1. Process Movies (simple 1-to-1 mapping)
     const movieItems = movies.map(movie => ({
         type: 'movie',
-        id: movie.id || `movie-${Math.random()}`, // Ensure unique ID
+       // Generate a more stable unique ID for movies
+        id: `movie_${movie.sourceId}_${movie.id || movie.name.replace(/[^a-zA-Z0-9]/g, '')}`,
         name: movie.name || 'Unknown Movie',
         logo: movie.logo || '',
         group: movie.group || 'Uncategorized',
@@ -70,16 +71,52 @@ function parseVODLibrary() {
 
     // Regex patterns to extract Series Name, Season, and Episode
     // Order matters: More specific patterns first.
+    // ---> REPLACE the entire 'patterns' array in parseVODLibrary with this:
+
     const patterns = [
-        // Pattern 1: "Series Name - S01E01 - Optional Title" OR "Series Name - 1x01 - Optional Title"
-        { regex: /^(.*?)\s*-\s*(?:S(\d+)[EX](\d+)|(\d+)x(\d+))\s*(?:-\s*(.*))?$/i, nameIdx: 1, seasonIdx: [2, 4], episodeIdx: [3, 5], titleIdx: 6 },
-        // Pattern 2: "Series Name S01E01 Optional Title" OR "Series Name 1x01 Optional Title" (Less common separator)
-        { regex: /^(.*?)\s+(?:S(\d+)[EX](\d+)|(\d+)x(\d+))\s*(.*)?$/i, nameIdx: 1, seasonIdx: [2, 4], episodeIdx: [3, 5], titleIdx: 6 },
-        // Pattern 3: "Series Name - Episode Title" (No S/E numbers, often for mini-series or specials) - Assume Season 1
-        { regex: /^(.*?)\s*-\s*([^S0-9].*)$/i, nameIdx: 1, seasonIdx: [], episodeIdx: [], titleIdx: 2 },
-        // Pattern 4: Simple name (Fallback - Assume Season 1, will be numbered sequentially)
-        { regex: /^(.*)$/i, nameIdx: 1, seasonIdx: [], episodeIdx: [], titleIdx: -1 }
+        // Pattern 1: Handles "[Prefix]| Series Name SXX EYY" (MOST COMMON in your file)
+        {
+            regex: /^(?:(?:[A-Z]{2}[\|]?)\s*\|\s*)?(.*?)\s*S(\d+)\s*E(\d+)\s*$/i, // Optional prefix, Series Name, SXX, EYY
+            nameIdx: 1,    // Captures "Series Name"
+            seasonIdx: [2], // Captures "XX" from SXX
+            episodeIdx: [3], // Captures "YY" from EYY
+            titleIdx: -1    // No separate title group in this pattern
+        },
+        // Pattern 2: Handles "Series Name - SXXEYY - Optional Title" OR "Series Name - XxYY - Optional Title" (Keep for potential other sources)
+        {
+            regex: /^(.*?)\s*-\s*(?:S(\d+)[EX](\d+)|(\d+)x(\d+))\s*(?:-\s*(.*))?$/i,
+            nameIdx: 1,
+            seasonIdx: [2, 4],
+            episodeIdx: [3, 5],
+            titleIdx: 6
+        },
+        // Pattern 3: Handles "Series Name SXXEYY Optional Title" OR "Series Name XxYY Optional Title" (Keep for potential other sources)
+        {
+            regex: /^(.*?)\s+(?:S(\d+)[EX](\d+)|(\d+)x(\d+))\s*(.*)?$/i,
+            nameIdx: 1,
+            seasonIdx: [2, 4],
+            episodeIdx: [3, 5],
+            titleIdx: 6
+        },
+        // Pattern 4: "Series Name - Episode Title" (No S/E numbers) - Assume Season 1 (Keep for mini-series etc.)
+        {
+            regex: /^(.*?)\s*-\s*([^S0-9].*)$/i,
+            nameIdx: 1,
+            seasonIdx: [],
+            episodeIdx: [],
+            titleIdx: 2
+        },
+        // Pattern 5: Simple name (Fallback - Assume Season 1, numbered sequentially)
+        {
+            regex: /^(.*)$/i,
+            nameIdx: 1,
+            seasonIdx: [],
+            episodeIdx: [],
+            titleIdx: -1
+        }
     ];
+
+// ---> END OF REPLACEMENT
 
     let fallbackEpisodeCounter = {}; // To number episodes without S/E info
 
@@ -290,16 +327,16 @@ function renderVodGrid() {
             const displayLogo = item.logo || placeholderImageUrl;
 
             return `
-                <div class="vod-item" data-id="${itemIdStr}"> {/* Ensure ID is properly quoted */}
+                <div class="vod-item" data-id="${itemIdStr}">
                     <span class="vod-type-badge">${itemType}</span>
                     <div class="vod-item-poster">
                         <img src="${displayLogo}"
-                             alt="${displayName.replace(/"/g, '&quot;')}" {/* Escape quotes in alt text */}
+                             alt="${displayName.replace(/"/g, '&quot;')}"
                              onerror="this.onerror=null; this.src='${placeholderImageUrl}'; this.style.objectFit='cover';">
                     </div>
                     <div class="vod-item-info">
-                        <p class="vod-item-title" title="${displayName.replace(/"/g, '&quot;')}">${displayName}</p> {/* Use series name */}
-                        <p class="vod-item-type">${displayGroup}</p> {/* Use series group */}
+                        <p class="vod-item-title" title="${displayName.replace(/"/g, '&quot;')}">${displayName}</p>
+                        <p class="vod-item-type">${displayGroup}</p>
                     </div>
                 </div>
             `;
