@@ -982,7 +982,15 @@
                             <option value="all">All Categories</option>
                         </select>
                         <input type="search" id="vod-search-input" placeholder="Search VOD..." class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500 sm:w-48">
-                    </div>
+                
+                        <select id="vod-page-size" class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500" title="Items per page">
+                            <option value="25">25</option>
+                            <option value="50" selected>50</option>
+                            <option value="75">75</option>
+                            <option value="100">100</option>
+                        </select>
+                        </div>
+                </div>
                 </div>
                 <div id="vod-grid-container" class="flex-grow bg-gray-900 overflow-y-auto custom-scrollbar p-4 md:p-6">
                     <div id="vod-no-results" class="hidden text-center text-gray-500 p-10">
@@ -993,6 +1001,19 @@
                     <div id="vod-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 md:gap-6">
                         </div>
                 </div>
+                <nav id="vod-pagination-controls" class="hidden flex-shrink-0 flex flex-col md:flex-row justify-between items-center space-y-3 md:space-y-0 p-4 border-t border-gray-700 bg-gray-800">
+                    <span id="vod-pagination-info" class="text-sm font-normal text-gray-400">
+                        Page 1 of 1 (0 items)
+                    </span>
+                    <ul class="inline-flex items-center -space-x-px">
+                        <li>
+                            <button id="vod-prev-btn" class="pagination-btn rounded-l-lg" disabled>Prev</button>
+                        </li>
+                        <li>
+                            <button id="vod-next-btn" class="pagination-btn rounded-r-lg" disabled>Next</button>
+                        </li>
+                    </ul>
+                </nav>
             </div>
 
             <!-- Admin Activity Page -->
