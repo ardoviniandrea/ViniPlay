@@ -4,7 +4,7 @@
  * Handles parsing, filtering, rendering, and playback of movies and series.
  */
 
-import { appState, guideState, UIElements } from './state.js';
+import { appState, guideState, UIElements, vodState } from './state.js'; // <-- Add vodState here
 import { openModal, closeModal } from './ui.js';
 import { ICONS } from './icons.js';
 // We will create this new function in player.js in the next step.
