@@ -10,15 +10,6 @@ import { ICONS } from './icons.js';
 // We will create this new function in player.js in the next step.
 import { playVOD } from './player.js'; 
 
-// Local state for VOD page
-const vodState = {
-    // This will hold the parsed and combined list of all movies and series objects
-    fullLibrary: [], 
-    // This will hold the items currently being shown after filters are applied
-    filteredLibrary: [],
-    // Simple debounce timer for search
-    searchDebounce: null,
-};
 
 /**
  * Main initialization function for the VOD page.
