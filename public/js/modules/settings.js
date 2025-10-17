@@ -1148,97 +1148,84 @@ export function setupSettingsEventListeners() {
     // If it's defined INSIDE setupSettingsEventListeners, this wrapping won't work easily.
     // For now, let's assume it's defined outside or imported.
     // If this causes issues, we'll need to refactor where openSourceEditor is defined.
-    openSourceEditor = (sourceType, source = null) => {
-        // Call the original logic first to build the modal content
-        if (originalOpenSourceEditor) {
-            originalOpenSourceEditor(sourceType, source);
-        } else {
-             console.error("Original openSourceEditor function not found! Cannot attach group filter listener correctly.");
-             return; // Prevent modal opening if original is missing
-        }
+    // --- CORRECTED DELEGATED LISTENER for Source Editor Modals ---
+    // Handles clicks within the source editor, including the dynamic group filter button
+    if (UIElements.sourceEditorModal) {
+        UIElements.sourceEditorModal.addEventListener('click', async (e) => {
+            // Check if the "Select Groups" button was clicked
+            if (e.target.id === 'source-editor-filter-groups-btn') {
+                console.log('[SETTINGS] "Select Groups" button clicked (via delegation).');
+                const btn = e.target;
+                const originalContent = btn.textContent;
+                setButtonLoadingState(btn, true, 'Fetching...');
 
+                const sourceType = currentSourceTypeForEditor; // Use state variable
+                const body = {
+                    type: sourceType,
+                    url: UIElements.sourceEditorUrl.value,
+                    xc: sourceType === 'xc' ? JSON.stringify({
+                        server: UIElements.sourceEditorXcUrl.value,
+                        username: UIElements.sourceEditorXcUsername.value,
+                        password: UIElements.sourceEditorXcPassword.value,
+                    }) : null
+                };
 
-        // Now that the modal content (including the button) exists, try to attach the listener
-        // Use setTimeout to ensure the DOM has updated after the original function call
-        setTimeout(() => {
-            const filterGroupsBtn = document.getElementById('source-editor-filter-groups-btn');
-            const sourceEditorModalElement = UIElements.sourceEditorModal;
+                if (sourceType === 'file') {
+                    showNotification('Group filtering is not available for local file sources.', true);
+                    setButtonLoadingState(btn, false, originalContent);
+                    return;
+                }
+                if ((sourceType === 'url' && !body.url) || (sourceType === 'xc' && (!body.xc || !JSON.parse(body.xc).server))) {
+                    showNotification('Please enter a valid URL or XC server address before fetching groups.', true);
+                    setButtonLoadingState(btn, false, originalContent);
+                    return;
+                }
 
-            if (filterGroupsBtn && sourceEditorModalElement) {
-                // Remove previous listener if any
-                filterGroupsBtn.onclick = null;
+                console.log('[SETTINGS] Fetching groups with body:', body);
 
-                // Define the handler function separately
-                const handleFilterGroupsClick = async () => {
-                    console.log('[SETTINGS] "Select Groups" button clicked.');
-                    const btn = filterGroupsBtn;
-                    const originalContent = btn.textContent;
-                    setButtonLoadingState(btn, true, 'Fetching...');
+                try {
+                    const res = await apiFetch('/api/sources/fetch-groups', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body)
+                    });
 
-                    const sourceType = currentSourceTypeForEditor;
-                    const body = {
-                        type: sourceType,
-                        url: UIElements.sourceEditorUrl.value,
-                        xc: sourceType === 'xc' ? JSON.stringify({
-                            server: UIElements.sourceEditorXcUrl.value,
-                            username: UIElements.sourceEditorXcUsername.value,
-                            password: UIElements.sourceEditorXcPassword.value,
-                        }) : null
-                    };
+                    if (res && res.ok) {
+                        const data = await res.json();
+                        console.log('[SETTINGS] Groups fetched successfully:', data.groups);
+                        const selectedGroupsInput = document.getElementById('source-editor-selected-groups');
+                        const currentlySelected = selectedGroupsInput ? JSON.parse(selectedGroupsInput.value || '[]') : [];
 
-                    if (sourceType === 'file') {
-                        showNotification('Group filtering is not available for local file sources.', true);
-                        setButtonLoadingState(btn, false, originalContent);
-                        return;
-                    }
-                    if ((sourceType === 'url' && !body.url) || (sourceType === 'xc' && (!body.xc || !JSON.parse(body.xc).server))) {
-                        showNotification('Please enter a valid URL or XC server address before fetching groups.', true);
-                        setButtonLoadingState(btn, false, originalContent);
-                        return;
-                    }
-
-                    console.log('[SETTINGS] Fetching groups with body:', body);
-
-                    try {
-                        const res = await apiFetch('/api/sources/fetch-groups', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(body)
-                        });
-
-                        if (res && res.ok) {
-                            const data = await res.json();
-                            console.log('[SETTINGS] Groups fetched successfully:', data.groups);
-                            const selectedGroupsInput = document.getElementById('source-editor-selected-groups');
-                            const currentlySelected = selectedGroupsInput ? JSON.parse(selectedGroupsInput.value || '[]') : [];
-                            // Ensure populateGroupFilterModal exists and is callable
-                            if (typeof populateGroupFilterModal === 'function') {
-                                populateGroupFilterModal(data.groups || [], currentlySelected);
-                                openModal(UIElements.groupFilterModal);
-                            } else {
-                                console.error('[SETTINGS] populateGroupFilterModal function not found!');
-                            }
+                        // Ensure helper function exists before calling
+                        if (typeof populateGroupFilterModal === 'function') {
+                            populateGroupFilterModal(data.groups || [], currentlySelected);
+                            openModal(UIElements.groupFilterModal);
                         } else {
-                            console.error('[SETTINGS] Failed to fetch groups. Response:', res);
-                            // apiFetch should show the error notification
+                            console.error('[SETTINGS] populateGroupFilterModal function not found!');
+                            showNotification('UI Error: Cannot display group filter.', true);
                         }
-                    } catch (fetchError) {
-                        console.error('[SETTINGS] Error during fetch-groups API call:', fetchError);
-                        showNotification('An error occurred while trying to fetch groups.', true);
-                    } finally {
-                        setButtonLoadingState(btn, false, originalContent);
+                    } else {
+                        console.error('[SETTINGS] Failed to fetch groups. Response:', res);
+                        // apiFetch shows notification
                     }
-                }; // end handleFilterGroupsClick
-
-                // Attach the handler
-                filterGroupsBtn.onclick = handleFilterGroupsClick;
-                console.log('[SETTINGS] Attached onclick handler to filter groups button.');
-
-            } else {
-                 console.warn('[SETTINGS] Could not find filter groups button (#source-editor-filter-groups-btn) after opening source editor.');
+                } catch (fetchError) {
+                    console.error('[SETTINGS] Error during fetch-groups API call:', fetchError);
+                    showNotification('An error occurred while trying to fetch groups.', true);
+                } finally {
+                    setButtonLoadingState(btn, false, originalContent);
+                }
             }
-        }, 0); // Use setTimeout 0 to wait for DOM update
-    }; // End of redefined openSourceEditor
+            // Add other delegated click handlers for the source editor modal here if needed
+        });
+        console.log('[SETTINGS] Added delegated click listener to source editor modal.');
+    } else {
+         console.error('[SETTINGS] Cannot add delegated listener: Source Editor Modal element not found.');
+    }
+
+    // Make sure helper functions are defined outside or properly imported/accessible
+    // Assuming populateGroupFilterModal and updateGroupFilterList are defined elsewhere in settings.js
+
+}; // Closing brace for setupSettingsEventListeners (ensure this matches your file structure)
 
 } // Closing brace for setupSettingsEventListeners
 
