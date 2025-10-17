@@ -302,119 +302,59 @@ export const playChannel = (url, name, channelId) => {
 
 
 /**
- * UPDATED: Plays a VOD (Movie or Episode) in the main player modal.
- * Uses native playback for supported formats (e.g., mp4) and mpegts.js
- * with server-side transcoding for unsupported formats (e.g., mkv).
- * @param {string} url - The direct URL to the VOD file.
+ * NEW: Plays a VOD (Movie or Episode) in the main player modal.
+ * This function bypasses mpegts.js and uses the native <video> element
+ * for playback, which allows seeking.
+ * @param {string} url - The direct URL to the VOD file (e.g., .mp4, .mkv).
  * @param {string} title - The title of the VOD to display.
  */
 export const playVOD = async (url, title) => {
     console.log(`[VOD_PLAYER] Attempting to play VOD: "${title}" URL: ${url}`);
 
-    // Ensure any previous mpegts player is stopped and cleaned up
+    // Ensure mpegts player is stopped if it was active
     if (appState.player) {
         console.log('[VOD_PLAYER] Destroying active mpegts player before playing VOD.');
+        // We still need to potentially stop a server-side ffmpeg stream if one was running
         if (currentLocalStreamUrl) {
-            // Stop potential server stream if mpegts player was active
             await stopStream(currentLocalStreamUrl);
             currentLocalStreamUrl = null;
         }
         appState.player.destroy();
         appState.player = null;
-        if (streamInfoInterval) clearInterval(streamInfoInterval); streamInfoInterval = null;
-        if (UIElements.streamInfoOverlay) UIElements.streamInfoOverlay.classList.add('hidden');
-    } else {
-        // If no mpegts player was active, ensure the native video element is reset
-        UIElements.videoElement.pause();
-        UIElements.videoElement.removeAttribute('src'); // Use removeAttribute for cleaner reset
-        UIElements.videoElement.load();
+        // Clear intervals associated with mpegts player
+        if (streamInfoInterval) {
+            clearInterval(streamInfoInterval);
+            streamInfoInterval = null;
+        }
+        if (UIElements.streamInfoOverlay) {
+            UIElements.streamInfoOverlay.classList.add('hidden');
+        }
     }
 
     // Set up the player modal title
     UIElements.videoTitle.textContent = title;
+
+    // Directly set the source for native playback
+    UIElements.videoElement.src = url;
+    UIElements.videoElement.load(); // Request browser to load the new source
+
+    // Show the modal
     openModal(UIElements.videoModal);
 
-    // Determine playback method based on file extension
-    const lowerUrl = url.toLowerCase();
-    const useNativePlayer = lowerUrl.endsWith('.mp4') || lowerUrl.endsWith('.webm') || lowerUrl.endsWith('.ogg');
-
+    // Try to play after load starts
     try {
+        // Ensure volume is set (might have been reset)
         UIElements.videoElement.volume = parseFloat(localStorage.getItem('iptvPlayerVolume') || 0.5);
-
-        if (useNativePlayer) {
-            console.log(`[VOD_PLAYER] Using NATIVE playback for: "${title}"`);
-            UIElements.videoElement.src = url;
-            UIElements.videoElement.load();
-            await UIElements.videoElement.play();
-
-        } else {
-            console.log(`[VOD_PLAYER] Using MPEGTS.js (transcoding) for: "${title}"`);
-            // Use mpegts.js via the /stream endpoint
-            const settings = guideState.settings;
-            const profileId = settings.activeStreamProfileId;
-            const userAgentId = settings.activeUserAgentId;
-            const profile = (settings.streamProfiles || []).find(p => p.id === profileId);
-
-            if (!profileId || !userAgentId || !profile || profile.command === 'redirect') {
-                // Cannot use redirect profile for transcoding
-                const errorMsg = "A valid transcoding stream profile and user agent must be selected in Settings to play this file type.";
-                console.error(`[VOD_PLAYER] Error: ${errorMsg}`);
-                showNotification(errorMsg, true);
-                closeModal(UIElements.videoModal); // Close modal on config error
-                return;
-            }
-
-            const streamUrlToPlay = `/stream?url=${encodeURIComponent(url)}&profileId=${profileId}&userAgentId=${userAgentId}`;
-            currentLocalStreamUrl = url; // Track original URL for potential stop later
-
-            if (!mpegts.isSupported()) {
-                throw new Error('MPEGTS.js is not supported by your browser.');
-            }
-
-            // Configure mpegts.js for VOD playback (seeking enabled)
-            const mpegtsConfig = {
-                isLive: false,
-                autoCleanupSourceBuffer: true,
-                lazyLoad: false,
-                seekType: 'range',
-                stashInitialSize: 128 * 1024 * 1024, // 128MB buffer
-            };
-
-            appState.player = mpegts.createPlayer({
-                type: 'mse',
-                isLive: false,
-                url: streamUrlToPlay
-            }, mpegtsConfig);
-
-            // Add error handling for mpegts player
-            appState.player.on(mpegts.Events.ERROR, (errorType, errorDetail) => {
-                console.error(`[VOD_PLAYER] MPEGTS Player Error: Type=${errorType}, Detail=${errorDetail}`);
-                showNotification(`Player Error: ${errorDetail}`, true);
-                // Use the main stop function which handles server stop and player destroy
-                stopAndCleanupPlayer();
-            });
-
-            appState.player.attachMediaElement(UIElements.videoElement);
-            appState.player.load();
-            await appState.player.play();
-
-            // Start stream info polling if needed (optional for VOD)
-            // streamInfoInterval = setInterval(updateStreamInfo, 2000);
-        }
-
+        await UIElements.videoElement.play();
         console.log(`[VOD_PLAYER] Playback started for: "${title}"`);
-        // Ensure live stream tracking state is cleared when playing VOD
+        // Ensure local state tracking is cleared for VOD
         setLocalPlayerState(null, null, null);
-        // currentLocalStreamUrl is set above only if using mpegts
-
+        currentLocalStreamUrl = null;
     } catch (err) {
         console.error("[VOD_PLAYER] Error trying to play VOD:", err);
         showNotification(`Could not play the selected video: ${err.message}`, true);
-        // Clean up on failure
-        if (appState.player) {
-            appState.player.destroy();
-            appState.player = null;
-        }
+        // Clean up the video element source on failure
+        UIElements.videoElement.src = "";
         UIElements.videoElement.removeAttribute('src');
         UIElements.videoElement.load();
         closeModal(UIElements.videoModal); // Close modal on failure
