@@ -277,19 +277,29 @@ function renderVodGrid() {
         noResultsEl.classList.add('hidden');
         gridEl.innerHTML = itemsToRender.map(item => {
             const itemType = item.type === 'movie' ? 'Movie' : 'Series';
-            // Use a placeholder image URL that works
-            const placeholderImageUrl = `https://placehold.co/400x600/1f2937/d1d5db?text=${encodeURIComponent(item.name)}`;
+            // Sanitize the name for placeholder text just in case
+            const safeName = item.name ? String(item.name).replace(/[^a-zA-Z0-9 ]/g, '') : 'VOD';
+            const placeholderImageUrl = `https://placehold.co/400x600/1f2937/d1d5db?text=${encodeURIComponent(safeName)}`;
+            // Ensure ID is treated as a string for the data attribute
+            const itemIdStr = String(item.id);
+
+            // --- SERIES RENDERING FIX ---
+            // Display the series name, not individual episode names here
+            const displayName = item.name || (item.type === 'series' ? 'Unknown Series' : 'Unknown Movie');
+            const displayGroup = item.group || 'Uncategorized';
+            const displayLogo = item.logo || placeholderImageUrl;
+
             return `
-                <div class="vod-item" data-id="${item.id}">
+                <div class="vod-item" data-id="${itemIdStr}"> {/* Ensure ID is properly quoted */}
                     <span class="vod-type-badge">${itemType}</span>
                     <div class="vod-item-poster">
-                        <img src="${item.logo || placeholderImageUrl}"
-                             alt="${item.name}"
+                        <img src="${displayLogo}"
+                             alt="${displayName.replace(/"/g, '&quot;')}" {/* Escape quotes in alt text */}
                              onerror="this.onerror=null; this.src='${placeholderImageUrl}'; this.style.objectFit='cover';">
                     </div>
                     <div class="vod-item-info">
-                        <p class="vod-item-title" title="${item.name}">${item.name}</p>
-                        <p class="vod-item-type">${item.group || 'Uncategorized'}</p>
+                        <p class="vod-item-title" title="${displayName.replace(/"/g, '&quot;')}">${displayName}</p> {/* Use series name */}
+                        <p class="vod-item-type">${displayGroup}</p> {/* Use series group */}
                     </div>
                 </div>
             `;
@@ -446,15 +456,14 @@ function setupVodEventListeners() {
     UIElements.vodGrid.addEventListener('click', (e) => {
         const vodItemEl = e.target.closest('.vod-item');
         if (vodItemEl) {
-            const itemId = vodItemEl.dataset.id;
-            console.log(`[VOD_CLICK] Click detected on item with data-id: ${itemId}`); // Add log
-            // Ensure we are comparing strings to strings if IDs might be numeric
-            const item = vodState.fullLibrary.find(i => String(i.id) === String(itemId));
+            const itemId = vodItemEl.dataset.id; // ID should already be a string from data-*
+            console.log(`[VOD_CLICK] Click detected on item with data-id: ${itemId}`);
+            // Find item comparing strings, ensure IDs from library are also strings
+            const item = vodState.fullLibrary.find(i => String(i.id) === itemId); // Ensure string comparison
             if (item) {
-                console.log(`[VOD_CLICK] Found item in library:`, item); // Add log
+                console.log(`[VOD_CLICK] Found item in library:`, item);
                 openVodDetails(item);
             } else {
-                // Add error handling if item not found
                 console.error(`[VOD_CLICK] Could not find VOD item in fullLibrary with ID: ${itemId}`);
                 showNotification(`Error: Could not find details for the selected item (ID: ${itemId}).`, true);
             }
