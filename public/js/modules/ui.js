@@ -357,6 +357,7 @@ export const handleRouteChange = () => {
  * The core logic for switching pages after checks have passed.
  * MODIFIED: Now handles visibility of Settings and DVR tabs based on admin/user permissions.
  * MODIFIED: Explicitly hides all pages before showing the active one to fix visibility bugs.
+ * MODIFIED: Added specific logging and checks for vodGridContainer visibility.
  * @param {string} path - The new path to render.
  */
 async function proceedWithRouteChange(path) {
@@ -374,7 +375,7 @@ async function proceedWithRouteChange(path) {
     const isAdmin = appState.currentUser?.isAdmin;
     const hasDvrPermission = isAdmin || appState.currentUser?.canUseDvr;
 
-    // --- NEW: Define all page elements ---
+    // --- Define all page elements ---
     const allPages = [
         UIElements.pageGuide,
         UIElements.pageMultiview,
@@ -386,36 +387,42 @@ async function proceedWithRouteChange(path) {
         UIElements.pageSettings
     ];
 
-    // --- NEW: Explicitly hide all pages first ---
+    // --- Explicitly hide all pages first ---
     allPages.forEach(page => {
         if (page) { // Check if element exists
             page.classList.add('hidden');
             page.classList.remove('flex'); // Ensure flex is removed
+
+            // --- Explicitly hide the VOD grid container ---
+            if (page === UIElements.pageVod) {
+                 if (UIElements.vodGridContainer) {
+                    console.log(`[UI_ROUTING_DEBUG] Hiding vodGridContainer for page ${page.id}`); // ADDED LOG
+                    UIElements.vodGridContainer.classList.add('hidden');
+                 } else {
+                    console.error('[UI_ROUTING_DEBUG] Attempted to hide vodGridContainer, but UIElements.vodGridContainer is null!'); // ADDED LOG
+                 }
+            }
         }
     });
     console.log('[UI_ROUTING] All pages hidden.');
 
     // --- Toggle desktop and mobile nav button visibility and active state ---
+    // (Nav button logic remains the same as previous correct version)
     // Guide
     UIElements.tabGuide?.classList.toggle('active', isGuide);
     UIElements.mobileNavGuide?.classList.toggle('active', isGuide);
-
     // MultiView
     UIElements.tabMultiview?.classList.toggle('active', isMultiView);
     UIElements.mobileNavMultiview?.classList.toggle('active', isMultiView);
-
     // Player
     UIElements.tabPlayer?.classList.toggle('active', isPlayer);
     UIElements.mobileNavPlayer?.classList.toggle('active', isPlayer);
-
-    // DVR (Visible to all, active state toggled)
+    // DVR
     if (UIElements.tabDvr) UIElements.tabDvr.classList.toggle('active', isDvr);
     if (UIElements.mobileNavDvr) UIElements.mobileNavDvr.classList.toggle('active', isDvr);
-
-    // VOD (Visible to all, active state toggled)
+    // VOD
     if (UIElements.tabVod) UIElements.tabVod.classList.toggle('active', isVod);
     if (UIElements.mobileNavVod) UIElements.mobileNavVod.classList.toggle('active', isVod);
-
     // Activity (Admin only)
     if (UIElements.tabActivity) {
         UIElements.tabActivity.classList.toggle('active', isActivity && isAdmin);
@@ -425,11 +432,9 @@ async function proceedWithRouteChange(path) {
         UIElements.mobileNavActivity.classList.toggle('active', isActivity && isAdmin);
         UIElements.mobileNavActivity.classList.toggle('hidden', !isAdmin);
     }
-
     // Notifications
     UIElements.tabNotifications?.classList.toggle('active', isNotifications);
     UIElements.mobileNavNotifications?.classList.toggle('active', isNotifications);
-
     // Settings (Admin only)
     if (UIElements.tabSettings) {
         UIElements.tabSettings.classList.toggle('active', isSettings && isAdmin);
@@ -441,21 +446,29 @@ async function proceedWithRouteChange(path) {
     }
     console.log('[UI_ROUTING] Nav button states updated.');
 
-    // --- NEW: Explicitly show the target page ---
+    // --- Explicitly show the target page ---
     let targetPageElement = null;
     if (isGuide) targetPageElement = UIElements.pageGuide;
     else if (isMultiView) targetPageElement = UIElements.pageMultiview;
     else if (isPlayer) targetPageElement = UIElements.pagePlayer;
     else if (isDvr) targetPageElement = UIElements.pageDvr;
-    else if (isVod) targetPageElement = UIElements.pageVod;
+    else if (isVod) {
+        targetPageElement = UIElements.pageVod;
+        // --- Explicitly show the VOD grid container ---
+        if (UIElements.vodGridContainer) {
+            console.log('[UI_ROUTING_DEBUG] Showing vodGridContainer.'); // ADDED LOG
+            UIElements.vodGridContainer.classList.remove('hidden');
+        } else {
+             console.error('[UI_ROUTING_DEBUG] Attempted to show vodGridContainer, but UIElements.vodGridContainer is null!'); // ADDED LOG
+        }
+    }
     else if (isActivity && isAdmin) targetPageElement = UIElements.pageActivity;
     else if (isNotifications) targetPageElement = UIElements.pageNotifications;
     else if (isSettings && isAdmin) targetPageElement = UIElements.pageSettings;
     else if ((isActivity || isSettings) && !isAdmin) {
-        // If trying to access admin page without permission, redirect to guide
         console.warn(`[UI_ROUTING] Unauthorized access attempt to ${path}. Redirecting to guide.`);
-        navigate('/tvguide'); // Use navigate to handle history correctly
-        return; // Stop further processing for this route change
+        navigate('/tvguide');
+        return;
     }
 
     if (targetPageElement) {
@@ -464,13 +477,11 @@ async function proceedWithRouteChange(path) {
         console.log(`[UI_ROUTING] Displaying page: ${targetPageElement.id}`);
     } else {
         console.warn(`[UI_ROUTING] No target page element found or determined for path: ${path}. Defaulting to guide.`);
-        // Fallback to guide if no page matches or permissions fail silently
         UIElements.pageGuide?.classList.remove('hidden');
         UIElements.pageGuide?.classList.add('flex');
-        UIElements.tabGuide?.classList.add('active'); // Ensure guide tab is active
+        UIElements.tabGuide?.classList.add('active');
         UIElements.mobileNavGuide?.classList.add('active');
         if (window.location.pathname !== '/tvguide' && window.location.pathname !== '/') {
-            // Update URL if we had to fallback
             window.history.replaceState({}, 'TV Guide', '/tvguide');
         }
     }
@@ -478,29 +489,24 @@ async function proceedWithRouteChange(path) {
     // --- Page Initialization and Header Handling ---
     const appContainer = UIElements.appContainer;
     if (appContainer) {
-        // Remove header collapse unless it's the guide page (guide handles its own)
         if (!isGuide) {
             appContainer.classList.remove('header-collapsed');
         }
     }
 
-    // Initialize or refresh page content
+    // Initialize or refresh page content (logic remains the same as previous correct version)
     if (isGuide) {
-        if (UIElements.guideContainer) UIElements.guideContainer.scrollTop = 0; // Scroll guide top
-
-        // Race condition prevention logic
+        if (UIElements.guideContainer) UIElements.guideContainer.scrollTop = 0;
         if (blockConfigReload) {
             console.log(`%c[DEBUG] RACE_CONDITION_FIX: Navigation to Guide tab occurred while config reload was blocked. Skipping reload.`, 'color: #fca5a5; font-weight: bold;');
         } else if (!appState.isNavigating) {
             console.log('[UI_ROUTING] Refreshing TV Guide data on tab switch.');
-            const config = await fetchConfig(); // Fetch latest config
+            const config = await fetchConfig();
             if (config) {
                 Object.assign(guideState.settings, config.settings || {});
                 guideState.vodMovies = config.vodMovies || [];
                 guideState.vodSeries = config.vodSeries || [];
-                // Re-finalize guide load, but don't reset scroll if it wasn't the first load
-                // The 'true' argument usually resets scroll, we avoid it here unless needed.
-                await finalizeGuideLoad(currentPage === '/'); // Reset scroll only if navigating TO guide initially
+                await finalizeGuideLoad(currentPage === '/');
             }
         } else {
             console.log('[UI_ROUTING] Skipping soft refresh because a navigation action is in progress.');
@@ -510,7 +516,7 @@ async function proceedWithRouteChange(path) {
             console.log(`%c[DEBUG] RACE_CONDITION_FIX: Navigation to Settings tab occurred while config reload was blocked. Skipping reload.`, 'color: #fca5a5; font-weight: bold;');
         } else {
             updateUIFromSettings();
-            refreshUserList(); // refreshUserList now checks internally if admin
+            refreshUserList();
         }
     } else if (isNotifications) {
         await loadAndScheduleNotifications();
@@ -519,15 +525,15 @@ async function proceedWithRouteChange(path) {
     } else if (isPlayer) {
         initDirectPlayer();
     } else if (isDvr) {
-        await initDvrPage(); // Called for all users, permissions handled internally
+        await initDvrPage();
     } else if (isVod) {
-        await initVodPage();
+        await initVodPage(); // Initialize VOD page when navigating to it
     } else if (isActivity && isAdmin) {
         await initActivityPage();
     }
 
-    currentPage = path; // Update the current page tracker
-    appState.isNavigating = false; // Reset navigation flag if it was set
+    currentPage = path;
+    appState.isNavigating = false;
     console.log(`[UI_ROUTING] Route change complete. Current page: ${currentPage}`);
 }
 
