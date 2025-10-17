@@ -63,6 +63,23 @@ export const adminState = {
     healthCheckInterval: null
 };
 
+// NEW: State specific to the VOD page
+export const vodState = {
+    // This will hold the parsed and combined list of all movies and series objects
+    fullLibrary: [],
+    // This will hold the items currently being shown after filters are applied
+    filteredLibrary: [],
+    // Simple debounce timer for search
+    searchDebounce: null,
+    // Pagination state
+    pagination: {
+        currentPage: 1,
+        pageSize: 50, // Default page size
+        totalPages: 1,
+        totalItems: 0,
+    },
+};
+
 
 // A cache for frequently accessed DOM elements
 // This will be populated by the auth.js module after the main app is visible.
