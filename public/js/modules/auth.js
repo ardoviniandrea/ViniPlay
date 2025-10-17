@@ -272,11 +272,10 @@ const showApp = (user) => {
     appContainer.classList.remove('hidden');
     appContainer.classList.add('flex'); // Ensure flex display for app layout
 
-    // --- CORRECTED POSITION ---
-    // This line MUST be here, before the 'if' block below
-    initializeUIElements(); // Ensure UI elements are found BEFORE initializing the main app
-    console.log('[AUTH_UI] UI Elements initialized.');
-    // --- END CORRECTED POSITION ---
+    // --- REMOVE OR COMMENT OUT THESE TWO LINES ---
+    // initializeUIElements(); // Ensure UI elements are found BEFORE initializing the main app
+    // console.log('[AUTH_UI] UI Elements initialized.');
+    // --- END REMOVAL ---
 
     console.log(`[AUTH_UI] Displaying main app for user: ${user.username} (Admin: ${user.isAdmin}, DVR: ${user.canUseDvr})`);
 
@@ -286,7 +285,6 @@ const showApp = (user) => {
     UIElements.userDisplay.classList.remove('hidden');
 
     console.log(`[AUTH_UI] User display set to: ${user.username}.`);
-    console.log('[AUTH_UI_DEBUG] UIElements.pageSettings before initMainApp:', UIElements.pageSettings);
 
     // The 'if' block now runs AFTER initializeUIElements()
     if (!appState.appInitialized) {
