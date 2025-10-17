@@ -20,6 +20,7 @@ const initializeUIElements = () => {
             el
         ])
     ));
+    console.log('[AUTH_UI_DEBUG] Element found by getElementById("page-settings"):', document.getElementById('page-settings'));
 
     // Add specific references that might not be picked up by generic ID mapping
     // or are critical and need direct assignment for clarity.
@@ -285,6 +286,7 @@ const showApp = (user) => {
     UIElements.userDisplay.classList.remove('hidden');
 
     console.log(`[AUTH_UI] User display set to: ${user.username}.`);
+    console.log('[AUTH_UI_DEBUG] UIElements.pageSettings before initMainApp:', UIElements.pageSettings);
 
     // The 'if' block now runs AFTER initializeUIElements()
     if (!appState.appInitialized) {
