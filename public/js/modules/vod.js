@@ -37,6 +37,9 @@ export async function initVodPage() {
     parseVODLibrary();
     // 2. Populate the category filter dropdown
     populateVodGroups();
+    // --- Set default value ---
+    UIElements.vodGroupFilter.value = 'all'; // Ensure "All Categories" is selected initially
+    // --- End set default ---
     // 3. Render the grid with the default (all) filter
     renderVodGrid();
     // 4. Set up all event listeners for the page
