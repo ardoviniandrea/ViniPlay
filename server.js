@@ -640,7 +640,8 @@ async function processAndMergeSources(req) {
                     // --- VOD DETECTION & SEPARATION ---
                     const idMatch = currentExtInf.match(/tvg-id="([^"]*)"/);
                     const tvgId = idMatch ? idMatch[1] : `no-id-${Math.random()}`;
-                    const uniqueChannelId = `${source.id}_${tvgId}`;
+                    // Use original tvgId if available, otherwise generate a unique fallback
+                    const uniqueChannelId = tvgId.startsWith('no-id-') ? `${source.id}_${name.replace(/[^a-zA-Z0-9]/g, '')}` : tvgId;
                     const logoMatch = currentExtInf.match(/tvg-logo="([^"]*)"/);
                     const commaIndex = currentExtInf.lastIndexOf(',');
                     const name = (commaIndex !== -1) ? currentExtInf.substring(commaIndex + 1).trim() : 'Unknown';
