@@ -20,7 +20,6 @@ const initializeUIElements = () => {
             el
         ])
     ));
-    console.log('[AUTH_UI_DEBUG] Element found by getElementById("page-settings"):', document.getElementById('page-settings'));
 
     // Add specific references that might not be picked up by generic ID mapping
     // or are critical and need direct assignment for clarity.
@@ -174,14 +173,6 @@ const initializeUIElements = () => {
     UIElements.vodEpisodeList = document.getElementById('vod-episode-list');
     // --- END VOD Elements ---
 
-    // --- FIX: Add missing VOD Pagination Elements ---
-    UIElements.vodPaginationControls = document.getElementById('vod-pagination-controls');
-    UIElements.vodPaginationInfo = document.getElementById('vod-pagination-info');
-    UIElements.vodPrevBtn = document.getElementById('vod-prev-btn');
-    UIElements.vodNextBtn = document.getElementById('vod-next-btn');
-    UIElements.vodPageSize = document.getElementById('vod-page-size'); // Added page size selector
-    // --- END FIX ---
-
     // Settings Buttons
     UIElements.addM3uBtn = document.getElementById('add-m3u-btn');
     UIElements.addEpgBtn = document.getElementById('add-epg-btn');
@@ -264,7 +255,7 @@ const showSetupScreen = () => {
  */
 const showApp = (user) => {
     appState.currentUser = user;
-
+    
     const authContainer = document.getElementById('auth-container');
     const appContainer = document.getElementById('app-container');
 
@@ -272,24 +263,23 @@ const showApp = (user) => {
     appContainer.classList.remove('hidden');
     appContainer.classList.add('flex'); // Ensure flex display for app layout
 
-    // --- REMOVE OR COMMENT OUT THESE TWO LINES ---
-    // initializeUIElements(); // Ensure UI elements are found BEFORE initializing the main app
-    // console.log('[AUTH_UI] UI Elements initialized.');
-    // --- END REMOVAL ---
+    initializeUIElements();
+    console.log('[AUTH_UI] UI Elements initialized.');
 
     console.log(`[AUTH_UI] Displaying main app for user: ${user.username} (Admin: ${user.isAdmin}, DVR: ${user.canUseDvr})`);
 
-    // Visibility toggling is handled by proceedWithRouteChange
-
+    // MODIFIED: Removed redundant visibility toggling from this function.
+    // This will now be handled exclusively by proceedWithRouteChange in ui.js,
+    // which acts as the single source of truth for UI state based on routes and permissions.
+    // This prevents race conditions during app initialization.
     UIElements.userDisplay.textContent = user.username;
     UIElements.userDisplay.classList.remove('hidden');
-
+    
     console.log(`[AUTH_UI] User display set to: ${user.username}.`);
 
-    // The 'if' block now runs AFTER initializeUIElements()
     if (!appState.appInitialized) {
         console.log('[AUTH_UI] Main app not initialized yet, calling initMainApp().');
-        initMainApp(); // initMainApp triggers the first route change
+        initMainApp();
         appState.appInitialized = true;
     } else {
         console.log('[AUTH_UI] Main app already initialized.');
