@@ -1227,5 +1227,3 @@ export function setupSettingsEventListeners() {
 
 }; // Closing brace for setupSettingsEventListeners (ensure this matches your file structure)
 
-} // Closing brace for setupSettingsEventListeners
-
