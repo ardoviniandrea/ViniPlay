@@ -59,7 +59,7 @@ function parseVODLibrary() {
     const movieItems = movies.map(movie => ({
         type: 'movie',
        // Generate a more stable unique ID for movies
-        id: `movie_${movie.sourceId}_${movie.id || movie.name.replace(/[^a-zA-Z0-9]/g, '')}`,
+        id: `movie_${movie.id || movie.name.replace(/[^a-zA-Z0-9]/g, '')}`,
         name: movie.name || 'Unknown Movie',
         logo: movie.logo || '',
         group: movie.group || 'Uncategorized',
