@@ -173,6 +173,14 @@ const initializeUIElements = () => {
     UIElements.vodEpisodeList = document.getElementById('vod-episode-list');
     // --- END VOD Elements ---
 
+    // --- FIX: Add missing VOD Pagination Elements ---
+    UIElements.vodPaginationControls = document.getElementById('vod-pagination-controls');
+    UIElements.vodPaginationInfo = document.getElementById('vod-pagination-info');
+    UIElements.vodPrevBtn = document.getElementById('vod-prev-btn');
+    UIElements.vodNextBtn = document.getElementById('vod-next-btn');
+    UIElements.vodPageSize = document.getElementById('vod-page-size'); // Added page size selector
+    // --- END FIX ---
+
     // Settings Buttons
     UIElements.addM3uBtn = document.getElementById('add-m3u-btn');
     UIElements.addEpgBtn = document.getElementById('add-epg-btn');
