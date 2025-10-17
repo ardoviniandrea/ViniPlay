@@ -191,6 +191,7 @@ function renderVodGrid() {
     // --- NEW: PAGINATION LOGIC ---
 
     // 3. Update pagination state directly on the shared vodState
+    console.log('[VOD_DEBUG] vodState right before accessing pagination:', JSON.stringify(vodState));
     vodState.pagination.totalItems = fullFilteredList.length;
     vodState.pagination.totalPages = Math.ceil(vodState.pagination.totalItems / vodState.pagination.pageSize) || 1;
 
