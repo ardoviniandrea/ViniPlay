@@ -41,18 +41,26 @@ function parseVODLibrary() {
     const movies = guideState.vodMovies || [];
     const seriesEpisodes = guideState.vodSeries || [];
 
-    // 1. Process Movies (simple 1-to-1 mapping)
-    const movieItems = movies.map(movie => ({
-        type: 'movie',
-        ...movie // Spread all properties (id, name, logo, group, url)
-    }));
+    // 1. Process Movies (simple 1-to-1 mapping - with unique ID generation)
+    const movieItems = movies.map(movie => {
+        // Create a more robust unique ID by combining source and original ID/name
+        // This handles cases where the original M3U might reuse IDs.
+        const uniqueId = `movie_${movie.sourceId}_${movie.id || movie.name.replace(/\s+/g, '_')}`;
+        return {
+            type: 'movie',
+            ...movie, // Spread original properties
+            id: uniqueId // Ensure the ID is unique
+        };
+    });
 
     // 2. Process Series (grouping episodes)
     const seriesMap = new Map();
-    
-    // Regex to extract season and episode numbers (e.g., S01E01, 1x01, S01-E01)
-    // This is used to find the "split point" in the name.
-    const seRegex = /[\s._-](S(\d+)E(\d+)|(\d+)x(\d+)|S(\d+)-E(\d+))[\s._-]/i;
+
+    // Regex to extract season and episode numbers (e.g., S01E01, 1x01, S01-E01, S01 E01)
+    // MODIFIED: Made regex slightly more flexible regarding separators and added console logging.
+    const seRegex = /[._\-\s](S(\d+)[._\-\s]?E(\d+)|(\d+)x(\d+)|S(\d+)[._\-\s]?E(\d+))\b/i;
+
+    console.log('[VOD_PARSE_DEBUG] Starting series processing...'); // Added log
 
     for (const episode of seriesEpisodes) {
         let seriesName;
@@ -61,25 +69,35 @@ function parseVODLibrary() {
 
         // Try to find season/episode numbers
         const seMatch = episode.name.match(seRegex);
-        
+
         if (seMatch) {
-            // --- FIX: Robust name extraction ---
             // Everything *before* the S/E pattern is the series name.
             seriesName = episode.name.substring(0, seMatch.index).trim();
-            
+            // Remove trailing separators like '-' or ':' if they exist after trimming
+            seriesName = seriesName.replace(/[._\-\s:]+$/, '').trim();
+
             seasonNum = parseInt(seMatch[2] || seMatch[4] || seMatch[6], 10);
             episodeNum = parseInt(seMatch[3] || seMatch[5] || seMatch[7], 10);
+
+            // Added Debug Log
+            // console.log(`[VOD_PARSE_DEBUG] Match found for "${episode.name}": Series="${seriesName}", S=${seasonNum}, E=${episodeNum}`);
+
         } else {
             // If no S/E pattern, treat the whole name as the series name
-            // (e.g., for a talk show where episodes are just dates)
             seriesName = episode.name.trim();
-            // We'll number them in the order they appear
-            episodeNum = seriesMap.has(seriesName) ? seriesMap.get(seriesName).seasons.get(1).length + 1 : 1;
+            // We'll number them sequentially within season 1 as a fallback
+            episodeNum = seriesMap.has(seriesName) ? (seriesMap.get(seriesName).seasons.get(1)?.length || 0) + 1 : 1;
+            seasonNum = 1; // Explicitly set season 1 for fallbacks
+
+            // Added Debug Log for no match
+            // console.log(`[VOD_PARSE_DEBUG] No S/E match for "${episode.name}". Treating as Series="${seriesName}", Fallback S=${seasonNum}, E=${episodeNum}`);
         }
 
         // --- CRITICAL FIX for "always same item" bug ---
         // The unique ID for the series *must* be its name.
         if (!seriesMap.has(seriesName)) {
+            // Added Debug Log for new series
+            // console.log(`[VOD_PARSE_DEBUG] Creating new series entry for: "${seriesName}"`);
             seriesMap.set(seriesName, {
                 type: 'series',
                 id: seriesName, // Use the clean name as the unique ID
@@ -90,28 +108,36 @@ function parseVODLibrary() {
             });
         }
         const seriesObj = seriesMap.get(seriesName);
-        
+
         // Use the logo from the first episode of Season 1 if possible
-        if(seasonNum === 1 && episodeNum === 1 && episode.logo) {
+        if(seasonNum === 1 && episodeNum === 1 && episode.logo && episode.logo !== seriesObj.logo) {
+            // console.log(`[VOD_PARSE_DEBUG] Updating logo for "${seriesName}" from S01E01.`);
             seriesObj.logo = episode.logo;
         }
 
         // Get or create the season array
         if (!seriesObj.seasons.has(seasonNum)) {
+            // console.log(`[VOD_PARSE_DEBUG] Adding new season ${seasonNum} to "${seriesName}".`);
             seriesObj.seasons.set(seasonNum, []);
         }
         const seasonArr = seriesObj.seasons.get(seasonNum);
 
-        // Add the episode to the season
-        seasonArr.push({
-            id: episode.id,
-            name: episode.name,
-            url: episode.url,
-            logo: episode.logo,
-            season: seasonNum,
-            episode: episodeNum,
-        });
+        // Add the episode to the season, avoid duplicates based on original ID
+        if (!seasonArr.some(ep => ep.id === episode.id)) {
+             // console.log(`[VOD_PARSE_DEBUG] Adding episode S${seasonNum}E${episodeNum} ("${episode.name}") to "${seriesName}".`);
+             seasonArr.push({
+                id: episode.id,
+                name: episode.name, // Keep original name for display
+                url: episode.url,
+                logo: episode.logo,
+                season: seasonNum,
+                episode: episodeNum,
+            });
+        } else {
+            // console.log(`[VOD_PARSE_DEBUG] Duplicate episode ID found, skipping add: S${seasonNum}E${episodeNum} ("${episode.name}")`);
+        }
     }
+    console.log('[VOD_PARSE_DEBUG] Finished processing episodes.'); // Added log
 
     // Sort episodes within each season
     for (const series of seriesMap.values()) {
