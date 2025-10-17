@@ -668,43 +668,66 @@ export function setupSettingsEventListeners() {
     // 1. Add listener to the "Select Groups" button in the source editor
     // We must use event delegation on the modal body since the button is added dynamically
     UIElements.sourceEditorModal.addEventListener('click', async (e) => {
+        // --- CORRECTED: Select Groups Button Click Handler ---
         if (e.target.id === 'source-editor-filter-groups-btn') {
+            console.log('[SETTINGS] "Select Groups" button clicked.'); // Add log
             const btn = e.target;
-            const originalContent = btn.innerHTML;
+            const originalContent = btn.textContent; // Use textContent for button text
             setButtonLoadingState(btn, true, 'Fetching...');
-
+    
+            // Determine source type and details from the *modal's current state*
+            const sourceType = currentSourceTypeForEditor; // Use the state variable
             const body = {
-                type: currentSourceTypeForEditor,
+                type: sourceType,
                 url: UIElements.sourceEditorUrl.value,
-                xc: JSON.stringify({
+                // Ensure XC data is stringified correctly ONLY if type is XC
+                xc: sourceType === 'xc' ? JSON.stringify({
                     server: UIElements.sourceEditorXcUrl.value,
                     username: UIElements.sourceEditorXcUsername.value,
                     password: UIElements.sourceEditorXcPassword.value,
-                })
+                }) : null
             };
-
-            if ((body.type === 'url' && !body.url) && (body.type === 'xc' && !JSON.parse(body.xc).server)) {
-                showNotification('Please enter a URL or XC server address first.', true);
+    
+            // Basic validation
+            if (sourceType === 'file') {
+                 showNotification('Group filtering is not available for local file sources.', true);
+                 setButtonLoadingState(btn, false, originalContent);
+                 return;
+            }
+            if ((sourceType === 'url' && !body.url) || (sourceType === 'xc' && (!body.xc || !JSON.parse(body.xc).server))) {
+                showNotification('Please enter a valid URL or XC server address before fetching groups.', true);
                 setButtonLoadingState(btn, false, originalContent);
                 return;
             }
-
-            const res = await apiFetch('/api/sources/fetch-groups', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
-
-            if (res && res.ok) {
-                const data = await res.json();
-                const selectedGroups = JSON.parse(document.getElementById('source-editor-selected-groups').value || '[]');
-                populateGroupFilterModal(data.groups, selectedGroups);
-                openModal(UIElements.groupFilterModal);
-            } else {
-                showNotification('Could not fetch groups. Please check the URL or XC credentials.', true);
+    
+            console.log('[SETTINGS] Fetching groups with body:', body); // Add log
+    
+            try {
+                const res = await apiFetch('/api/sources/fetch-groups', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body) // Ensure body is stringified
+                });
+    
+                if (res && res.ok) {
+                    const data = await res.json();
+                    console.log('[SETTINGS] Groups fetched successfully:', data.groups); // Add log
+                    const selectedGroupsInput = document.getElementById('source-editor-selected-groups');
+                    const currentlySelected = selectedGroupsInput ? JSON.parse(selectedGroupsInput.value || '[]') : [];
+                    populateGroupFilterModal(data.groups || [], currentlySelected); // Pass empty array if no groups
+                    openModal(UIElements.groupFilterModal); // Ensure correct modal element is targeted
+                } else {
+                    // apiFetch already shows error notification
+                    console.error('[SETTINGS] Failed to fetch groups. Response:', res);
+                }
+            } catch (fetchError) {
+                 console.error('[SETTINGS] Error during fetch-groups API call:', fetchError);
+                 showNotification('An error occurred while trying to fetch groups.', true);
+            } finally {
+                 setButtonLoadingState(btn, false, originalContent);
             }
-            setButtonLoadingState(btn, false, originalContent);
         }
+        // --- END CORRECTION ---
     });
 
     // 2. Helper function to populate the group filter modal
