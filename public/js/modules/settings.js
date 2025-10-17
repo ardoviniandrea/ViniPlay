@@ -668,11 +668,8 @@ export function setupSettingsEventListeners() {
     // 1. Add listener to the "Select Groups" button in the source editor
     // We must use event delegation on the modal body since the button is added dynamically
     UIElements.sourceEditorModal.addEventListener('click', async (e) => {
-        // --- THIS is the corrected condition ---
-        const filterGroupsBtn = e.target.closest('#source-editor-filter-groups-btn');
-        if (filterGroupsBtn) {
-            const btn = filterGroupsBtn; // Use the found button
-            // --- The rest of your logic remains unchanged ---
+        if (e.target.id === 'source-editor-filter-groups-btn') {
+            const btn = e.target;
             const originalContent = btn.innerHTML;
             setButtonLoadingState(btn, true, 'Fetching...');
 
@@ -708,7 +705,6 @@ export function setupSettingsEventListeners() {
             }
             setButtonLoadingState(btn, false, originalContent);
         }
-        // --- End of corrected 'if' block ---
     });
 
     // 2. Helper function to populate the group filter modal
