@@ -39,6 +39,12 @@ export async function initVodPage() {
 /**
  * Parses the raw movie and series data from guideState into a structured
  * library. Crucially, it groups flat episode lists into series objects.
+ *
+ * --- UPDATED ---
+ * - Fixes the series grouping logic to be more robust.
+ * - This fixes the bug where all episodes were flat.
+ * - Fixes the "always same item" bug by using the clean series name as the
+ * unique ID for the series object.
  */
 function parseVODLibrary() {
     const movies = guideState.vodMovies || [];
@@ -52,40 +58,42 @@ function parseVODLibrary() {
 
     // 2. Process Series (grouping episodes)
     const seriesMap = new Map();
-    // Regex to find and strip SXXEXX patterns to get a clean series name
-    const seriesNameRegex = /^(.*?) - (S\d+E\d+)/i;
-    // Regex to extract season and episode numbers
-    const seRegex = /(S(\d+)E(\d+)|(\d+)x(\d+))/i;
+    
+    // Regex to extract season and episode numbers (e.g., S01E01, 1x01, S01-E01)
+    // This is used to find the "split point" in the name.
+    const seRegex = /[\s._-](S(\d+)E(\d+)|(\d+)x(\d+)|S(\d+)-E(\d+))[\s._-]/i;
 
     for (const episode of seriesEpisodes) {
-        let seriesName = episode.name;
+        let seriesName;
         let seasonNum = 1; // Default to season 1
         let episodeNum = 0;
 
-        // Try to find a clean series name
-        const nameMatch = episode.name.match(seriesNameRegex);
-        if (nameMatch && nameMatch[1]) {
-            seriesName = nameMatch[1].trim(); // "My Show - S01E01" -> "My Show"
-        }
-
         // Try to find season/episode numbers
         const seMatch = episode.name.match(seRegex);
+        
         if (seMatch) {
-            seasonNum = parseInt(seMatch[2] || seMatch[4], 10);
-            episodeNum = parseInt(seMatch[3] || seMatch[5], 10);
+            // --- FIX: Robust name extraction ---
+            // Everything *before* the S/E pattern is the series name.
+            seriesName = episode.name.substring(0, seMatch.index).trim();
+            
+            seasonNum = parseInt(seMatch[2] || seMatch[4] || seMatch[6], 10);
+            episodeNum = parseInt(seMatch[3] || seMatch[5] || seMatch[7], 10);
         } else {
-            // Fallback for episodes without clear S/E numbers (e.g., daily shows)
-            // We'll just number them in the order they appear
+            // If no S/E pattern, treat the whole name as the series name
+            // (e.g., for a talk show where episodes are just dates)
+            seriesName = episode.name.trim();
+            // We'll number them in the order they appear
             episodeNum = seriesMap.has(seriesName) ? seriesMap.get(seriesName).seasons.get(1).length + 1 : 1;
         }
 
-        // Get or create the main series object
+        // --- CRITICAL FIX for "always same item" bug ---
+        // The unique ID for the series *must* be its name.
         if (!seriesMap.has(seriesName)) {
             seriesMap.set(seriesName, {
                 type: 'series',
-                id: episode.id, // Use first episode's ID as the "main" ID
+                id: seriesName, // Use the clean name as the unique ID
                 name: seriesName,
-                logo: episode.logo, // Use first episode's logo
+                logo: episode.logo, // Use first episode's logo as placeholder
                 group: episode.group,
                 seasons: new Map(), // Use a Map for seasons
             });
@@ -123,6 +131,10 @@ function parseVODLibrary() {
 
     // 3. Combine and store
     vodState.fullLibrary = [...movieItems, ...Array.from(seriesMap.values())];
+    
+    // Sort the full library alphabetically by name
+    vodState.fullLibrary.sort((a, b) => a.name.localeCompare(b.name));
+    
     console.log(`[VOD] Library parsed: ${movieItems.length} movies, ${seriesMap.size} series.`);
 }
 
@@ -145,10 +157,16 @@ function populateVodGroups() {
         option.textContent = group === 'all' ? 'All Categories' : group;
         selectEl.appendChild(option);
     });
+    
+    selectEl.value = 'all';
 }
 
 /**
  * Renders the VOD grid based on the current filters.
+ *
+ * --- UPDATED ---
+ * - Now supports pagination. It filters the full list, then
+ * slices it based on the current page and page size.
  */
 function renderVodGrid() {
     const gridEl = UIElements.vodGrid;
@@ -161,8 +179,8 @@ function renderVodGrid() {
     const groupFilter = UIElements.vodGroupFilter.value; // 'all' or specific group
     const searchFilter = UIElements.vodSearchInput.value.toLowerCase();
 
-    // 2. Apply filters
-    vodState.filteredLibrary = vodState.fullLibrary.filter(item => {
+    // 2. Apply filters to the *full* library
+    const fullFilteredList = vodState.fullLibrary.filter(item => {
         const typeMatch = (typeFilter === 'all') || (typeFilter === 'movies' && item.type === 'movie') || (typeFilter === 'series' && item.type === 'series');
         const groupMatch = (groupFilter === 'all') || (item.group === groupFilter);
         const searchMatch = (searchFilter === '') || (item.name.toLowerCase().includes(searchFilter));
@@ -170,31 +188,79 @@ function renderVodGrid() {
         return typeMatch && groupMatch && searchMatch;
     });
 
-    // 3. Render HTML
+    // --- NEW: PAGINATION LOGIC ---
+    
+    // 3. Update pagination state
+    const { pagination } = vodState;
+    pagination.totalItems = fullFilteredList.length;
+    pagination.totalPages = Math.ceil(pagination.totalItems / pagination.pageSize) || 1;
+    
+    // Ensure currentPage is valid
+    if (pagination.currentPage > pagination.totalPages) {
+        pagination.currentPage = 1;
+    }
+    
+    // 4. Slice the filtered list to get the items for the current page
+    const startIndex = (pagination.currentPage - 1) * pagination.pageSize;
+    const endIndex = startIndex + pagination.pageSize;
+    vodState.filteredLibrary = fullFilteredList.slice(startIndex, endIndex);
+    
+    // 5. Render the *paginated* items
     if (vodState.filteredLibrary.length === 0) {
         gridEl.innerHTML = '';
         noResultsEl.classList.remove('hidden');
+    } else {
+        noResultsEl.classList.add('hidden');
+        gridEl.innerHTML = vodState.filteredLibrary.map(item => {
+            const itemType = item.type === 'movie' ? 'Movie' : 'Series';
+            // The item.id is now the unique series name, fixing the details bug
+            return `
+                <div class="vod-item" data-id="${item.id}"> 
+                    <span class="vod-type-badge">${itemType}</span>
+                    <div class="vod-item-poster">
+                        <img src="${item.logo}" 
+                             alt="${item.name}" 
+                             onerror="this.onerror=null; this.src='https_placehold.co/400x600/1f2937/d1d5db?text=${encodeURIComponent(item.name)}'; this.style.objectFit='cover';">
+                    </div>
+                    <div class="vod-item-info">
+                        <p class="vod-item-title" title="${item.name}">${item.name}</p>
+                        <p class="vod-item-type">${item.group || 'Uncategorized'}</p>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    // 6. Render the pagination controls
+    renderVodPagination();
+}
+
+/**
+ * NEW: Renders the pagination controls for the VOD page.
+ */
+function renderVodPagination() {
+    const { currentPage, totalPages, totalItems } = vodState.pagination;
+    const controlsEl = UIElements.vodPaginationControls;
+    const infoEl = UIElements.vodPaginationInfo;
+    const prevBtn = UIElements.vodPrevBtn;
+    const nextBtn = UIElements.vodNextBtn;
+
+    if (!controlsEl || !infoEl || !prevBtn || !nextBtn) {
+        // Elements not on page yet, do nothing.
         return;
     }
 
-    noResultsEl.classList.add('hidden');
-    gridEl.innerHTML = vodState.filteredLibrary.map(item => {
-        const itemType = item.type === 'movie' ? 'Movie' : 'Series';
-        return `
-            <div class="vod-item" data-id="${item.id}">
-                <span class="vod-type-badge">${itemType}</span>
-                <div class="vod-item-poster">
-                    <img src="${item.logo}" 
-                         alt="${item.name}" 
-                         onerror="this.onerror=null; this.src='https_placehold.co/400x600/1f2937/d1d5db?text=${encodeURIComponent(item.name)}'; this.style.objectFit='cover';">
-                </div>
-                <div class="vod-item-info">
-                    <p class="vod-item-title" title="${item.name}">${item.name}</p>
-                    <p class="vod-item-type">${item.group || 'Uncategorized'}</p>
-                </div>
-            </div>
-        `;
-    }).join('');
+    if (totalPages <= 1) {
+        controlsEl.classList.add('hidden');
+        return;
+    }
+    
+    controlsEl.classList.remove('hidden');
+    
+    infoEl.textContent = `Page ${currentPage} of ${totalPages} (${totalItems} items)`;
+    
+    prevBtn.disabled = currentPage === 1;
+    nextBtn.disabled = currentPage === totalPages;
 }
 
 /**
@@ -298,6 +364,10 @@ function renderEpisodeList(series, seasonNum) {
 
 /**
  * Sets up all event listeners for the VOD page and its modals.
+ *
+ * --- UPDATED ---
+ * - Adds event listeners for new pagination controls.
+ * - Resets pagination to page 1 when any filter is changed.
  */
 function setupVodEventListeners() {
     // --- Filter Bar Listeners ---
@@ -305,25 +375,41 @@ function setupVodEventListeners() {
         UIElements.vodTypeAll.classList.add('active');
         UIElements.vodTypeMovies.classList.remove('active');
         UIElements.vodTypeSeries.classList.remove('active');
+        vodState.pagination.currentPage = 1; // Reset page
         renderVodGrid();
     });
     UIElements.vodTypeMovies.addEventListener('click', () => {
         UIElements.vodTypeAll.classList.remove('active');
         UIElements.vodTypeMovies.classList.add('active');
         UIElements.vodTypeSeries.classList.remove('active');
+        vodState.pagination.currentPage = 1; // Reset page
         renderVodGrid();
     });
     UIElements.vodTypeSeries.addEventListener('click', () => {
         UIElements.vodTypeAll.classList.remove('active');
         UIElements.vodTypeMovies.classList.remove('active');
         UIElements.vodTypeSeries.classList.add('active');
+        vodState.pagination.currentPage = 1; // Reset page
         renderVodGrid();
     });
 
-    UIElements.vodGroupFilter.addEventListener('change', renderVodGrid);
+    UIElements.vodGroupFilter.addEventListener('change', () => {
+        vodState.pagination.currentPage = 1; // Reset page
+        renderVodGrid();
+    });
     UIElements.vodSearchInput.addEventListener('input', () => {
         clearTimeout(vodState.searchDebounce);
-        vodState.searchDebounce = setTimeout(renderVodGrid, 300);
+        vodState.searchDebounce = setTimeout(() => {
+            vodState.pagination.currentPage = 1; // Reset page
+            renderVodGrid();
+        }, 300);
+    });
+    
+    // --- NEW: Page Size Listener ---
+    UIElements.vodPageSize?.addEventListener('change', (e) => {
+        vodState.pagination.pageSize = parseInt(e.target.value, 10);
+        vodState.pagination.currentPage = 1; // Reset page
+        renderVodGrid();
     });
 
     // --- VOD Grid Click Listener (Event Delegation) ---
@@ -331,9 +417,12 @@ function setupVodEventListeners() {
         const vodItemEl = e.target.closest('.vod-item');
         if (vodItemEl) {
             const itemId = vodItemEl.dataset.id;
+            // This find will now work correctly because item.id is the unique series name
             const item = vodState.fullLibrary.find(i => i.id === itemId);
             if (item) {
                 openVodDetails(item);
+            } else {
+                console.error(`[VOD] Clicked item with id "${itemId}" but could not find it in fullLibrary.`);
             }
         }
     });
@@ -353,6 +442,20 @@ function setupVodEventListeners() {
             const title = episodeItem.dataset.title;
             playVOD(url, title);
             closeModal(UIElements.vodDetailsModal);
+        }
+    });
+    
+    // --- NEW: Pagination Controls Listener ---
+    UIElements.vodPaginationControls?.addEventListener('click', (e) => {
+        const prevBtn = e.target.closest('#vod-prev-btn');
+        const nextBtn = e.target.closest('#vod-next-btn');
+
+        if (prevBtn && !prevBtn.disabled) {
+            vodState.pagination.currentPage--;
+            renderVodGrid();
+        } else if (nextBtn && !nextBtn.disabled) {
+            vodState.pagination.currentPage++;
+            renderVodGrid();
         }
     });
 }
