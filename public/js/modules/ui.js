@@ -472,6 +472,7 @@ async function proceedWithRouteChange(path) {
     }
 
     if (targetPageElement) {
+        console.log('[UI_ROUTING_DEBUG] targetPageElement before modifying classes:', targetPageElement);
         targetPageElement.classList.remove('hidden');
         targetPageElement.classList.add('flex'); // Use flex for layout
         console.log(`[UI_ROUTING] Displaying page: ${targetPageElement.id}`);
