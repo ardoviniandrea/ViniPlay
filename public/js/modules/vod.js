@@ -13,11 +13,18 @@ import { playVOD } from './player.js';
 // Local state for VOD page
 const vodState = {
     // This will hold the parsed and combined list of all movies and series objects
-    fullLibrary: [], 
+    fullLibrary: [],
     // This will hold the items currently being shown after filters are applied
     filteredLibrary: [],
     // Simple debounce timer for search
     searchDebounce: null,
+    // --- NEW: Pagination State ---
+    pagination: {
+        currentPage: 1,
+        pageSize: 50, // Default page size
+        totalItems: 0,
+        totalPages: 1,
+    },
 };
 
 /**
@@ -148,7 +155,7 @@ function populateVodGroups() {
 }
 
 /**
- * Renders the VOD grid based on the current filters.
+ * Renders the VOD grid based on the current filters and pagination state.
  */
 function renderVodGrid() {
     const gridEl = UIElements.vodGrid;
@@ -161,40 +168,57 @@ function renderVodGrid() {
     const groupFilter = UIElements.vodGroupFilter.value; // 'all' or specific group
     const searchFilter = UIElements.vodSearchInput.value.toLowerCase();
 
-    // 2. Apply filters
+    // 2. Apply filters to the full library
     vodState.filteredLibrary = vodState.fullLibrary.filter(item => {
         const typeMatch = (typeFilter === 'all') || (typeFilter === 'movies' && item.type === 'movie') || (typeFilter === 'series' && item.type === 'series');
         const groupMatch = (groupFilter === 'all') || (item.group === groupFilter);
         const searchMatch = (searchFilter === '') || (item.name.toLowerCase().includes(searchFilter));
-        
+
         return typeMatch && groupMatch && searchMatch;
     });
 
-    // 3. Render HTML
-    if (vodState.filteredLibrary.length === 0) {
-        gridEl.innerHTML = '';
-        noResultsEl.classList.remove('hidden');
-        return;
+    // 3. Update Pagination State
+    vodState.pagination.totalItems = vodState.filteredLibrary.length;
+    vodState.pagination.totalPages = Math.ceil(vodState.pagination.totalItems / vodState.pagination.pageSize);
+    // Ensure currentPage is valid after filtering
+    if (vodState.pagination.currentPage > vodState.pagination.totalPages) {
+        vodState.pagination.currentPage = Math.max(1, vodState.pagination.totalPages);
     }
 
-    noResultsEl.classList.add('hidden');
-    gridEl.innerHTML = vodState.filteredLibrary.map(item => {
-        const itemType = item.type === 'movie' ? 'Movie' : 'Series';
-        return `
-            <div class="vod-item" data-id="${item.id}">
-                <span class="vod-type-badge">${itemType}</span>
-                <div class="vod-item-poster">
-                    <img src="${item.logo}" 
-                         alt="${item.name}" 
-                         onerror="this.onerror=null; this.src='https_placehold.co/400x600/1f2937/d1d5db?text=${encodeURIComponent(item.name)}'; this.style.objectFit='cover';">
+    // 4. Calculate items for the current page
+    const startIndex = (vodState.pagination.currentPage - 1) * vodState.pagination.pageSize;
+    const endIndex = startIndex + vodState.pagination.pageSize;
+    const itemsToRender = vodState.filteredLibrary.slice(startIndex, endIndex);
+
+    // 5. Render Grid HTML
+    if (itemsToRender.length === 0) {
+        gridEl.innerHTML = ''; // Clear grid
+        noResultsEl.classList.remove('hidden');
+    } else {
+        noResultsEl.classList.add('hidden');
+        gridEl.innerHTML = itemsToRender.map(item => {
+            const itemType = item.type === 'movie' ? 'Movie' : 'Series';
+            // Use a placeholder image URL that works
+            const placeholderImageUrl = `https://placehold.co/400x600/1f2937/d1d5db?text=${encodeURIComponent(item.name)}`;
+            return `
+                <div class="vod-item" data-id="${item.id}">
+                    <span class="vod-type-badge">${itemType}</span>
+                    <div class="vod-item-poster">
+                        <img src="${item.logo || placeholderImageUrl}"
+                             alt="${item.name}"
+                             onerror="this.onerror=null; this.src='${placeholderImageUrl}'; this.style.objectFit='cover';">
+                    </div>
+                    <div class="vod-item-info">
+                        <p class="vod-item-title" title="${item.name}">${item.name}</p>
+                        <p class="vod-item-type">${item.group || 'Uncategorized'}</p>
+                    </div>
                 </div>
-                <div class="vod-item-info">
-                    <p class="vod-item-title" title="${item.name}">${item.name}</p>
-                    <p class="vod-item-type">${item.group || 'Uncategorized'}</p>
-                </div>
-            </div>
-        `;
-    }).join('');
+            `;
+        }).join('');
+    }
+
+    // 6. Render Pagination Controls
+    renderVodPaginationControls();
 }
 
 /**
@@ -326,6 +350,19 @@ function setupVodEventListeners() {
         vodState.searchDebounce = setTimeout(renderVodGrid, 300);
     });
 
+    // --- Pagination Listeners (Initial setup, might be re-attached in renderVodPaginationControls) ---
+    // Note: The actual page number/prev/next listeners are attached *dynamically*
+    // in renderVodPaginationControls because the elements are recreated.
+    // We only need the initial setup for the container existence check.
+    const paginationContainer = document.getElementById('vod-pagination-controls');
+    if (paginationContainer) {
+        // Listener for page size change is initially attached here and re-attached on render
+        const pageSizeSelect = paginationContainer.querySelector('#vod-page-size-select');
+        if (pageSizeSelect) {
+             pageSizeSelect.addEventListener('change', changeVodPageSize);
+        }
+    }
+
     // --- VOD Grid Click Listener (Event Delegation) ---
     UIElements.vodGrid.addEventListener('click', (e) => {
         const vodItemEl = e.target.closest('.vod-item');
@@ -355,4 +392,120 @@ function setupVodEventListeners() {
             closeModal(UIElements.vodDetailsModal);
         }
     });
+}
+
+/**
+ * Renders the pagination controls below the VOD grid.
+ */
+function renderVodPaginationControls() {
+    const controlsContainer = document.getElementById('vod-pagination-controls'); // We'll add this ID in index.html
+    if (!controlsContainer) return;
+
+    const { currentPage, totalPages, totalItems, pageSize } = vodState.pagination;
+
+    if (totalPages <= 1) {
+        controlsContainer.innerHTML = ''; // Hide controls if only one page
+        return;
+    }
+
+    const startItem = (currentPage - 1) * pageSize + 1;
+    const endItem = Math.min(startItem + pageSize - 1, totalItems);
+
+    let pagesHTML = '';
+    // Previous button
+    pagesHTML += `<li><button class="pagination-btn prev-page-btn" ${currentPage === 1 ? 'disabled' : ''}>Prev</button></li>`;
+
+    // Page number buttons (simplified for now: first, current, last)
+    pagesHTML += `<li><button class="pagination-btn page-number-btn ${1 === currentPage ? 'active' : ''}" data-page="1">1</button></li>`;
+
+    if (currentPage > 2) {
+        pagesHTML += `<li><span class="pagination-btn">...</span></li>`;
+    }
+    if (currentPage !== 1 && currentPage !== totalPages) {
+        pagesHTML += `<li><button class="pagination-btn page-number-btn active" data-page="${currentPage}">${currentPage}</button></li>`;
+    }
+    if (currentPage < totalPages - 1) {
+        pagesHTML += `<li><span class="pagination-btn">...</span></li>`;
+    }
+
+    if (totalPages > 1) {
+       pagesHTML += `<li><button class="pagination-btn page-number-btn ${totalPages === currentPage ? 'active' : ''}" data-page="${totalPages}">${totalPages}</button></li>`;
+    }
+
+
+    // Next button
+    pagesHTML += `<li><button class="pagination-btn next-page-btn" ${currentPage === totalPages ? 'disabled' : ''}>Next</button></li>`;
+
+    controlsContainer.innerHTML = `
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center space-y-3 md:space-y-0 p-4" aria-label="Table navigation">
+            <div class="flex items-center gap-2">
+                <span class="text-sm font-normal text-gray-400">Page Size:</span>
+                <select id="vod-page-size-select" class="bg-gray-700 border border-gray-600 rounded-md px-2 py-1 text-sm text-white focus:ring-blue-500 focus:border-blue-500">
+                    <option value="25" ${pageSize === 25 ? 'selected' : ''}>25</option>
+                    <option value="50" ${pageSize === 50 ? 'selected' : ''}>50</option>
+                    <option value="75" ${pageSize === 75 ? 'selected' : ''}>75</option>
+                    <option value="100" ${pageSize === 100 ? 'selected' : ''}>100</option>
+                </select>
+                <span id="vod-pagination-info" class="text-sm font-normal text-gray-400 ml-4">
+                    Showing ${startItem}-${endItem} of ${totalItems}
+                </span>
+            </div>
+            <ul id="vod-pagination-pages" class="inline-flex items-center -space-x-px">
+                ${pagesHTML}
+            </ul>
+        </div>
+    `;
+
+    // Re-attach listeners specifically for the newly rendered elements
+    const pageSizeSelect = controlsContainer.querySelector('#vod-page-size-select');
+    if (pageSizeSelect) {
+        pageSizeSelect.addEventListener('change', changeVodPageSize);
+    }
+    const paginationPages = controlsContainer.querySelector('#vod-pagination-pages');
+    if (paginationPages) {
+        paginationPages.addEventListener('click', (e) => {
+             const button = e.target.closest('button');
+             if (!button || button.disabled) return;
+
+             if (button.classList.contains('prev-page-btn')) {
+                 goToVodPage(vodState.pagination.currentPage - 1);
+             } else if (button.classList.contains('next-page-btn')) {
+                 goToVodPage(vodState.pagination.currentPage + 1);
+             } else if (button.classList.contains('page-number-btn')) {
+                 const pageNum = parseInt(button.dataset.page, 10);
+                 if (pageNum) {
+                     goToVodPage(pageNum);
+                 }
+             }
+        });
+    }
+}
+
+/**
+ * Navigates to a specific page in the VOD grid.
+ * @param {number} pageNum - The page number to go to.
+ */
+function goToVodPage(pageNum) {
+    const { totalPages } = vodState.pagination;
+    if (pageNum >= 1 && pageNum <= totalPages) {
+        vodState.pagination.currentPage = pageNum;
+        renderVodGrid(); // Re-render the grid for the new page
+        // Scroll to the top of the grid container
+        UIElements.vodGridContainer.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+}
+
+/**
+ * Changes the number of items shown per page in the VOD grid.
+ * @param {Event} event - The change event from the select dropdown.
+ */
+function changeVodPageSize(event) {
+    const newSize = parseInt(event.target.value, 10);
+    if (newSize) {
+        vodState.pagination.pageSize = newSize;
+        vodState.pagination.currentPage = 1; // Reset to first page
+        renderVodGrid(); // Re-render with new page size
+        // Optionally save this preference
+        // import('./api.js').then(({ saveUserSetting }) => saveUserSetting('vodPageSize', newSize));
+    }
 }
