@@ -670,22 +670,31 @@ async function processAndMergeSources(req) {
                         // --- LIVE CHANNEL ---
                         liveStreamCount++;
                         let processedExtInf = currentExtInf;
-                        
-                        // Inject unique ID
+        
+                        // *** FIX: Consistent Unique Channel ID Generation ***
+                        // Use the SOURCE ID and the ORIGINAL tvg-id from the M3U line.
+                        const originalTvgId = idMatch ? idMatch[1] : `no-tvg-id-${name.replace(/[^a-zA-Z0-9]/g, '')}`; // Use original or generate fallback
+                        const finalUniqueChannelId = `${source.id}_${originalTvgId}`; // Combine source ID and original tvg-id
+        
+                        // Inject the *corrected* unique ID into the #EXTINF line
                         if (idMatch) {
-                            processedExtInf = processedExtInf.replace(/tvg-id="[^"]*"/, `tvg-id="${uniqueChannelId}"`);
+                            // Replace existing tvg-id
+                            processedExtInf = processedExtInf.replace(/tvg-id="[^"]*"/, `tvg-id="${finalUniqueChannelId}"`);
                         } else {
-                            const extinfEnd = processedExtInf.indexOf(' ') + 1;
-                            processedExtInf = processedExtInf.slice(0, extinfEnd) + `tvg-id="${uniqueChannelId}" ` + processedExtInf.slice(extinfEnd);
+                            // Add tvg-id if it was missing
+                            const extinfEnd = processedExtInf.indexOf(':') + 1; // Find the colon after #EXTINF
+                            processedExtInf = processedExtInf.slice(0, extinfEnd) + ` tvg-id="${finalUniqueChannelId}"` + processedExtInf.slice(extinfEnd);
                         }
-                        
-                        // Inject source name (Corrected Position)
-                        const extinfEndWithId = processedExtInf.indexOf(' ') + 1;
-                        processedExtInf = processedExtInf.slice(0, extinfEndWithId) + `vini-source="${source.name}" ` + processedExtInf.slice(extinfEndWithId);
-
+                        // *** END FIX ***
+        
+                        // Inject source name (ensure it's after tvg-id if added)
+                        const tvgIdAttrEnd = processedExtInf.indexOf(`tvg-id="${finalUniqueChannelId}"`) + `tvg-id="${finalUniqueChannelId}"`.length;
+                        processedExtInf = processedExtInf.slice(0, tvgIdAttrEnd) + ` vini-source="${source.name}"` + processedExtInf.slice(tvgIdAttrEnd);
+        
+        
                         mergedLiveM3uContent += processedExtInf + '\n' + streamUrl + '\n';
-                        liveChannelIdSet.add(uniqueChannelId);
-                    }
+                        liveChannelIdSet.add(finalUniqueChannelId); // Add the CORRECT ID to the set for EPG matching
+                        }
                     
                     currentExtInf = ''; // Reset for next entry
                 }
