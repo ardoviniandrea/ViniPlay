@@ -1156,8 +1156,15 @@ export function setupSettingsEventListeners() {
             if (e.target.id === 'source-editor-filter-groups-btn') {
                 console.log('[SETTINGS] "Select Groups" button clicked (via delegation).');
                 const btn = e.target;
-                const originalContent = btn.textContent;
+                // --- START ADDITION ---
+                // Store the original HTML content (using innerHTML as setButtonLoadingState uses it)
+                const originalContent = btn.innerHTML;
+                // --- END ADDITION ---
+
+                // --- MODIFIED: Use setButtonLoadingState ---
+                // Show loading state *before* making the API call
                 setButtonLoadingState(btn, true, 'Fetching...');
+                // --- END MODIFICATION ---
 
                 const sourceType = currentSourceTypeForEditor; // Use state variable
                 const body = {
@@ -1172,17 +1179,28 @@ export function setupSettingsEventListeners() {
 
                 if (sourceType === 'file') {
                     showNotification('Group filtering is not available for local file sources.', true);
+                    // --- MODIFIED: Restore button state on early exit ---
                     setButtonLoadingState(btn, false, originalContent);
+                    // --- END MODIFICATION ---
                     return;
                 }
-                if ((sourceType === 'url' && !body.url) || (sourceType === 'xc' && (!body.xc || !JSON.parse(body.xc).server))) {
-                    showNotification('Please enter a valid URL or XC server address before fetching groups.', true);
+                // --- MODIFIED: Added check for file path when type is 'file' ---
+                if ((sourceType === 'url' && !body.url) ||
+                    (sourceType === 'xc' && (!body.xc || !JSON.parse(body.xc).server)) ||
+                    (sourceType === 'file' && !UIElements.sourceEditorFileInfo.textContent) // Check if file info is present
+                   ) {
+                    showNotification('Please enter a valid URL, XC server address, or ensure a file is selected before fetching groups.', true);
+                    // --- MODIFIED: Restore button state on early exit ---
                     setButtonLoadingState(btn, false, originalContent);
+                    // --- END MODIFICATION ---
                     return;
                 }
+                 // --- END MODIFICATION ---
+
 
                 console.log('[SETTINGS] Fetching groups with body:', body);
 
+                // --- START ADDITION: try...finally block ---
                 try {
                     const res = await apiFetch('/api/sources/fetch-groups', {
                         method: 'POST',
@@ -1192,7 +1210,7 @@ export function setupSettingsEventListeners() {
 
                     if (res && res.ok) {
                         const data = await res.json();
-                        console.log('[SETTINGS] Groups fetched successfully:', data.groups);
+                        console.log('[SETTINGS] Groups fetched successfully:', data.groups); // 
                         const selectedGroupsInput = document.getElementById('source-editor-selected-groups');
                         const currentlySelected = selectedGroupsInput ? JSON.parse(selectedGroupsInput.value || '[]') : [];
 
@@ -1205,15 +1223,17 @@ export function setupSettingsEventListeners() {
                             showNotification('UI Error: Cannot display group filter.', true);
                         }
                     } else {
-                        console.error('[SETTINGS] Failed to fetch groups. Response:', res);
+                        console.error('[SETTINGS] Failed to fetch groups. Response:', res); // 
                         // apiFetch shows notification
                     }
                 } catch (fetchError) {
                     console.error('[SETTINGS] Error during fetch-groups API call:', fetchError);
                     showNotification('An error occurred while trying to fetch groups.', true);
                 } finally {
+                    // Restore button state regardless of success or failure
                     setButtonLoadingState(btn, false, originalContent);
                 }
+                // --- END ADDITION: try...finally block ---
             }
             // Add other delegated click handlers for the source editor modal here if needed
         });
