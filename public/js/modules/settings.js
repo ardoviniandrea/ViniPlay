@@ -1315,11 +1315,6 @@ export function setupSettingsEventListeners() {
     }
             
             // Add other delegated click handlers for the source editor modal here if needed
-        });
-        console.log('[SETTINGS] Added delegated click listener to source editor modal.');
-    } else {
-         console.error('[SETTINGS] Cannot add delegated listener: Source Editor Modal element not found.');
-    }
 
     // Make sure helper functions are defined outside or properly imported/accessible
     // Assuming populateGroupFilterModal and updateGroupFilterList are defined elsewhere in settings.js
