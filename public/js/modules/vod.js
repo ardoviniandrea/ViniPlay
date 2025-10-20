@@ -437,25 +437,28 @@ function renderEpisodeList(series, seasonNum) {
         return;
     }
 
+    // --- UPDATED HTML STRUCTURE ---
     episodeListEl.innerHTML = episodes.map((ep, index) => {
         // Try to get a clean episode name, fallback to the full name
         let epName = ep.name.split(' - ').pop();
         if (epName.length < 5) epName = ep.name; // Handle cases where split fails
 
+        // Use original name for the data attribute for playback title consistency
+        const originalTitle = ep.name || `Episode ${index + 1}`;
+
         return `
-            <div class="episode-item" data-url="${ep.url}" data-title="${ep.name}">
-                <div class="flex items-center gap-4">
-                    <span class="text-gray-400 text-sm w-4 text-right">${index + 1}</span>
-                    <div class="flex-grow">
-                        <p class="text-white text-sm font-medium">${epName}</p>
-                    </div>
-                </div>
+            <div class="episode-item" data-url="${ep.url}" data-title="${originalTitle.replace(/"/g, '&quot;')}">
+                <div class="episode-item-epnum">${index + 1}</div>
+                <div class="episode-item-title">${epName}</div>
+                <div class="episode-item-duration">N/A</div>
+                <div class="episode-item-date">N/A</div>
                 <button class="episode-item-play-btn" title="Play Episode">
                     ${ICONS.play}
                 </button>
             </div>
         `;
     }).join('');
+    // --- END OF UPDATED HTML ---
 }
 
 
