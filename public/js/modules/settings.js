@@ -410,7 +410,7 @@ const openSourceEditor = (sourceType, source = null) => {
             <label class="block text-sm font-medium text-gray-400">Group Filtering</label>
             <p class="text-xs text-gray-500 mb-2">Select which groups to import. If none are selected, all groups will be imported.</p>
             <button type="button" id="source-editor-filter-groups-btn" class="w-full bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">
-                Select Groups
+                <span>Select Groups</span>
             </button>
             <input type="hidden" id="source-editor-selected-groups" value="[]">
         </div>
@@ -426,7 +426,11 @@ const openSourceEditor = (sourceType, source = null) => {
     if (source && source.selectedGroups) {
         document.getElementById('source-editor-selected-groups').value = JSON.stringify(source.selectedGroups);
         const count = source.selectedGroups.length;
-        document.getElementById('source-editor-filter-groups-btn').textContent = count > 0 ? `${count} Groups Selected` : 'Select Groups';
+        // MODIFIED: Target the inner span now
+        const btnSpan = document.querySelector('#source-editor-filter-groups-btn span');
+        if (btnSpan) {
+            btnSpan.textContent = count > 0 ? `${count} Groups Selected` : 'Select Groups';
+        }
     }
     
     // Hide refresh interval for file-based sources
@@ -1130,11 +1134,11 @@ export function setupSettingsEventListeners() {
         }
 
         const filterButton = document.getElementById('source-editor-filter-groups-btn');
-        if (filterButton) {
+        const btnSpan = filterButton ? filterButton.querySelector('span') : null;
+        if (btnSpan) {
             const btnText = selectedGroups.length > 0 ? `${selectedGroups.length} Groups Selected` : 'Select Groups';
-            filterButton.textContent = btnText;
+            btnSpan.textContent = btnText; // Update the span's text
         }
-
         closeModal(UIElements.groupFilterModal);
     });
 
