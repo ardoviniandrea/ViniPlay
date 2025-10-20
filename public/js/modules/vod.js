@@ -5,9 +5,9 @@
  */
 
 import { appState, guideState, UIElements } from './state.js';
-import { openModal, closeModal } from './ui.js';
+import { openModal, closeModal, showNotification } from './ui.js';
 import { ICONS } from './icons.js';
-// We will create this new function in player.js in the next step.
+import { saveUserSetting } from './api.js';
 import { playVOD } from './player.js'; 
 
 // Local state for VOD page
@@ -39,6 +39,10 @@ export async function initVodPage() {
     populateVodGroups();
     // --- Set default value ---
     UIElements.vodGroupFilter.value = 'all'; // Ensure "All Categories" is selected initially
+    // Set initial state of the VOD Direct Play checkbox
+    const savedVodDirectPlay = guideState.settings.vodDirectPlayEnabled === true;
+    UIElements.vodDirectPlayCheckbox.checked = savedVodDirectPlay;
+    console.log(`[VOD] Initial VOD Direct Play state: ${savedVodDirectPlay}`);
     // --- End set default ---
     // 3. Render the grid with the default (all) filter
     renderVodGrid();
@@ -483,6 +487,14 @@ function setupVodEventListeners() {
     UIElements.vodSearchInput.addEventListener('input', () => {
         clearTimeout(vodState.searchDebounce);
         vodState.searchDebounce = setTimeout(renderVodGrid, 300);
+    });
+    
+    UIElements.vodDirectPlayCheckbox.addEventListener('change', () => {
+        const isEnabled = UIElements.vodDirectPlayCheckbox.checked;
+        guideState.settings.vodDirectPlayEnabled = isEnabled;
+        saveUserSetting('vodDirectPlayEnabled', isEnabled); // Assumes saveUserSetting is imported
+        showNotification(`VOD Direct Play ${isEnabled ? 'enabled' : 'disabled'}.`, false, 2000);
+        console.log(`[VOD] VOD Direct Play toggled to: ${isEnabled}`);
     });
 
     // --- Pagination Listeners (Initial setup, might be re-attached in renderVodPaginationControls) ---
