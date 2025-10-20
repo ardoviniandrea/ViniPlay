@@ -1169,17 +1169,17 @@ export function setupSettingsEventListeners() {
             if (e.target.closest('#source-editor-filter-groups-btn')) {
                 console.log('[SETTINGS] "Select Groups" button clicked (via delegation).');
                 const btn = e.target;
-                // --- START ADDITION ---
                 // Store the original HTML content (using innerHTML as setButtonLoadingState uses it)
                 const originalContent = btn.innerHTML;
-                // --- END ADDITION ---
 
-                // --- MODIFIED: Use setButtonLoadingState ---
+
+                // Use setButtonLoadingState ---
                 // Show loading state *before* making the API call
                 setButtonLoadingState(btn, true, 'Fetching...');
-                // --- END MODIFICATION ---
+
 
                 const sourceType = currentSourceTypeForEditor; // Use state variable
+                const sourceId = UIElements.sourceEditorId.value; // Get source ID from the hidden input
                 const body = {
                     type: sourceType,
                     url: UIElements.sourceEditorUrl.value,
@@ -1187,17 +1187,17 @@ export function setupSettingsEventListeners() {
                         server: UIElements.sourceEditorXcUrl.value,
                         username: UIElements.sourceEditorXcUsername.value,
                         password: UIElements.sourceEditorXcPassword.value,
-                    }) : null
+                    }) : null,
+                    sourceId: sourceId // <-- ADD THIS LINE
                 };
 
                 if (sourceType === 'file') {
                     showNotification('Group filtering is not available for local file sources.', true);
-                    // --- MODIFIED: Restore button state on early exit ---
+
                     setButtonLoadingState(btn, false, originalContent);
-                    // --- END MODIFICATION ---
                     return;
                 }
-                // --- MODIFIED: Added check for file path when type is 'file' ---
+                // Added check for file path when type is 'file' ---
                 if ((sourceType === 'url' && !body.url) ||
                     (sourceType === 'xc' && (!body.xc || !JSON.parse(body.xc).server)) ||
                     (sourceType === 'file' && !UIElements.sourceEditorFileInfo.textContent) // Check if file info is present
@@ -1205,19 +1205,19 @@ export function setupSettingsEventListeners() {
                     showNotification('Please enter a valid URL, XC server address, or ensure a file is selected before fetching groups.', true);
                     // --- MODIFIED: Restore button state on early exit ---
                     setButtonLoadingState(btn, false, originalContent);
-                    // --- END MODIFICATION ---
+
                     return;
                 }
-                 // --- END MODIFICATION ---
+
 
 
                 console.log('[SETTINGS] Fetching groups with body:', body);
 
-                // --- START ADDITION: try...finally block ---
                 try {
                     const res = await apiFetch('/api/sources/fetch-groups', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
+                        // Body now correctly includes sourceId
                         body: JSON.stringify(body)
                     });
 
@@ -1283,9 +1283,10 @@ export function setupSettingsEventListeners() {
                 console.log('[SETTINGS] Refreshing groups with body:', body);
 
                 try {
-                    const res = await apiFetch('/api/sources/fetch-groups', { // No query param needed, refresh is in body
+                    const res = await apiFetch('/api/sources/fetch-groups', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
+                        // Body now correctly includes sourceId and refresh flag
                         body: JSON.stringify(body)
                     });
 
