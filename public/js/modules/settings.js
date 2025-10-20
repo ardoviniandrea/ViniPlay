@@ -409,9 +409,16 @@ const openSourceEditor = (sourceType, source = null) => {
         <div id="source-editor-filter-groups-container" class="mt-4 ${activeTab === 'file' ? 'hidden' : ''}">
             <label class="block text-sm font-medium text-gray-400">Group Filtering</label>
             <p class="text-xs text-gray-500 mb-2">Select which groups to import. If none are selected, all groups will be imported.</p>
-            <button type="button" id="source-editor-filter-groups-btn" class="w-full bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">
-                <span>Select Groups</span>
-            </button>
+            {/* --- START MODIFICATION --- */}
+            <div class="flex gap-2">
+                <button type="button" id="source-editor-filter-groups-btn" class="flex-grow bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">
+                    <span>Select Groups</span>
+                </button>
+                <button type="button" id="source-editor-refresh-groups-btn" class="flex-shrink-0 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-2 rounded-md" title="Refresh groups from source">
+                     ${ICONS.refresh} {/* Use an icon */}
+                </button>
+            </div>
+             {/* --- END MODIFICATION --- */}
             <input type="hidden" id="source-editor-selected-groups" value="[]">
         </div>
     `;
@@ -592,6 +599,10 @@ export function setupSettingsEventListeners() {
         const filterGroupsContainer = document.getElementById('source-editor-filter-groups-container');
         if (filterGroupsContainer) {
             filterGroupsContainer.classList.toggle('hidden', isFile);
+            const refreshBtn = filterGroupsContainer.querySelector('#source-editor-refresh-groups-btn');
+             if (refreshBtn) {
+                 refreshBtn.classList.toggle('hidden', isFile);
+             }
         }
     };
 
@@ -1157,7 +1168,7 @@ export function setupSettingsEventListeners() {
     if (UIElements.sourceEditorModal) {
         UIElements.sourceEditorModal.addEventListener('click', async (e) => {
             // Check if the "Select Groups" button was clicked
-            if (e.target.id === 'source-editor-filter-groups-btn') {
+            if (e.target.closest('#source-editor-filter-groups-btn')) {
                 console.log('[SETTINGS] "Select Groups" button clicked (via delegation).');
                 const btn = e.target;
                 // --- START ADDITION ---
@@ -1237,8 +1248,72 @@ export function setupSettingsEventListeners() {
                     // Restore button state regardless of success or failure
                     setButtonLoadingState(btn, false, originalContent);
                 }
-                // --- END ADDITION: try...finally block ---
+                
             }
+            // Handle Refresh Groups button ---
+            else if (e.target.closest('#source-editor-refresh-groups-btn')) { // Use closest for icon clicks
+                console.log('[SETTINGS] "Refresh Groups" button clicked.');
+                const btn = e.target.closest('#source-editor-refresh-groups-btn'); // Get the button element
+                const originalContent = btn.innerHTML; // Store original icon HTML
+                setButtonLoadingState(btn, true, ''); // Show spinner (no text needed for icon button)
+
+                const sourceType = currentSourceTypeForEditor;
+                const sourceId = UIElements.sourceEditorId.value; // Get source ID being edited
+                const body = {
+                    type: sourceType,
+                    url: UIElements.sourceEditorUrl.value,
+                    xc: sourceType === 'xc' ? JSON.stringify({
+                        server: UIElements.sourceEditorXcUrl.value,
+                        username: UIElements.sourceEditorXcUsername.value,
+                        password: UIElements.sourceEditorXcPassword.value,
+                    }) : null,
+                    refresh: true, // Tell the backend to force refresh
+                    sourceId: sourceId // Pass sourceId for cache update
+                };
+
+                 if (sourceType === 'file') {
+                    showNotification('Cannot refresh groups for local file sources.', true);
+                    setButtonLoadingState(btn, false, originalContent);
+                    return;
+                }
+                 if ((sourceType === 'url' && !body.url) || (sourceType === 'xc' && (!body.xc || !JSON.parse(body.xc).server))) {
+                    showNotification('Please enter a valid URL or XC server address before refreshing groups.', true);
+                    setButtonLoadingState(btn, false, originalContent);
+                    return;
+                }
+
+                console.log('[SETTINGS] Refreshing groups with body:', body);
+
+                try {
+                    const res = await apiFetch('/api/sources/fetch-groups', { // No query param needed, refresh is in body
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body)
+                    });
+
+                    if (res && res.ok) {
+                        const data = await res.json();
+                        showNotification(`Groups refreshed successfully (${data.groups.length} found).`, false);
+                        // Optionally, auto-open the select modal after refresh:
+                        // const selectedGroupsInput = document.getElementById('source-editor-selected-groups');
+                        // const currentlySelected = selectedGroupsInput ? JSON.parse(selectedGroupsInput.value || '[]') : [];
+                        // populateGroupFilterModal(data.groups || [], currentlySelected);
+                        // openModal(UIElements.groupFilterModal);
+                    } // apiFetch handles errors
+                } catch (fetchError) {
+                    console.error('[SETTINGS] Error during group refresh API call:', fetchError);
+                    showNotification('An error occurred while refreshing groups.', true);
+                } finally {
+                    setButtonLoadingState(btn, false, originalContent); // Restore icon
+                }
+            }
+            
+        });
+        console.log('[SETTINGS] Added delegated click listener to source editor modal.');
+    } else {
+         console.error('[SETTINGS] Cannot add delegated listener: Source Editor Modal element not found.');
+    }
+            
             // Add other delegated click handlers for the source editor modal here if needed
         });
         console.log('[SETTINGS] Added delegated click listener to source editor modal.');
