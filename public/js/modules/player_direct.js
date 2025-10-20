@@ -22,7 +22,7 @@ let currentRedirectHistoryId = null; // To track redirect streams for logging
  * @param {string} message - The message to display.
  * @param {boolean} isError - If true, styles the message as an error.
  */
-function logToPlayerConsole(message, isError = false) {
+export function logToPlayerConsole(message, isError = false) {
     const consoleEl = UIElements.directPlayerConsole;
     if (!consoleEl) return;
 
