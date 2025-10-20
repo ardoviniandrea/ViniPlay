@@ -31,6 +31,7 @@ export const guideState = {
         notificationLeadTime: 10, // Default notification lead time in minutes
         multiviewLayouts: [], // To store saved layouts for the user
         adminPageSize: 25, // NEW: Default page size for the admin history table
+        vodDirectPlayEnabled: false, // Default to false (use mpegts.js/profiles)
     }, // This will hold both GLOBAL and USER settings, merged.
     guideDurationHours: 48,
     hourWidthPixels: window.innerWidth < 768 ? 200 : 300,
@@ -83,6 +84,7 @@ export const UIElements = {
     vodGridContainer: null,
     vodNoResults: null,
     vodGrid: null,
+    vodDirectPlayCheckbox: null,
 
     // --- NEW: VOD Details Modal ---
     vodDetailsModal: null,
