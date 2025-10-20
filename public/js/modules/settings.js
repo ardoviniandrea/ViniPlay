@@ -1040,8 +1040,13 @@ export function setupSettingsEventListeners() {
     });
 
     // --- Group Filter Modal Interaction Logic (Inside Settings Listeners) ---
+    let tempSelectedGroups = new Set(); // Stores group names temporarily while modal is open
+
+    
     // Helper function (ensure this is accessible, maybe defined outside setupSettingsEventListeners)
     const populateGroupFilterModal = (allGroups, selectedGroups) => {
+        tempSelectedGroups.clear(); // Clear previous temporary selections
+        selectedGroups.forEach(group => tempSelectedGroups.add(group)); // Initialize with current selections
         const groups = { live: [], movie: [], series: [] };
         const lowerCaseSelected = new Set(selectedGroups.map(g => g.toLowerCase()));
 
@@ -1066,7 +1071,7 @@ export function setupSettingsEventListeners() {
         UIElements.groupFilterTabSeries.textContent = `VOD - Series (${groups.series.length})`;
 
         // Trigger rendering for the default "live" tab, passing the original case selected groups
-        updateGroupFilterList('live', selectedGroups);
+        updateGroupFilterList('live', Array.from(tempSelectedGroups)); // Use temp set
         // Ensure the 'live' tab is visually active
         UIElements.groupFilterTabLive.classList.add('active');
         UIElements.groupFilterTabMovies.classList.remove('active');
@@ -1083,8 +1088,8 @@ export function setupSettingsEventListeners() {
         const lowerCaseSearch = searchTerm.toLowerCase();
         // Keep track of originally selected groups case-insensitively for checking
         const lowerCaseSelected = new Set(selectedGroups.map(g => g.toLowerCase()));
-
         const filteredGroups = groupsForType.filter(g => g.toLowerCase().includes(lowerCaseSearch));
+        const currentSelectedSet = new Set(selectedGroups);
 
         if (filteredGroups.length === 0) {
             listEl.innerHTML = `<p class="text-gray-500 col-span-full text-center">No groups found for this type${searchTerm ? ' matching "' + searchTerm + '"' : ''}.</p>`;
@@ -1092,7 +1097,7 @@ export function setupSettingsEventListeners() {
         }
 
         listEl.innerHTML = filteredGroups.map(group => `
-            <div class="group-filter-item ${lowerCaseSelected.has(group.toLowerCase()) ? 'selected' : ''}" data-group-name="${group.replace(/"/g, '&quot;')}">
+            <div class="group-filter-item ${currentSelectedSet.has(group) ? 'selected' : ''}" data-group-name="${group.replace(/"/g, '&quot;')}">
                 ${group}
             </div>
         `).join('');
@@ -1107,12 +1112,23 @@ export function setupSettingsEventListeners() {
     });
 
     const switchGroupFilterTab = (type) => {
+
+        // Update tempSelectedGroups based on the currently displayed tab BEFORE switching
+        const currentListItems = UIElements.groupFilterList.querySelectorAll('.group-filter-item');
+        currentListItems.forEach(item => {
+            const groupName = item.dataset.groupName;
+            if (item.classList.contains('selected')) {
+                tempSelectedGroups.add(groupName);
+            } else {
+                tempSelectedGroups.delete(groupName); // Ensure deselected items are removed
+            }
+        });
         UIElements.groupFilterTabLive.classList.toggle('active', type === 'live');
         UIElements.groupFilterTabMovies.classList.toggle('active', type === 'movie');
         UIElements.groupFilterTabSeries.classList.toggle('active', type === 'series');
         // Get currently selected groups *using their data attribute*
         const selectedGroups = Array.from(UIElements.groupFilterList.querySelectorAll('.group-filter-item.selected')).map(el => el.dataset.groupName);
-        updateGroupFilterList(type, selectedGroups, UIElements.groupFilterSearch.value);
+        updateGroupFilterList(type, Array.from(tempSelectedGroups), UIElements.groupFilterSearch.value);
     };
     UIElements.groupFilterTabLive.addEventListener('click', () => switchGroupFilterTab('live'));
     UIElements.groupFilterTabMovies.addEventListener('click', () => switchGroupFilterTab('movie'));
@@ -1134,20 +1150,50 @@ export function setupSettingsEventListeners() {
     UIElements.groupFilterCancelBtn.addEventListener('click', () => closeModal(UIElements.groupFilterModal));
     UIElements.groupFilterCloseBtn.addEventListener('click', () => closeModal(UIElements.groupFilterModal));
 
-    UIElements.groupFilterSaveBtn.addEventListener('click', () => {
-        // Retrieve selected groups using their actual names from the data attribute
-        const selectedGroups = Array.from(UIElements.groupFilterList.querySelectorAll('.group-filter-item.selected')).map(el => el.dataset.groupName);
+UIElements.groupFilterSaveBtn.addEventListener('click', () => {
+        // --- START MODIFICATION ---
+        // Update tempSelectedGroups one last time from the currently visible tab
+        // This ensures selections made just before clicking save are captured.
+        const currentListItems = UIElements.groupFilterList.querySelectorAll('.group-filter-item');
+        currentListItems.forEach(item => {
+            const groupName = item.dataset.groupName;
+            if (item.classList.contains('selected')) {
+                tempSelectedGroups.add(groupName); // Add if selected
+            } else {
+                tempSelectedGroups.delete(groupName); // Remove if not selected on the CURRENT tab
+            }
+        });
+
+        // Use the complete temporary set for saving
+        const finalSelectedGroups = Array.from(tempSelectedGroups);
+        // --- END MODIFICATION ---
+
+        // Get the hidden input field in the source editor modal
         const hiddenInput = document.getElementById('source-editor-selected-groups');
         if (hiddenInput) {
-             hiddenInput.value = JSON.stringify(selectedGroups);
+             // --- MODIFIED: Save finalSelectedGroups (the complete set from all tabs) ---
+             hiddenInput.value = JSON.stringify(finalSelectedGroups);
+             // --- END MODIFICATION ---
+             console.log('[SETTINGS] Saving selected groups:', finalSelectedGroups);
+        } else {
+            console.error('[SETTINGS] Could not find hidden input #source-editor-selected-groups to save selections.');
         }
 
+        // Update the text on the "Select Groups" button in the source editor
         const filterButton = document.getElementById('source-editor-filter-groups-btn');
-        const btnSpan = filterButton ? filterButton.querySelector('span') : null;
+        const btnSpan = filterButton ? filterButton.querySelector('span') : null; // Target the inner span
         if (btnSpan) {
-            const btnText = selectedGroups.length > 0 ? `${selectedGroups.length} Groups Selected` : 'Select Groups';
+            // --- MODIFIED: Use finalSelectedGroups.length ---
+            const count = finalSelectedGroups.length;
+            const btnText = count > 0 ? `${count} Groups Selected` : 'Select Groups';
+            // --- END MODIFICATION ---
             btnSpan.textContent = btnText; // Update the span's text
+            console.log(`[SETTINGS] Updated filter button text to: "${btnText}"`);
+        } else {
+             console.error('[SETTINGS] Could not find span within #source-editor-filter-groups-btn to update text.');
         }
+
+        // Close the group filter modal
         closeModal(UIElements.groupFilterModal);
     });
 
