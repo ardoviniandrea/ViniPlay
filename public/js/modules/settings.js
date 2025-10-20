@@ -409,16 +409,14 @@ const openSourceEditor = (sourceType, source = null) => {
         <div id="source-editor-filter-groups-container" class="mt-4 ${activeTab === 'file' ? 'hidden' : ''}">
             <label class="block text-sm font-medium text-gray-400">Group Filtering</label>
             <p class="text-xs text-gray-500 mb-2">Select which groups to import. If none are selected, all groups will be imported.</p>
-            {/* --- START MODIFICATION --- */}
             <div class="flex gap-2">
                 <button type="button" id="source-editor-filter-groups-btn" class="flex-grow bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">
                     <span>Select Groups</span>
                 </button>
                 <button type="button" id="source-editor-refresh-groups-btn" class="flex-shrink-0 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-2 rounded-md" title="Refresh groups from source">
-                     ${ICONS.refresh} {/* Use an icon */}
+                     ${ICONS.refresh}
                 </button>
             </div>
-             {/* --- END MODIFICATION --- */}
             <input type="hidden" id="source-editor-selected-groups" value="[]">
         </div>
     `;
