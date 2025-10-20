@@ -302,62 +302,138 @@ export const playChannel = (url, name, channelId) => {
 
 
 /**
- * NEW: Plays a VOD (Movie or Episode) in the main player modal.
- * This function bypasses mpegts.js and uses the native <video> element
- * for playback, which allows seeking.
+ * Plays a VOD (Movie or Episode) using the server's /stream endpoint and mpegts.js.
+ * This allows transcoding based on the selected stream profile.
  * @param {string} url - The direct URL to the VOD file (e.g., .mp4, .mkv).
  * @param {string} title - The title of the VOD to display.
  */
 export const playVOD = async (url, title) => {
-    console.log(`[VOD_PLAYER] Attempting to play VOD: "${title}" URL: ${url}`);
+    console.log(`[VOD_PLAYER] Attempting to play VOD via /stream endpoint: "${title}" Original URL: ${url}`);
+    logToPlayerConsole(`Attempting VOD playback: ${title}`); // Add logging
 
-    // Ensure mpegts player is stopped if it was active
-    if (appState.player) {
-        console.log('[VOD_PLAYER] Destroying active mpegts player before playing VOD.');
-        // We still need to potentially stop a server-side ffmpeg stream if one was running
-        if (currentLocalStreamUrl) {
-            await stopStream(currentLocalStreamUrl);
-            currentLocalStreamUrl = null;
-        }
-        appState.player.destroy();
-        appState.player = null;
-        // Clear intervals associated with mpegts player
-        if (streamInfoInterval) {
-            clearInterval(streamInfoInterval);
-            streamInfoInterval = null;
-        }
-        if (UIElements.streamInfoOverlay) {
-            UIElements.streamInfoOverlay.classList.add('hidden');
-        }
+    // 1. Stop any existing player (live or VOD)
+    await stopAndCleanupPlayer(); // Use the existing cleanup function
+
+    // 2. Get necessary settings
+    const settings = guideState.settings;
+    const profileId = settings.activeStreamProfileId;
+    const userAgentId = settings.activeUserAgentId;
+    const profile = (settings.streamProfiles || []).find(p => p.id === profileId);
+
+    if (!profileId || !userAgentId || !profile) {
+        const errorMsg = "Active stream profile or user agent not set/found. Cannot play VOD. Please check settings.";
+        showNotification(errorMsg, true);
+        logToPlayerConsole(errorMsg, true);
+        console.error(`[VOD_PLAYER] ${errorMsg}`);
+        return;
     }
 
-    // Set up the player modal title
-    UIElements.videoTitle.textContent = title;
+    logToPlayerConsole(`Using Profile: ${profile.name}, User Agent ID: ${userAgentId}`);
 
-    // Directly set the source for native playback
-    UIElements.videoElement.src = url;
-    UIElements.videoElement.load(); // Request browser to load the new source
+    // 3. Construct the stream URL
+    // VODs always go through the /stream endpoint now, unless the profile is 'redirect'
+    const streamUrlToPlay = profile.command === 'redirect'
+        ? url
+        : `/stream?url=${encodeURIComponent(url)}&profileId=${profileId}&userAgentId=${userAgentId}`;
 
-    // Show the modal
-    openModal(UIElements.videoModal);
+    console.log(`[VOD_PLAYER] Final stream URL: ${streamUrlToPlay}`);
+    logToPlayerConsole(`Final stream URL: ${streamUrlToPlay}`);
 
-    // Try to play after load starts
-    try {
-        // Ensure volume is set (might have been reset)
-        UIElements.videoElement.volume = parseFloat(localStorage.getItem('iptvPlayerVolume') || 0.5);
-        await UIElements.videoElement.play();
-        console.log(`[VOD_PLAYER] Playback started for: "${title}"`);
-        // Ensure local state tracking is cleared for VOD
-        setLocalPlayerState(null, null, null);
-        currentLocalStreamUrl = null;
-    } catch (err) {
-        console.error("[VOD_PLAYER] Error trying to play VOD:", err);
-        showNotification(`Could not play the selected video: ${err.message}`, true);
-        // Clean up the video element source on failure
-        UIElements.videoElement.src = "";
-        UIElements.videoElement.removeAttribute('src');
-        UIElements.videoElement.load();
-        closeModal(UIElements.videoModal); // Close modal on failure
+    // Store the *original* VOD URL for potential stop requests
+    currentLocalStreamUrl = url;
+
+    // --- Activity Logging for Redirect VODs ---
+    if (profile.command === 'redirect') {
+        // Find basic info if possible (less critical for VOD than live)
+        const vodItem = guideState.vodMovies.find(m => m.url === url) || guideState.vodSeries.find(s => s.url === url);
+        const vodId = vodItem ? vodItem.id : null;
+        const vodLogo = vodItem ? vodItem.logo : null;
+        startRedirectStream(url, vodId, title, vodLogo)
+            .then(historyId => {
+                if (historyId) {
+                    currentRedirectHistoryId = historyId; // Track for stopping
+                }
+            });
+    }
+     // --- End Activity Logging ---
+
+
+    // 4. Initialize and play using mpegts.js (similar to playChannel)
+    if (mpegts.isSupported()) {
+        const mpegtsConfig = {
+            // Configuration might need tuning for VOD vs Live,
+            // but start with live settings for simplicity.
+            // Seeking might be less reliable than native playback.
+            enableStashBuffer: true,
+            stashInitialSize: 4096, // Keep stash buffer moderate
+            liveBufferLatency: 2.0, // Treat as live for buffering consistency
+            // For potentially better seeking on non-live streams (if profile isn't transcoding heavily):
+            // isLive: false,
+            // autoCleanupSourceBuffer: true,
+            // lazyLoad: false,
+            // seekType: 'range',
+            // stashInitialSize: 128 * 1024 * 1024, // Larger buffer for VOD
+        };
+        logToPlayerConsole(`mpegts.js config: enableStashBuffer=${mpegtsConfig.enableStashBuffer}, stashInitialSize=${mpegtsConfig.stashInitialSize}KB`);
+
+        try {
+            appState.player = mpegts.createPlayer({
+                type: 'mse',
+                isLive: true, // Treat as live initially for simplicity
+                // isLive: mpegtsConfig.isLive !== undefined ? mpegtsConfig.isLive : true, // Use config if defined
+                url: streamUrlToPlay
+            }, mpegtsConfig);
+
+            // Setup error handling
+            appState.player.on(mpegts.Events.ERROR, (errorType, errorDetail) => {
+                const errorMsg = `Player Error: ${errorType} - ${errorDetail}`;
+                console.error(`[VOD_PLAYER] MPEGTS Player Error: ${errorMsg}`);
+                logToPlayerConsole(errorMsg, true);
+                showNotification(errorMsg, true);
+                stopAndCleanupPlayer(); // Cleanup on error
+            });
+
+             // Reset retry count on successful start (if implementing retries for VOD)
+            appState.player.on(mpegts.Events.MEDIA_INFO, () => {
+                 console.log('[VOD_PLAYER] Media info received, playback starting.');
+                 logToPlayerConsole('Playback started.');
+                 // Reset retries if you add retry logic here
+             });
+
+
+            // Open modal and set title
+            openModal(UIElements.videoModal);
+            UIElements.videoTitle.textContent = title;
+
+            // Attach and play
+            appState.player.attachMediaElement(UIElements.videoElement);
+            appState.player.load();
+
+            // Set volume from storage
+            UIElements.videoElement.volume = parseFloat(localStorage.getItem('iptvPlayerVolume') || 0.5);
+
+            await appState.player.play();
+            console.log(`[VOD_PLAYER] Playback command issued for: "${title}"`);
+            setLocalPlayerState(streamUrlToPlay, title, null); // Update cast state
+
+            // Start stream info interval if needed
+            if (streamInfoInterval) clearInterval(streamInfoInterval);
+            streamInfoInterval = setInterval(updateStreamInfo, 2000); // Reuse existing update function
+
+
+        } catch (err) {
+            const errorMsg = `Failed to initialize player: ${err.message}`;
+            console.error("[VOD_PLAYER] Error initializing mpegts.js player:", err);
+            logToPlayerConsole(errorMsg, true);
+            showNotification(errorMsg, true);
+            await stopAndCleanupPlayer(); // Ensure cleanup on init failure
+        }
+
+    } else {
+        const errorMsg = 'Your browser does not support Media Source Extensions (MSE), required for playback.';
+        showNotification(errorMsg, true);
+        logToPlayerConsole(errorMsg, true);
+        console.error("[VOD_PLAYER] MSE not supported.");
     }
 };
 
