@@ -1079,7 +1079,7 @@ export function setupSettingsEventListeners() {
         }
 
         listEl.innerHTML = filteredGroups.map(group => `
-            <div class="group-filter-item ${lowerCaseSelected.has(group.toLowerCase()) ? 'selected' : ''}" data-group-name="${group.replace(/"/g, '&quot;')}"> {/* Escape quotes */}
+            <div class="group-filter-item ${lowerCaseSelected.has(group.toLowerCase()) ? 'selected' : ''}" data-group-name="${group.replace(/"/g, '&quot;')}">
                 ${group}
             </div>
         `).join('');
