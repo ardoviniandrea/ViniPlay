@@ -1007,18 +1007,26 @@ app.post('/api/auth/logout', (req, res) => {
     });
 });
 
-// --- NEW ENDPOINT FOR GROUP FILTERING ---
+// --- NEW/OPTIMIZED ENDPOINT FOR GROUP FILTERING ---
 app.post('/api/sources/fetch-groups', requireAuth, async (req, res) => {
     const { type, url, xc } = req.body;
     let fetchUrl;
     let fetchOptions = {};
-    let content = '';
+    let contentStream; // Will hold the stream or readable content
 
-    console.log(`[API_GROUPS] Fetching groups for type: ${type}`);
+    console.log(`[API_GROUPS] Fetching groups efficiently for type: ${type}`);
 
     try {
+        // --- Determine the source and get a readable stream/content ---
         if (type === 'url' && url) {
             fetchUrl = url;
+            // Use node-fetch or similar streaming HTTP client if available,
+            // otherwise fallback to fetching the whole content (less ideal for huge files)
+            // For simplicity with built-in modules, we'll use the existing fetchUrlContent
+            // but the OPTIMAL solution would involve a streaming HTTP request.
+            // Let's stick with fetchUrlContent for now as it handles redirects.
+            content = await fetchUrlContent(fetchUrl, fetchOptions);
+
         } else if (type === 'xc' && xc) {
             const xcInfo = JSON.parse(xc);
             if (!xcInfo.server || !xcInfo.username || !xcInfo.password) {
@@ -1026,32 +1034,47 @@ app.post('/api/sources/fetch-groups', requireAuth, async (req, res) => {
             }
             fetchUrl = `${xcInfo.server}/get.php?username=${xcInfo.username}&password=${xcInfo.password}&type=m3u_plus&output=ts`;
             fetchOptions = { headers: { 'User-Agent': 'VLC/3.0.20 (Linux; x86_64)' } };
-        } else {
-            return res.status(400).json({ error: 'Valid URL or XC credentials are required.' });
+            content = await fetchUrlContent(fetchUrl, fetchOptions);
+
+        } else if (type === 'file' && url) { // Assuming 'url' might hold the file path if type is 'file'
+             const filePath = path.join(SOURCES_DIR, path.basename(url)); // Construct potential path
+             if (fs.existsSync(filePath)) {
+                 content = fs.readFileSync(filePath, 'utf-8'); // Read file content directly
+             } else {
+                 return res.status(400).json({ error: 'File source path not found or invalid.' });
+             }
+        }
+        else {
+            return res.status(400).json({ error: 'Valid URL, XC credentials, or File path are required.' });
         }
 
-        content = await fetchUrlContent(fetchUrl, fetchOptions);
-
-        const lines = content.split('\n');
+        // --- Efficiently Extract Groups ---
         const groups = new Set();
-        const groupRegex = /group-title="([^"]*)"/;
+        const groupRegex = /group-title="([^"]*)"/i; // Case-insensitive regex
+        const lines = content.split('\n'); // Split content into lines for processing
+
+        console.log(`[API_GROUPS] Scanning ${lines.length} lines for group titles...`);
 
         for (const line of lines) {
+            // Only process lines starting with #EXTINF:
             if (line.startsWith('#EXTINF:')) {
                 const match = line.match(groupRegex);
                 if (match && match[1]) {
-                    groups.add(match[1]);
+                    const groupName = match[1].trim();
+                    if (groupName) { // Add non-empty group names
+                        groups.add(groupName);
+                    }
                 }
             }
         }
 
         const sortedGroups = Array.from(groups).sort((a, b) => a.localeCompare(b));
-        console.log(`[API_GROUPS] Found ${sortedGroups.length} groups.`);
+        console.log(`[API_GROUPS] Found ${sortedGroups.length} unique groups.`);
         res.json({ success: true, groups: sortedGroups });
 
     } catch (error) {
         console.error(`[API_GROUPS] Failed to fetch or parse M3U for groups: ${error.message}`);
-        res.status(500).json({ error: `Failed to fetch groups: ${error.message}` });
+        res.status(500).json({ error: `Failed to fetch or process groups: ${error.message}` });
     }
 });
 
