@@ -599,6 +599,12 @@
             border: 1px solid #4b5563; /* border-gray-600 */
             cursor: pointer;
             transition: all 0.2s;
+            align-self: start; /* Aligns item to the top of its grid cell */
+            min-height: 4.5rem; /* Ensures a minimum height for all items */
+            display: flex; /* Added display flex for vertical centering if needed, though align-self:start might be enough */
+            align-items: center; /* Vertically center content within the min-height */
+            justify-content: center; /* Horizontally center content */
+            text-align: center; /* Center text for wrapping */
         }
         .group-filter-item.selected {
             background-color: #2563eb; /* bg-blue-600 */
