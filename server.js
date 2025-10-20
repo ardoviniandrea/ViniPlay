@@ -228,22 +228,42 @@ async function detectHardwareAcceleration() {
         }
     });
 
-    // MODIFIED: Use 'vainfo' for more robust detection of Intel VA-API and QSV
+    // MODIFIED: Use 'vainfo' with enhanced logging
     exec('vainfo', (err, stdout, stderr) => {
-        if (err || stderr) {
-            console.log('[HW] VA-API not detected or vainfo command failed.');
+        // Log the raw output regardless of error
+        console.log(`[HW_DEBUG] vainfo stdout:\n${stdout}`);
+        console.error(`[HW_DEBUG] vainfo stderr:\n${stderr}`);
+
+        if (err) {
+            console.error('[HW] Error executing vainfo:', err); // Log the actual error object
+            console.error('[HW] vainfo command failed. VA-API/QSV detection skipped.');
             detectedHardware.intel_qsv = null;
             detectedHardware.intel_vaapi = null;
+        } else if (stderr) {
+            // Sometimes vainfo prints errors to stderr even if it doesn't return an error code
+            console.warn(`[HW] vainfo reported errors/warnings to stderr, but executed successfully. VA-API/QSV detection might be unreliable.`);
+            // Proceed with detection but be aware it might be partial
+            if (stdout.includes('iHD_drv_video.so')) {
+                detectedHardware.intel_qsv = 'Intel Quick Sync Video';
+                console.log('[HW] Intel QSV (iHD driver) detected via VA-API (despite stderr warnings).');
+            }
+            if (stdout.includes('i965_drv_video.so')) {
+                detectedHardware.intel_vaapi = 'Intel VA-API (Legacy)';
+                console.log('[HW] Intel VA-API (i965 driver) detected (despite stderr warnings).');
+            }
         } else {
-            // iHD driver is for modern Intel GPUs (Gen9+) and is preferred for QSV
+            // Success case (no error, no stderr)
+            console.log('[HW] vainfo executed successfully.');
             if (stdout.includes('iHD_drv_video.so')) {
                 detectedHardware.intel_qsv = 'Intel Quick Sync Video';
                 console.log('[HW] Intel QSV (iHD driver) detected via VA-API.');
             }
-            // i965 driver is for older Intel GPUs (pre-Gen9)
             if (stdout.includes('i965_drv_video.so')) {
                 detectedHardware.intel_vaapi = 'Intel VA-API (Legacy)';
                 console.log('[HW] Intel VA-API (i965 driver) detected.');
+            }
+             if (!detectedHardware.intel_qsv && !detectedHardware.intel_vaapi) {
+                 console.log('[HW] vainfo ran, but no known Intel drivers (iHD or i965) were found in the output.');
             }
         }
     });
