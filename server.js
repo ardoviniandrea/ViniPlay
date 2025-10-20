@@ -50,6 +50,7 @@ const DATA_DIR = '/data';
 const DVR_DIR = '/dvr';
 const VAPID_KEYS_PATH = path.join(DATA_DIR, 'vapid.json');
 const SOURCES_DIR = path.join(DATA_DIR, 'sources');
+const RAW_CACHE_DIR = path.join(SOURCES_DIR, 'raw_cache');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DB_PATH = path.join(DATA_DIR, 'viniplay.db');
 const LIVE_CHANNELS_M3U_PATH = path.join(DATA_DIR, 'live_channels.m3u'); // Renamed
@@ -85,6 +86,7 @@ try {
     if (!fs.existsSync(PUBLIC_DIR)) fs.mkdirSync(PUBLIC_DIR, { recursive: true });
     if (!fs.existsSync(SOURCES_DIR)) fs.mkdirSync(SOURCES_DIR, { recursive: true });
     if (!fs.existsSync(DVR_DIR)) fs.mkdirSync(DVR_DIR, { recursive: true });
+    if (!fs.existsSync(RAW_CACHE_DIR)) fs.mkdirSync(RAW_CACHE_DIR, { recursive: true });
     console.log(`[INIT] All required directories checked/created.`);
 } catch (mkdirError) {
     console.error(`[INIT] FATAL: Failed to create necessary directories: ${mkdirError.message}`);
@@ -520,8 +522,6 @@ const parseEpgTime = (timeStr, offsetHours = 0) => {
     return date;
 };
 
-// server.js -> Replace the entire function with this corrected version
-
 async function processAndMergeSources(req) {
     console.log('[PROCESS] Starting to process and merge all active sources.');
     sendProcessingStatus(req, 'Starting to process sources...', 'info');
@@ -575,6 +575,24 @@ async function processAndMergeSources(req) {
             } else if (source.type === 'url') {
                 sendProcessingStatus(req, ` -> Fetching content from URL...`, 'info');
                 content = await fetchUrlContent(source.path);
+                // Save raw content to cache (URL) ---
+                try {
+                    // Define cache path (ensure it's unique per source)
+                    const cacheFileName = `raw_${source.id}.m3u_cache`; // Use a distinct extension
+                    const cacheFilePath = path.join(RAW_CACHE_DIR, cacheFileName);
+    
+                    // Write the fetched content to the cache file
+                    fs.writeFileSync(cacheFilePath, content);
+                    console.log(`[PROCESS_CACHE] Saved raw content for source "${source.name}" to ${cacheFilePath}`);
+    
+                    // Store the path in the source object (this will be saved later when settings are saved)
+                    source.cachedRawPath = cacheFilePath;
+    
+                } catch (cacheWriteError) {
+                    console.error(`[PROCESS_CACHE] Failed to write raw cache for source "${source.name}" (URL):`, cacheWriteError.message);
+                    // Clear any potentially stale cache path if writing failed
+                    delete source.cachedRawPath;
+                }
                 sendProcessingStatus(req, ` -> Successfully fetched M3U content.`, 'info');
             } else if (source.type === 'xc') {
                 if (!source.xc_data) {
@@ -593,6 +611,24 @@ async function processAndMergeSources(req) {
                 console.log(`[M3U] Constructed XC URL for "${source.name}": ${m3uUrl}`);
                 sendProcessingStatus(req, ` -> Fetching content from XC server...`, 'info');
                 content = await fetchUrlContent(m3uUrl, m3uFetchOptions);
+                // Save raw content to cache (XC) ---
+                try {
+                    // Define cache path (ensure it's unique per source)
+                    const cacheFileName = `raw_${source.id}.m3u_cache`; // Use a distinct extension
+                    const cacheFilePath = path.join(RAW_CACHE_DIR, cacheFileName);
+    
+                    // Write the fetched content to the cache file
+                    fs.writeFileSync(cacheFilePath, content);
+                    console.log(`[PROCESS_CACHE] Saved raw content for source "${source.name}" to ${cacheFilePath}`);
+    
+                    // Store the path in the source object (this will be saved later when settings are saved)
+                    source.cachedRawPath = cacheFilePath;
+    
+                } catch (cacheWriteError) {
+                    console.error(`[PROCESS_CACHE] Failed to write raw cache for source "${source.name}" (XC):`, cacheWriteError.message);
+                    // Clear any potentially stale cache path if writing failed
+                    delete source.cachedRawPath;
+                }
                 sourcePathForLog = m3uUrl;
                 sendProcessingStatus(req, ` -> Successfully fetched M3U content from XC server.`, 'info');
 
@@ -1007,70 +1043,111 @@ app.post('/api/auth/logout', (req, res) => {
     });
 });
 
-// --- NEW/OPTIMIZED ENDPOINT FOR GROUP FILTERING ---
+// --- NEW/OPTIMIZED ENDPOINT FOR GROUP FILTERING (with Caching & Refresh) ---
 app.post('/api/sources/fetch-groups', requireAuth, async (req, res) => {
-    const { type, url, xc } = req.body;
+    // --- ADDITION: Get refresh flag from query or body ---
+    const forceRefresh = req.query.refresh === 'true' || req.body.refresh === true;
+    const { type, url, xc, sourceId } = req.body; // Added sourceId
+    // --- END ADDITION ---
+
     let fetchUrl;
     let fetchOptions = {};
-    let contentStream; // Will hold the stream or readable content
+    let content = '';
+    let usedCache = false; // Flag to track if cache was used
 
-    console.log(`[API_GROUPS] Fetching groups efficiently for type: ${type}`);
+    console.log(`[API_GROUPS] Fetching groups for type: ${type}, SourceID: ${sourceId}, Refresh: ${forceRefresh}`);
 
     try {
-        // --- Determine the source and get a readable stream/content ---
-        if (type === 'url' && url) {
-            fetchUrl = url;
-            // Use node-fetch or similar streaming HTTP client if available,
-            // otherwise fallback to fetching the whole content (less ideal for huge files)
-            // For simplicity with built-in modules, we'll use the existing fetchUrlContent
-            // but the OPTIMAL solution would involve a streaming HTTP request.
-            // Let's stick with fetchUrlContent for now as it handles redirects.
-            content = await fetchUrlContent(fetchUrl, fetchOptions);
+        let sourceToUse = null;
+        if (sourceId) {
+            const settings = getSettings();
+            // Try finding in M3U sources first, then EPG (though unlikely for M3U groups)
+            sourceToUse = settings.m3uSources.find(s => s.id === sourceId) || settings.epgSources.find(s => s.id === sourceId);
+        }
 
-        } else if (type === 'xc' && xc) {
-            const xcInfo = JSON.parse(xc);
-            if (!xcInfo.server || !xcInfo.username || !xcInfo.password) {
-                return res.status(400).json({ error: 'XC source requires server, username, and password.' });
+        // --- START CACHE CHECK ---
+        if (!forceRefresh && sourceToUse && sourceToUse.cachedRawPath && fs.existsSync(sourceToUse.cachedRawPath)) {
+            try {
+                console.log(`[API_GROUPS] Using cached raw file: ${sourceToUse.cachedRawPath}`);
+                content = fs.readFileSync(sourceToUse.cachedRawPath, 'utf-8');
+                usedCache = true;
+            } catch (cacheReadError) {
+                console.warn(`[API_GROUPS] Failed to read cache file ${sourceToUse.cachedRawPath}. Will fetch fresh. Error:`, cacheReadError.message);
+                usedCache = false; // Ensure we fetch fresh if cache read fails
             }
-            fetchUrl = `${xcInfo.server}/get.php?username=${xcInfo.username}&password=${xcInfo.password}&type=m3u_plus&output=ts`;
-            fetchOptions = { headers: { 'User-Agent': 'VLC/3.0.20 (Linux; x86_64)' } };
-            content = await fetchUrlContent(fetchUrl, fetchOptions);
-
-        } else if (type === 'file' && url) { // Assuming 'url' might hold the file path if type is 'file'
-             const filePath = path.join(SOURCES_DIR, path.basename(url)); // Construct potential path
-             if (fs.existsSync(filePath)) {
-                 content = fs.readFileSync(filePath, 'utf-8'); // Read file content directly
-             } else {
-                 return res.status(400).json({ error: 'File source path not found or invalid.' });
-             }
         }
-        else {
-            return res.status(400).json({ error: 'Valid URL, XC credentials, or File path are required.' });
-        }
+        // --- END CACHE CHECK ---
 
-        // --- Efficiently Extract Groups ---
+        // --- Fetch if cache wasn't used or refresh was forced ---
+        if (!usedCache) {
+            console.log(`[API_GROUPS] ${forceRefresh ? 'Refresh forced' : 'Cache not used/found'}. Fetching from original source.`);
+            if (type === 'url' && url) {
+                fetchUrl = url;
+                content = await fetchUrlContent(fetchUrl, fetchOptions);
+            } else if (type === 'xc' && xc) {
+                const xcInfo = JSON.parse(xc);
+                if (!xcInfo.server || !xcInfo.username || !xcInfo.password) {
+                    return res.status(400).json({ error: 'XC source requires server, username, and password.' });
+                }
+                fetchUrl = `${xcInfo.server}/get.php?username=${xcInfo.username}&password=${xcInfo.password}&type=m3u_plus&output=ts`;
+                fetchOptions = { headers: { 'User-Agent': 'VLC/3.0.20 (Linux; x86_64)' } };
+                content = await fetchUrlContent(fetchUrl, fetchOptions);
+
+                // --- ADDITION: Update cache if fetched fresh ---
+                if (sourceToUse) { // Only update cache if we know the source object
+                     try {
+                        const cacheFileName = `raw_${sourceToUse.id}.m3u_cache`;
+                        const cacheFilePath = path.join(RAW_CACHE_DIR, cacheFileName);
+                        fs.writeFileSync(cacheFilePath, content);
+                        console.log(`[API_GROUPS] Updated raw cache file during fetch: ${cacheFilePath}`);
+                        sourceToUse.cachedRawPath = cacheFilePath; // Update path in memory
+
+                        // IMPORTANT: Save updated settings back to file
+                        const currentSettings = getSettings(); // Re-get settings to avoid overwriting other changes
+                        const sourceList = sourceToUse.sourceType === 'm3u' ? currentSettings.m3uSources : currentSettings.epgSources; // Assuming sourceType is passed or derivable
+                        const index = sourceList.findIndex(s => s.id === sourceToUse.id);
+                        if (index !== -1) {
+                            sourceList[index].cachedRawPath = cacheFilePath;
+                            saveSettings(currentSettings); // Save the updated path
+                        }
+
+                    } catch (cacheWriteError) {
+                        console.error(`[API_GROUPS] Failed to update raw cache file for source "${sourceToUse.name}" after fresh fetch:`, cacheWriteError.message);
+                    }
+                }
+                // --- END ADDITION ---
+
+            } else if (type === 'file' && url) { // Assuming url holds file path for type file
+                 const filePath = sourceToUse?.path || path.join(SOURCES_DIR, path.basename(url)); // Prefer path from settings if available
+                 if (fs.existsSync(filePath)) {
+                    content = fs.readFileSync(filePath, 'utf-8');
+                 } else {
+                     return res.status(400).json({ error: 'File source path not found or invalid.' });
+                 }
+            } else {
+                return res.status(400).json({ error: 'Valid source details (URL, XC, or File path) are required.' });
+            }
+        }
+        // --- End Fetch Logic ---
+
+
+        // --- Efficiently Extract Groups (Same as before) ---
         const groups = new Set();
-        const groupRegex = /group-title="([^"]*)"/i; // Case-insensitive regex
-        const lines = content.split('\n'); // Split content into lines for processing
-
+        const groupRegex = /group-title="([^"]*)"/i;
+        const lines = content.split('\n');
         console.log(`[API_GROUPS] Scanning ${lines.length} lines for group titles...`);
-
         for (const line of lines) {
-            // Only process lines starting with #EXTINF:
             if (line.startsWith('#EXTINF:')) {
                 const match = line.match(groupRegex);
                 if (match && match[1]) {
                     const groupName = match[1].trim();
-                    if (groupName) { // Add non-empty group names
-                        groups.add(groupName);
-                    }
+                    if (groupName) groups.add(groupName);
                 }
             }
         }
-
         const sortedGroups = Array.from(groups).sort((a, b) => a.localeCompare(b));
         console.log(`[API_GROUPS] Found ${sortedGroups.length} unique groups.`);
-        res.json({ success: true, groups: sortedGroups });
+        res.json({ success: true, groups: sortedGroups, usedCache: usedCache }); // Optionally tell frontend if cache was used
 
     } catch (error) {
         console.error(`[API_GROUPS] Failed to fetch or parse M3U for groups: ${error.message}`);
@@ -1418,6 +1495,49 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
             return res.status(400).json({ error: 'Existing file source requires a new file if original is missing.' });
         }
 
+        // Cache cleanup on source type/path/details change during update ---
+        let shouldDeleteCache = false;
+        const existingCachePath = sourceToUpdate.cachedRawPath; // Store existing path before potential changes
+
+        // Determine the NEW source type based on the logic that just ran above this block
+        let newSourceType = 'unknown';
+        if (req.file) {
+            newSourceType = 'file';
+        } else if (url !== undefined && url !== null) {
+            newSourceType = 'url';
+        } else if (xc) {
+            newSourceType = 'xc';
+        } else {
+            newSourceType = sourceToUpdate.type; // Keep original if no new info provided
+        }
+
+
+        // Condition 1: If it HAD a cache file, but the NEW type is 'file'
+        if (existingCachePath && newSourceType === 'file') {
+            console.log(`[SOURCES_API_CACHE_CLEANUP] Source ${id} changed to 'file' type. Flagging cache for deletion.`);
+            shouldDeleteCache = true;
+        }
+        // Condition 2: If it HAD a cache file, the NEW type is 'url', AND the URL changed
+        else if (existingCachePath && newSourceType === 'url' && sourceToUpdate.path !== url) {
+             console.log(`[SOURCES_API_CACHE_CLEANUP] Source ${id} URL changed. Flagging cache for deletion.`);
+             shouldDeleteCache = true;
+        }
+        // Condition 3: If it HAD a cache file, the NEW type is 'xc', AND the XC details changed
+        else if (existingCachePath && newSourceType === 'xc' && sourceToUpdate.xc_data !== xc) {
+             console.log(`[SOURCES_API_CACHE_CLEANUP] Source ${id} XC details changed. Flagging cache for deletion.`);
+             shouldDeleteCache = true;
+        }
+
+        // Perform deletion if flagged
+        if (shouldDeleteCache && fs.existsSync(existingCachePath)) {
+             try {
+                fs.unlinkSync(existingCachePath);
+                console.log(`[SOURCES_API_CACHE_CLEANUP] Deleted stale cached raw file during update: ${existingCachePath}`);
+             } catch (e) { console.error("[SOURCES_API_CACHE_CLEANUP] Could not delete stale cached raw file during update:", e); }
+             // Remove the path property from the source object being saved
+             delete sourceToUpdate.cachedRawPath;
+        }
+
         saveSettings(settings);
         console.log(`[SOURCES_API] Source ${id} updated successfully.`);
         res.json({ success: true, message: 'Source updated successfully.', settings: getSettings() });
@@ -1540,6 +1660,15 @@ app.delete('/api/sources/:sourceType/:id', requireAuth, (req, res) => {
             console.log(`[SOURCES_API] Deleted associated file: ${source.path}`);
         } catch (e) {
             console.error(`[SOURCES_API] Could not delete source file: ${source.path}`, e);
+        }
+    }
+
+    if (source && source.cachedRawPath && fs.existsSync(source.cachedRawPath)) {
+        try {
+            fs.unlinkSync(source.cachedRawPath);
+            console.log(`[SOURCES_API] Deleted cached raw file: ${source.cachedRawPath}`);
+        } catch (e) {
+            console.error(`[SOURCES_API] Could not delete cached raw file: ${source.cachedRawPath}`, e);
         }
     }
     
