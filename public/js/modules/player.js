@@ -8,6 +8,7 @@ import { appState, guideState, UIElements } from './state.js';
 import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream } from './api.js';
 import { showNotification, openModal, closeModal } from './ui.js';
 import { castState, loadMedia, setLocalPlayerState } from './cast.js';
+import { logToPlayerConsole } from './player_direct.js';
 
 let streamInfoInterval = null; // Interval to update stream stats
 let currentLocalStreamUrl = null; // ADDED: Track the original URL of the currently playing local stream
