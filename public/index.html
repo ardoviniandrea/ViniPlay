@@ -617,16 +617,30 @@
         
         /* --- NEW: VOD Details Modal Styles --- */
         #vod-episode-list .episode-item {
-            @apply p-3 flex justify-between items-center border-b border-gray-700/50;
+            @apply p-3 flex items-center border-b border-gray-700/50 cursor-pointer; /* Use Flexbox, add border, make clickable */
         }
         #vod-episode-list .episode-item:last-child {
-            @apply border-b-0;
+            @apply border-b-0; /* Remove border from last item */
         }
         #vod-episode-list .episode-item:hover {
-            @apply bg-gray-700/50;
+            @apply bg-gray-700/50; /* Add hover effect */
         }
-        #vod-episode-list .episode-item-play-btn {
-            @apply text-blue-400 hover:text-blue-300 p-2 rounded-full;
+        .episode-item-epnum {
+            @apply text-gray-400 text-sm w-8 text-center flex-shrink-0 mr-4 rounded-full bg-gray-700 leading-6; /* Style episode number */
+        }
+        .episode-item-title {
+            @apply text-white text-sm font-medium flex-grow mr-4 truncate; /* Style title, allow shrinking/truncating */
+        }
+        .episode-item-duration,
+        .episode-item-date {
+            @apply text-gray-400 text-xs w-20 text-right flex-shrink-0 mr-4; /* Style placeholders */
+        }
+        .episode-item-play-btn {
+            @apply text-blue-400 hover:text-blue-300 p-1 rounded-full flex-shrink-0 ml-auto; /* Style play button, push to right */
+        }
+        /* Make play button icon slightly smaller if needed */
+        .episode-item-play-btn svg {
+             @apply w-5 h-5;
         }
 
 
