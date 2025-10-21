@@ -22,7 +22,6 @@ const schedule = require('node-schedule');
 const disk = require('diskusage');
 const si = require('systeminformation'); // NEW: For system health monitoring
 //vod processor
-const sqlite3 = require('sqlite3').verbose();
 const { refreshVodContent, dbRun, dbGet } = require('./vodProcessor');
 const XtreamClient = require('./xtreamClient');
 // --- NEW: Live Activity Tracking for Redirects ---
@@ -120,6 +119,77 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
             db.run(`CREATE TABLE IF NOT EXISTS notification_deliveries (id INTEGER PRIMARY KEY AUTOINCREMENT, notification_id INTEGER NOT NULL, subscription_id INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', updatedAt TEXT NOT NULL, FOREIGN KEY (notification_id) REFERENCES notifications(id) ON DELETE CASCADE, FOREIGN KEY (subscription_id) REFERENCES push_subscriptions(id) ON DELETE CASCADE)`);
             db.run(`CREATE TABLE IF NOT EXISTS dvr_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, channelId TEXT NOT NULL, channelName TEXT NOT NULL, programTitle TEXT NOT NULL, startTime TEXT NOT NULL, endTime TEXT NOT NULL, status TEXT NOT NULL, ffmpeg_pid INTEGER, filePath TEXT, profileId TEXT, userAgentId TEXT, preBufferMinutes INTEGER, postBufferMinutes INTEGER, errorMessage TEXT, isConflicting INTEGER DEFAULT 0, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)`);
             db.run(`CREATE TABLE IF NOT EXISTS dvr_recordings (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER, user_id INTEGER NOT NULL, channelName TEXT NOT NULL, programTitle TEXT NOT NULL, startTime TEXT NOT NULL, durationSeconds INTEGER, fileSizeBytes INTEGER, filePath TEXT UNIQUE NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, FOREIGN KEY (job_id) REFERENCES dvr_jobs(id) ON DELETE SET NULL)`);
+
+            // --- NEW: VOD Tables ---
+            db.run(`CREATE TABLE IF NOT EXISTS movies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                year INTEGER,
+                description TEXT,
+                logo TEXT,
+                tmdb_id TEXT UNIQUE,
+                imdb_id TEXT UNIQUE,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )`, (err) => { if (err) console.error("[DB] Error creating 'movies' table:", err.message); });
+            
+            db.run(`CREATE TABLE IF NOT EXISTS series (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                year INTEGER,
+                description TEXT,
+                logo TEXT,
+                tmdb_id TEXT UNIQUE,
+                imdb_id TEXT UNIQUE,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )`, (err) => { if (err) console.error("[DB] Error creating 'series' table:", err.message); });
+            
+            db.run(`CREATE TABLE IF NOT EXISTS episodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                series_id INTEGER NOT NULL,
+                season_num INTEGER NOT NULL,
+                episode_num INTEGER NOT NULL,
+                name TEXT,
+                description TEXT,
+                air_date TEXT,
+                tmdb_id TEXT UNIQUE,
+                imdb_id TEXT UNIQUE,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (series_id) REFERENCES series(id) ON DELETE CASCADE
+            )`, (err) => { if (err) console.error("[DB] Error creating 'episodes' table:", err.message); });
+            
+            // --- NEW: VOD Relation Tables (Linking Providers to Content) ---
+            // Note: Assuming 'provider_id' refers to the ID of the M3U source entry in settings
+            // We'll store the source ID (e.g., 'src-12345678') as TEXT for flexibility
+            db.run(`CREATE TABLE IF NOT EXISTS provider_movie_relations (
+                provider_id TEXT NOT NULL,
+                movie_id INTEGER NOT NULL,
+                provider_stream_id TEXT NOT NULL, -- The stream ID from the XC provider
+                last_seen TEXT NOT NULL,
+                FOREIGN KEY (movie_id) REFERENCES movies(id) ON DELETE CASCADE,
+                PRIMARY KEY (provider_id, movie_id)
+            )`, (err) => { if (err) console.error("[DB] Error creating 'provider_movie_relations' table:", err.message); });
+            
+            db.run(`CREATE TABLE IF NOT EXISTS provider_series_relations (
+                provider_id TEXT NOT NULL,
+                series_id INTEGER NOT NULL,
+                provider_series_id TEXT NOT NULL, -- The series ID from the XC provider
+                last_seen TEXT NOT NULL,
+                FOREIGN KEY (series_id) REFERENCES series(id) ON DELETE CASCADE,
+                PRIMARY KEY (provider_id, series_id)
+            )`, (err) => { if (err) console.error("[DB] Error creating 'provider_series_relations' table:", err.message); });
+            
+             db.run(`CREATE TABLE IF NOT EXISTS provider_episode_relations (
+                provider_id TEXT NOT NULL,
+                episode_id INTEGER NOT NULL,
+                provider_stream_id TEXT NOT NULL, -- The stream ID for the episode from XC
+                last_seen TEXT NOT NULL,
+                FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE,
+                PRIMARY KEY (provider_id, episode_id)
+             )`, (err) => { if (err) console.error("[DB] Error creating 'provider_episode_relations' table:", err.message); });
+            // --- END NEW VOD TABLES ---
             
             //-- ENHANCEMENT: Modify stream history table to include more data for the admin panel.
             db.run(`CREATE TABLE IF NOT EXISTS stream_history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, username TEXT NOT NULL, channel_id TEXT, channel_name TEXT, start_time TEXT NOT NULL, end_time TEXT, duration_seconds INTEGER, status TEXT NOT NULL, client_ip TEXT, channel_logo TEXT, stream_profile_name TEXT)`, (err) => {
@@ -474,6 +544,44 @@ function getSettings() {
     }
 }
 
+/**
+ * Initiates the VOD refresh process for a given XC provider.
+ * @param {object} provider - The M3U source object (must be type 'xc').
+ * @param {sqlite3.Database} dbInstance - The active database connection.
+ */
+async function triggerVodRefreshForProvider(provider, dbInstance) {
+    if (!provider || provider.type !== 'xc' || !provider.xc_data) {
+        console.error(`[VOD Trigger] Invalid provider object passed for VOD refresh. ID: ${provider?.id}`);
+        return;
+    }
+
+    console.log(`[VOD Trigger] Starting VOD refresh for provider: ${provider.name} (ID: ${provider.id})`);
+
+    try {
+        const xcInfo = JSON.parse(provider.xc_data);
+        const { server, username, password } = xcInfo;
+
+        if (!server || !username || !password) {
+            console.error(`[VOD Trigger] Missing credentials for XC provider ${provider.name}. Cannot refresh VOD.`);
+            return;
+        }
+
+        // Create an instance of the XtreamClient
+        const client = new XtreamClient(server, username, password);
+
+        // Call the main processing function from vodProcessor.js
+        // Pass the client, the provider object (contains provider.id), and the db instance
+        await refreshVodContent(client, provider, dbInstance);
+
+        console.log(`[VOD Trigger] Successfully finished VOD refresh for provider: ${provider.name}`);
+
+    } catch (error) {
+        console.error(`[VOD Trigger] Error during VOD refresh for ${provider.name}: ${error.message}`);
+        // Optionally update the source status in settings here if needed
+    }
+}
+
+
 // ... existing helper functions (saveSettings, fetchUrlContent, parseEpgTime, processAndMergeSources, updateAndScheduleSourceRefreshes) remain the same ...
 function saveSettings(settings) {
     try {
@@ -553,8 +661,8 @@ async function processAndMergeSources(req) {
 
     // --- NEW: Data holders for separated content ---
     let mergedLiveM3uContent = '#EXTM3U\n';
-    let mergedVodMovies = [];
-    let mergedVodSeries = [];
+    //let mergedVodMovies = [];
+    //let mergedVodSeries = [];
     let liveChannelIdSet = new Set(); // To track which channels need EPG
     const groupTitleRegex = /group-title="([^"]*)"/;
     // ---
@@ -688,83 +796,63 @@ async function processAndMergeSources(req) {
 
                 if (line.startsWith('http') && currentExtInf) {
                     const streamUrl = line;
-                    
+        
                     // --- GROUP FILTER LOGIC ---
                     const groupMatch = currentExtInf.match(groupTitleRegex);
                     const groupTitle = (groupMatch && groupMatch[1]) ? groupMatch[1] : 'Uncategorized';
                     if (isGroupFilteringActive && !selectedGroups.includes(groupTitle)) {
                         currentExtInf = ''; // Reset for next entry
-                        continue; // Skip this entry
+                        continue; // Skip this entry - not in selected groups
                     }
-                    
-                    // --- VOD DETECTION & SEPARATION ---
-                    const idMatch = currentExtInf.match(/tvg-id="([^"]*)"/);
-                    const tvgId = idMatch ? idMatch[1] : `no-id-${Math.random()}`;
-                    // Use original tvgId if available, otherwise generate a unique fallback
-                    const uniqueChannelId = tvgId.startsWith('no-id-') ? `${source.id}_${name.replace(/[^a-zA-Z0-9]/g, '')}` : tvgId;
-                    const logoMatch = currentExtInf.match(/tvg-logo="([^"]*)"/);
+                    // --- END GROUP FILTER ---
+        
+                    // --- LIVE CHANNEL PROCESSING (Only Live Channels here now) ---
+                    liveStreamCount++;
+                    let processedExtInf = currentExtInf;
+                    const idMatch = currentExtInf.match(/tvg-id="([^"]*)"/); // Still needed for unique ID
+                    const nameMatch = line.match(/tvg-name="([^"]*)"/); // Get name if available
                     const commaIndex = currentExtInf.lastIndexOf(',');
-                    const name = (commaIndex !== -1) ? currentExtInf.substring(commaIndex + 1).trim() : 'Unknown';
-
-                    const baseVodObject = {
-                        id: uniqueChannelId,
-                        sourceId: source.id,
-                        name: name,
-                        logo: logoMatch ? logoMatch[1] : '',
-                        group: groupTitle,
-                        url: streamUrl
-                    };
-
-                    // VOD Detection Rules (now checks URL and Group Title)
-                    const groupLower = groupTitle.toLowerCase();
-                    const isMovie = streamUrl.includes('/movie/') || groupLower.includes('movie') || (groupLower.includes('vod') && !groupLower.includes('series'));
-                    const isSeries = streamUrl.includes('/series/') || groupLower.includes('series') || (groupLower.includes('vod') && groupLower.includes('series'));
-
-                    if (isMovie) {
-                        mergedVodMovies.push(baseVodObject);
-                        movieCount++;
-                    } else if (isSeries) {
-                        mergedVodSeries.push(baseVodObject);
-                        seriesCount++;
+                    const name = nameMatch ? nameMatch[1] : ((commaIndex !== -1) ? currentExtInf.substring(commaIndex + 1).trim() : 'Unknown');
+        
+                    // Consistent Unique Channel ID Generation
+                    const originalTvgId = idMatch ? idMatch[1] : `no-tvg-id-${name.replace(/[^a-zA-Z0-9]/g, '')}`; 
+                    const finalUniqueChannelId = `${source.id}_${originalTvgId}`; 
+        
+                    // Inject the *corrected* unique ID into the #EXTINF line
+                    if (idMatch) {
+                        processedExtInf = processedExtInf.replace(/tvg-id="[^"]*"/, `tvg-id="${finalUniqueChannelId}"`);
                     } else {
-                        // --- LIVE CHANNEL ---
-                        liveStreamCount++;
-                        let processedExtInf = currentExtInf;
+                        const extinfEnd = processedExtInf.indexOf(':') + 1;
+                        processedExtInf = processedExtInf.slice(0, extinfEnd) + ` tvg-id="${finalUniqueChannelId}"` + processedExtInf.slice(extinfEnd);
+                    }
         
-                        // *** FIX: Consistent Unique Channel ID Generation ***
-                        // Use the SOURCE ID and the ORIGINAL tvg-id from the M3U line.
-                        const originalTvgId = idMatch ? idMatch[1] : `no-tvg-id-${name.replace(/[^a-zA-Z0-9]/g, '')}`; // Use original or generate fallback
-                        const finalUniqueChannelId = `${source.id}_${originalTvgId}`; // Combine source ID and original tvg-id
+                    // Inject source name
+                    const tvgIdAttrEnd = processedExtInf.indexOf(`tvg-id="${finalUniqueChannelId}"`) + `tvg-id="${finalUniqueChannelId}"`.length;
+                    processedExtInf = processedExtInf.slice(0, tvgIdAttrEnd) + ` vini-source="${source.name}"` + processedExtInf.slice(tvgIdAttrEnd);
         
-                        // Inject the *corrected* unique ID into the #EXTINF line
-                        if (idMatch) {
-                            // Replace existing tvg-id
-                            processedExtInf = processedExtInf.replace(/tvg-id="[^"]*"/, `tvg-id="${finalUniqueChannelId}"`);
-                        } else {
-                            // Add tvg-id if it was missing
-                            const extinfEnd = processedExtInf.indexOf(':') + 1; // Find the colon after #EXTINF
-                            processedExtInf = processedExtInf.slice(0, extinfEnd) + ` tvg-id="${finalUniqueChannelId}"` + processedExtInf.slice(extinfEnd);
-                        }
-                        // *** END FIX ***
+                    mergedLiveM3uContent += processedExtInf + '\n' + streamUrl + '\n';
+                    liveChannelIdSet.add(finalUniqueChannelId); 
+                    // --- END LIVE CHANNEL PROCESSING ---
         
-                        // Inject source name (ensure it's after tvg-id if added)
-                        const tvgIdAttrEnd = processedExtInf.indexOf(`tvg-id="${finalUniqueChannelId}"`) + `tvg-id="${finalUniqueChannelId}"`.length;
-                        processedExtInf = processedExtInf.slice(0, tvgIdAttrEnd) + ` vini-source="${source.name}"` + processedExtInf.slice(tvgIdAttrEnd);
-        
-        
-                        mergedLiveM3uContent += processedExtInf + '\n' + streamUrl + '\n';
-                        liveChannelIdSet.add(finalUniqueChannelId); // Add the CORRECT ID to the set for EPG matching
-                        }
-                    
                     currentExtInf = ''; // Reset for next entry
                 }
             }
 
             source.status = 'Success';
-            source.statusMessage = `Processed ${liveStreamCount} Live, ${movieCount} Movies, ${seriesCount} Series.`;
+            source.statusMessage = `Processed ${liveStreamCount} Live channels.`;
             console.log(`[M3U] Source "${source.name}" processed successfully from ${sourcePathForLog}.`);
-            sendProcessingStatus(req, ` -> Processed ${liveStreamCount} Live, ${movieCount} Movies, ${seriesCount} Series from "${source.name}".`, 'info');
+            sendProcessingStatus(req, ` -> Processed ${liveStreamCount} Live channels from "${source.name}".`, 'info');
 
+            // --- NEW: Trigger VOD Refresh for XC Sources ---
+            if (source.type === 'xc') {
+                console.log(`[PROCESS] Source "${source.name}" is XC. Triggering VOD refresh.`);
+                sendProcessingStatus(req, ` -> Triggering VOD content refresh for XC source "${source.name}"...`, 'info');
+                // Use setImmediate to run the VOD refresh *after* the current M3U processing finishes
+                // Pass the source object and the global db instance
+                setImmediate(() => triggerVodRefreshForProvider(source, db)); 
+            }
+            // --- END VOD Trigger ---
+            
         } catch (error) {
             const errorMsg = `Failed to process source "${source.name}" from ${source.path}: ${error.message}`;
             console.error(`[M3U] ${errorMsg}`);
@@ -780,15 +868,9 @@ async function processAndMergeSources(req) {
         fs.writeFileSync(LIVE_CHANNELS_M3U_PATH, mergedLiveM3uContent);
         console.log(`[M3U] Merged LIVE CHANNELS content saved to ${LIVE_CHANNELS_M3U_PATH}.`);
         sendProcessingStatus(req, `Successfully merged all live channels.`, 'success');
-        
-        fs.writeFileSync(VOD_MOVIES_JSON_PATH, JSON.stringify(mergedVodMovies, null, 2));
-        console.log(`[VOD] Merged VOD MOVIES content saved to ${VOD_MOVIES_JSON_PATH}.`);
-        sendProcessingStatus(req, `Successfully merged ${mergedVodMovies.length} movies.`, 'success');
-
-        fs.writeFileSync(VOD_SERIES_JSON_PATH, JSON.stringify(mergedVodSeries, null, 2));
-        console.log(`[VOD] Merged VOD SERIES content saved to ${VOD_SERIES_JSON_PATH}.`);
-        sendProcessingStatus(req, `Successfully merged ${mergedVodSeries.length} series episodes.`, 'success');
-        
+    } catch (writeErr) {
+        console.error(`[PROCESS] Error writing LIVE M3U file: ${writeErr.message}`);
+        sendProcessingStatus(req, `Error writing live channels file: ${writeErr.message}`, 'error');
     } catch (writeErr) {
         console.error(`[PROCESS] Error writing separated content files: ${writeErr.message}`);
         sendProcessingStatus(req, `Error writing output files: ${writeErr.message}`, 'error');
