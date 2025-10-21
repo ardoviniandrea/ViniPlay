@@ -617,33 +617,63 @@
         
         /* --- NEW: VOD Details Modal Styles --- */
         #vod-episode-list .episode-item {
-            @apply p-3 flex items-center border-b border-gray-700/50 cursor-pointer; /* Use Flexbox, add border, make clickable */
+            display: flex;             /* Replaces @apply flex */
+            align-items: center;       /* Replaces @apply items-center */
+            padding: 0.75rem;          /* Replaces @apply p-3 */
+            border-bottom-width: 1px;  /* Replaces @apply border-b */
+            border-color: rgba(55, 65, 81, 0.5); /* Replaces @apply border-gray-700/50 */
+            cursor: pointer;           /* Replaces @apply cursor-pointer */
         }
         #vod-episode-list .episode-item:last-child {
-            @apply border-b-0; /* Remove border from last item */
+            border-bottom-width: 0px;  /* Replaces @apply border-b-0 */
         }
         #vod-episode-list .episode-item:hover {
-            @apply bg-gray-700/50; /* Add hover effect */
+            background-color: rgba(55, 65, 81, 0.5); /* Replaces @apply hover:bg-gray-700/50 */
         }
         .episode-item-epnum {
-            @apply text-gray-400 text-sm w-8 text-center flex-shrink-0 mr-4 rounded-full bg-gray-700 leading-6; /* Style episode number */
+            color: #9ca3af;            /* Replaces @apply text-gray-400 */
+            font-size: 0.875rem;       /* Replaces @apply text-sm */
+            width: 2rem;               /* Replaces @apply w-8 */
+            text-align: center;        /* Replaces @apply text-center */
+            flex-shrink: 0;            /* Replaces @apply flex-shrink-0 */
+            margin-right: 1rem;        /* Replaces @apply mr-4 */
+            border-radius: 9999px;     /* Replaces @apply rounded-full */
+            background-color: #374151; /* Replaces @apply bg-gray-700 */
+            line-height: 1.5rem;       /* Replaces @apply leading-6 */
         }
         .episode-item-title {
-            @apply text-white text-sm font-medium flex-grow mr-4 truncate; /* Style title, allow shrinking/truncating */
+            color: white;              /* Replaces @apply text-white */
+            font-size: 0.875rem;       /* Replaces @apply text-sm */
+            font-weight: 500;          /* Replaces @apply font-medium */
+            flex-grow: 1;              /* Replaces @apply flex-grow */
+            margin-right: 1rem;        /* Replaces @apply mr-4 */
+            overflow: hidden;          /* Replaces @apply truncate (part 1) */
+            text-overflow: ellipsis;   /* Replaces @apply truncate (part 2) */
+            white-space: nowrap;       /* Replaces @apply truncate (part 3) */
         }
         .episode-item-duration,
         .episode-item-date {
-            @apply text-gray-400 text-xs w-20 text-right flex-shrink-0 mr-4; /* Style placeholders */
+            color: #9ca3af;            /* Replaces @apply text-gray-400 */
+            font-size: 0.75rem;        /* Replaces @apply text-xs */
+            width: 5rem;               /* Replaces @apply w-20 */
+            text-align: right;         /* Replaces @apply text-right */
+            flex-shrink: 0;            /* Replaces @apply flex-shrink-0 */
+            margin-right: 1rem;        /* Replaces @apply mr-4 */
         }
         .episode-item-play-btn {
-            @apply text-blue-400 hover:text-blue-300 p-1 rounded-full flex-shrink-0 ml-auto; /* Style play button, push to right */
+            color: #60a5fa;            /* Replaces @apply text-blue-400 */
+            padding: 0.25rem;          /* Replaces @apply p-1 */
+            border-radius: 9999px;     /* Replaces @apply rounded-full */
+            flex-shrink: 0;            /* Replaces @apply flex-shrink-0 */
+            margin-left: auto;         /* Replaces @apply ml-auto */
         }
-        /* Make play button icon slightly smaller if needed */
+        .episode-item-play-btn:hover {
+             color: #93c5fd;           /* Replaces @apply hover:text-blue-300 */
+        }
         .episode-item-play-btn svg {
-             @apply w-5 h-5;
+             width: 1.25rem;           /* Replaces @apply w-5 */
+             height: 1.25rem;          /* Replaces @apply h-5 */
         }
-
-
 
         
         /* --- NEW: Immersive Mode Styles --- */
