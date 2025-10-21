@@ -1512,7 +1512,7 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
             db.all("SELECT id, name, year, description, logo, tmdb_id, imdb_id FROM series ORDER BY name", [], (err, rows) => {
                 if (err) return reject(err);
                  // Add type:'series' and ensure 'id' is a string
-                resolve(rows.map(s => ({ ...s, type: 'series', id: String(s.id) }))); 
+                resolve(rows.map(s => ({ ...s, type: 'series', id: String(s.id) })));
             });
         });
          console.log(`[API_VOD] Fetched ${seriesList.length} series headers from DB.`);
@@ -1526,12 +1526,15 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
                      console.error(`[API_VOD] Invalid numeric ID extracted for series: ${series.id}`);
                      return reject(new Error(`Invalid series ID format: ${series.id}`));
                 }
+                // *** CORRECTED db.all call below ***
                 db.all(`
                     SELECT id, season_num, episode_num, name, description, air_date, tmdb_id, imdb_id
                     FROM episodes
                     WHERE series_id = ?
                     ORDER BY season_num, episode_num
-                    [numericSeriesId], (err, rows) => {
+                `,
+                [numericSeriesId], 
+                (err, rows) => { 
                     if (err) return reject(err);
                     resolve(rows);
                 });
@@ -1560,7 +1563,7 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
             series.seasons = seasons;
         }
 
-        console.log(`[API_VOD] Finished fetching episodes for all series.`); 
+        console.log(`[API_VOD] Finished fetching episodes for all series.`);
 
         // 4. Respond
         res.json({
