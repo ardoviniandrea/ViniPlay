@@ -571,7 +571,7 @@ async function triggerVodRefreshForProvider(provider, dbInstance) {
 
         // Call the main processing function from vodProcessor.js
         // Pass the client, the provider object (contains provider.id), and the db instance
-        await refreshVodContent(client, provider, dbInstance);
+        await refreshVodContent(dbInstance, provider);
 
         console.log(`[VOD Trigger] Successfully finished VOD refresh for provider: ${provider.name}`);
 
