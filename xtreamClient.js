@@ -3,16 +3,27 @@ const axios = require('axios');
 
 class XtreamClient {
     constructor(baseUrl, username, password) {
+        if (!baseUrl || typeof baseUrl !== 'string') {
+            throw new Error('[XC Client Constructor] Invalid or missing baseUrl provided.');
+        }
         // Normalize URL: remove any paths and trailing slashes
-        const url = new URL(baseUrl);
-        this.baseUrl = `${url.protocol}//${url.host}`;
+        try {
+            const url = new URL(baseUrl);
+            this.baseUrl = `${url.protocol}//${url.host}`;
+        } catch (e) {
+            // Provide more context in the error
+            console.error(`[XC Client Constructor] Failed to parse baseUrl "${baseUrl}": ${e.message}`);
+            throw new Error(`[XC Client Constructor] Invalid baseUrl format: "${baseUrl}". Please provide a valid URL (e.g., http://example.com:8080).`);
+        }
+    
         this.username = username;
         this.password = password;
-        
+    
         this.client = axios.create({
             timeout: 20000, // 20 second timeout
             headers: { 'User-Agent': 'Xtream-JS-Client' }
         });
+        console.log(`[XC Client Constructor] Client initialized for base URL: ${this.baseUrl}`); // Added log
     }
 
     /**
