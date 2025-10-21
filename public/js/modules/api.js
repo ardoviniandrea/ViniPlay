@@ -327,3 +327,35 @@ export async function stopRedirectStream(historyId) {
     });
     return res && res.ok;
 }
+
+/**
+ * Fetches the structured VOD library (movies and series) from the server.
+ * @returns {Promise<object|null>} An object like { movies: [], series: [] } or null on failure.
+ */
+export async function fetchVodLibrary() {
+    console.log('[API] Fetching VOD library from /api/vod/library.');
+    // Add timestamp to prevent caching
+    const response = await apiFetch(`/api/vod/library?t=${Date.now()}`); 
+    if (!response) {
+        console.error('[API] Failed to fetch VOD library: No response from apiFetch.');
+        return null;
+    }
+
+    try {
+        const library = await response.json();
+        console.log('[API] VOD library fetched successfully.');
+
+        // We expect the server to send { movies: [...], series: [...] }
+        if (library.movies && library.series) {
+            return library;
+        } else {
+            console.error('[API] VOD library format is incorrect. Expected { movies: [], series: [] }');
+            showNotification('Failed to parse VOD library from server.', true);
+            return null;
+        }
+    } catch (e) {
+        console.error('[API] Error parsing VOD library JSON:', e);
+        showNotification('Failed to parse VOD library.', true);
+        return null;
+    }
+}
