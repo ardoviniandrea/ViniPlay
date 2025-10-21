@@ -73,7 +73,7 @@ async function findOrCreateMovie(db, movieData) {
     console.log(`[VOD Processor] Creating new movie: ${name}`);
     const result = await dbRun(
         db,
-        `INSERT INTO movies (name, year, description, logo_url, tmdb_id, imdb_id)
+        `INSERT INTO movies (name, year, description, logo, tmdb_id, imdb_id)
          VALUES (?, ?, ?, ?, ?, ?)`,
         [name, year, plot, stream_icon, (tmdb_id && tmdb_id != "0") ? tmdb_id : null, (imdb_id && imdb_id != "0") ? imdb_id : null]
     );
@@ -115,7 +115,7 @@ async function findOrCreateSeries(db, seriesData) {
     console.log(`[VOD Processor] Creating new series: ${name}`);
     const result = await dbRun(
         db,
-        `INSERT INTO series (name, year, description, logo_url, tmdb_id, imdb_id)
+        `INSERT INTO series (name, year, description, logo, tmdb_id, imdb_id)
          VALUES (?, ?, ?, ?, ?, ?)`,
         [name, year, plot, cover, (tmdb_id && tmdb_id != "0") ? tmdb_id : null, (imdb_id && imdb_id != "0") ? imdb_id : null]
     );
