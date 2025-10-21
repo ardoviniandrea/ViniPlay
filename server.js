@@ -678,7 +678,7 @@ async function processAndMergeSources(req) {
     for (const source of activeM3uSources) {
         console.log(`[M3U] Processing source: "${source.name}" (ID: ${source.id}, Type: ${source.type}, Path: ${source.path})`);
         sendProcessingStatus(req, `Processing M3U source: "${source.name}"...`, 'info');
-        
+
         // --- NEW: Group Filter Logic ---
         const selectedGroups = source.selectedGroups || [];
         const isGroupFilteringActive = selectedGroups.length > 0;
@@ -712,14 +712,14 @@ async function processAndMergeSources(req) {
                     // Define cache path (ensure it's unique per source)
                     const cacheFileName = `raw_${source.id}.m3u_cache`; // Use a distinct extension
                     const cacheFilePath = path.join(RAW_CACHE_DIR, cacheFileName);
-    
+
                     // Write the fetched content to the cache file
                     fs.writeFileSync(cacheFilePath, content);
                     console.log(`[PROCESS_CACHE] Saved raw content for source "${source.name}" to ${cacheFilePath}`);
-    
+
                     // Store the path in the source object (this will be saved later when settings are saved)
                     source.cachedRawPath = cacheFilePath;
-    
+
                 } catch (cacheWriteError) {
                     console.error(`[PROCESS_CACHE] Failed to write raw cache for source "${source.name}" (URL):`, cacheWriteError.message);
                     // Clear any potentially stale cache path if writing failed
@@ -748,14 +748,14 @@ async function processAndMergeSources(req) {
                     // Define cache path (ensure it's unique per source)
                     const cacheFileName = `raw_${source.id}.m3u_cache`; // Use a distinct extension
                     const cacheFilePath = path.join(RAW_CACHE_DIR, cacheFileName);
-    
+
                     // Write the fetched content to the cache file
                     fs.writeFileSync(cacheFilePath, content);
                     console.log(`[PROCESS_CACHE] Saved raw content for source "${source.name}" to ${cacheFilePath}`);
-    
+
                     // Store the path in the source object (this will be saved later when settings are saved)
                     source.cachedRawPath = cacheFilePath;
-    
+
                 } catch (cacheWriteError) {
                     console.error(`[PROCESS_CACHE] Failed to write raw cache for source "${source.name}" (XC):`, cacheWriteError.message);
                     // Clear any potentially stale cache path if writing failed
@@ -796,7 +796,7 @@ async function processAndMergeSources(req) {
 
                 if (line.startsWith('http') && currentExtInf) {
                     const streamUrl = line;
-        
+
                     // --- GROUP FILTER LOGIC ---
                     const groupMatch = currentExtInf.match(groupTitleRegex);
                     const groupTitle = (groupMatch && groupMatch[1]) ? groupMatch[1] : 'Uncategorized';
@@ -805,7 +805,7 @@ async function processAndMergeSources(req) {
                         continue; // Skip this entry - not in selected groups
                     }
                     // --- END GROUP FILTER ---
-        
+
                     // --- LIVE CHANNEL PROCESSING (Only Live Channels here now) ---
                     liveStreamCount++;
                     let processedExtInf = currentExtInf;
@@ -813,11 +813,11 @@ async function processAndMergeSources(req) {
                     const nameMatch = line.match(/tvg-name="([^"]*)"/); // Get name if available
                     const commaIndex = currentExtInf.lastIndexOf(',');
                     const name = nameMatch ? nameMatch[1] : ((commaIndex !== -1) ? currentExtInf.substring(commaIndex + 1).trim() : 'Unknown');
-        
+
                     // Consistent Unique Channel ID Generation
-                    const originalTvgId = idMatch ? idMatch[1] : `no-tvg-id-${name.replace(/[^a-zA-Z0-9]/g, '')}`; 
-                    const finalUniqueChannelId = `${source.id}_${originalTvgId}`; 
-        
+                    const originalTvgId = idMatch ? idMatch[1] : `no-tvg-id-${name.replace(/[^a-zA-Z0-9]/g, '')}`;
+                    const finalUniqueChannelId = `${source.id}_${originalTvgId}`;
+
                     // Inject the *corrected* unique ID into the #EXTINF line
                     if (idMatch) {
                         processedExtInf = processedExtInf.replace(/tvg-id="[^"]*"/, `tvg-id="${finalUniqueChannelId}"`);
@@ -825,15 +825,15 @@ async function processAndMergeSources(req) {
                         const extinfEnd = processedExtInf.indexOf(':') + 1;
                         processedExtInf = processedExtInf.slice(0, extinfEnd) + ` tvg-id="${finalUniqueChannelId}"` + processedExtInf.slice(extinfEnd);
                     }
-        
+
                     // Inject source name
                     const tvgIdAttrEnd = processedExtInf.indexOf(`tvg-id="${finalUniqueChannelId}"`) + `tvg-id="${finalUniqueChannelId}"`.length;
                     processedExtInf = processedExtInf.slice(0, tvgIdAttrEnd) + ` vini-source="${source.name}"` + processedExtInf.slice(tvgIdAttrEnd);
-        
+
                     mergedLiveM3uContent += processedExtInf + '\n' + streamUrl + '\n';
-                    liveChannelIdSet.add(finalUniqueChannelId); 
+                    liveChannelIdSet.add(finalUniqueChannelId);
                     // --- END LIVE CHANNEL PROCESSING ---
-        
+
                     currentExtInf = ''; // Reset for next entry
                 }
             }
@@ -849,10 +849,10 @@ async function processAndMergeSources(req) {
                 sendProcessingStatus(req, ` -> Triggering VOD content refresh for XC source "${source.name}"...`, 'info');
                 // Use setImmediate to run the VOD refresh *after* the current M3U processing finishes
                 // Pass the source object and the global db instance
-                setImmediate(() => triggerVodRefreshForProvider(source, db)); 
+                setImmediate(() => triggerVodRefreshForProvider(source, db));
             }
             // --- END VOD Trigger ---
-            
+
         } catch (error) {
             const errorMsg = `Failed to process source "${source.name}" from ${source.path}: ${error.message}`;
             console.error(`[M3U] ${errorMsg}`);
@@ -862,19 +862,17 @@ async function processAndMergeSources(req) {
         }
         source.lastUpdated = new Date().toISOString();
     }
-    
+
     // --- Save the new separated files ---
-    try {
+    try { // Try block for saving LIVE M3U
         fs.writeFileSync(LIVE_CHANNELS_M3U_PATH, mergedLiveM3uContent);
         console.log(`[M3U] Merged LIVE CHANNELS content saved to ${LIVE_CHANNELS_M3U_PATH}.`);
         sendProcessingStatus(req, `Successfully merged all live channels.`, 'success');
-    } catch (writeErr) {
+    } catch (writeErr) { // Catch block for saving LIVE M3U
         console.error(`[PROCESS] Error writing LIVE M3U file: ${writeErr.message}`);
         sendProcessingStatus(req, `Error writing live channels file: ${writeErr.message}`, 'error');
-    } catch (writeErr) {
-        console.error(`[PROCESS] Error writing separated content files: ${writeErr.message}`);
-        sendProcessingStatus(req, `Error writing output files: ${writeErr.message}`, 'error');
     }
+    // <<<--- THE ORPHANED CATCH BLOCK WAS REMOVED FROM HERE --->>>
 
     // --- EPG Processing (now filtered) ---
     const mergedProgramData = {};
@@ -945,7 +943,7 @@ async function processAndMergeSources(req) {
                     if (!mergedProgramData[uniqueChannelId]) {
                         mergedProgramData[uniqueChannelId] = [];
                     }
-                    
+
                     epgAddedCount++; // Increment count of *added* programs
 
                     const titleNode = prog.title && prog.title._cdata ? prog.title._cdata : (prog.title?._text || 'No Title');
@@ -982,11 +980,11 @@ async function processAndMergeSources(req) {
     for (const channelId in mergedProgramData) {
         mergedProgramData[channelId].sort((a, b) => new Date(a.start) - new Date(b.start));
     }
-    try {
+    try { // Try block for saving EPG JSON
         fs.writeFileSync(LIVE_EPG_JSON_PATH, JSON.stringify(mergedProgramData));
         console.log(`[EPG] Merged EPG JSON content saved to ${LIVE_EPG_JSON_PATH}.`);
         sendProcessingStatus(req, `Successfully merged all EPG data for live channels.`, 'success');
-    } catch (writeErr) {
+    } catch (writeErr) { // Catch block for saving EPG JSON
         console.error(`[EPG] Error writing merged EPG JSON file: ${writeErr.message}`);
         sendProcessingStatus(req, `Error writing merged EPG JSON file: ${writeErr.message}`, 'error');
     }
@@ -996,7 +994,7 @@ async function processAndMergeSources(req) {
     sendProcessingStatus(req, 'All sources processed successfully!', 'final_success');
 
     return { success: true, message: 'Sources merged successfully.', updatedSettings: settings };
-}
+} 
 
 const updateAndScheduleSourceRefreshes = () => {
     console.log('[SCHEDULER] Updating and scheduling all source refreshes...');
