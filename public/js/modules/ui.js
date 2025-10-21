@@ -460,9 +460,8 @@ async function proceedWithRouteChange(path) {
                 if (config) {
                     Object.assign(guideState.settings, config.settings || {});
                     // --- FIX: Add VOD data to the global state ---
-                    guideState.vodMovies = config.vodMovies || [];
-                    guideState.vodSeries = config.vodSeries || [];
-                    // --- END FIX ---
+                    //guideState.vodMovies = config.vodMovies || [];
+                    //guideState.vodSeries = config.vodSeries || [];
                     finalizeGuideLoad(true);
                 }
         } else {
@@ -541,9 +540,8 @@ export async function refreshGuideAfterProcessing() {
     if (config) {
             Object.assign(guideState.settings, config.settings || {});
             // --- FIX: Add VOD data to the global state ---
-            guideState.vodMovies = config.vodMovies || [];
-            guideState.vodSeries = config.vodSeries || [];
-            // --- END FIX ---
+            //guideState.vodMovies = config.vodMovies || [];
+            //guideState.vodSeries = config.vodSeries || [];
         }
 
     // 3. Close the modal
