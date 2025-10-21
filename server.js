@@ -21,6 +21,10 @@ const webpush = require('web-push');
 const schedule = require('node-schedule');
 const disk = require('diskusage');
 const si = require('systeminformation'); // NEW: For system health monitoring
+//vod processor
+const sqlite3 = require('sqlite3').verbose();
+const { refreshVodContent, dbRun, dbGet } = require('./vodProcessor');
+const XtreamClient = require('./xtreamClient');
 // --- NEW: Live Activity Tracking for Redirects ---
 const activeRedirectStreams = new Map(); // Tracks live redirect streams for the admin UI
 
