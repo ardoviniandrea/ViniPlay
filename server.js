@@ -797,6 +797,11 @@ async function processAndMergeSources(req) {
                 if (line.startsWith('http') && currentExtInf) {
                     const streamUrl = line;
 
+                    if (streamUrl.includes('/movie/') || streamUrl.includes('/series/')) {
+                        currentExtInf = ''; // Reset for next entry
+                        continue; // Skip this entry, it's VOD
+                    }
+
                     // --- GROUP FILTER LOGIC ---
                     const groupMatch = currentExtInf.match(groupTitleRegex);
                     const groupTitle = (groupMatch && groupMatch[1]) ? groupMatch[1] : 'Uncategorized';
