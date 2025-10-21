@@ -130,7 +130,27 @@ async function findOrCreateSeries(db, seriesData) {
 async function refreshVodContent(db, provider) {
     console.log(`[VOD Processor] Starting VOD refresh for: ${provider.name}`);
     const scanStartTime = new Date().toISOString();
-    const client = new XtreamClient(provider.server_url, provider.username, provider.password);
+    let server_url, username, password;
+    try {
+        if (!provider.xc_data) {
+            throw new Error('Provider object is missing xc_data.');
+        }
+        const xcInfo = JSON.parse(provider.xc_data);
+        server_url = xcInfo.server;
+        username = xcInfo.username;
+        password = xcInfo.password;
+        if (!server_url || !username || !password) {
+            throw new Error('Missing server, username, or password within xc_data.');
+        }
+    } catch (parseError) {
+        console.error(`[VOD Processor] Failed to parse XC credentials for provider ${provider.name}: ${parseError.message}`);
+        // Optional: Update provider status here if needed
+        return; // Stop processing this provider if credentials are bad
+    }
+
+
+    
+    const client = new XtreamClient(server_url, username, password);
 
     try {
         // --- 1. Process Movies ---
