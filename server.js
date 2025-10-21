@@ -1505,17 +1505,17 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
                 resolve(rows.map(m => ({ ...m, type: 'movie', id: String(m.id) })));
             });
         });
-        [cite_start]console.log(`[API_VOD] Fetched ${movies.length} movies from DB.`); // [cite: 1]
+        console.log(`[API_VOD] Fetched ${movies.length} movies from DB.`);
 
         // 2. Fetch all series headers
         const seriesList = await new Promise((resolve, reject) => {
             db.all("SELECT id, name, year, description, logo, tmdb_id, imdb_id FROM series ORDER BY name", [], (err, rows) => {
                 if (err) return reject(err);
                  // Add type:'series' and ensure 'id' is a string
-                [cite_start]resolve(rows.map(s => ({ ...s, type: 'series', id: String(s.id) }))); // [cite: 1]
+                resolve(rows.map(s => ({ ...s, type: 'series', id: String(s.id) }))); 
             });
         });
-         console.log(`[API_VOD] Fetched ${seriesList.length} series headers from DB.`); [cite_start]// [cite: 1]
+         console.log(`[API_VOD] Fetched ${seriesList.length} series headers from DB.`);
 
         // 3. Fetch episodes for each series
         for (const series of seriesList) {
@@ -1531,7 +1531,7 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
                     FROM episodes
                     WHERE series_id = ?
                     ORDER BY season_num, episode_num
-                [cite_start]`, [numericSeriesId], (err, rows) => { // [cite: 1]
+                    [numericSeriesId], (err, rows) => {
                     if (err) return reject(err);
                     resolve(rows);
                 });
@@ -1557,10 +1557,10 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
                     // Playback URL details would need separate logic if playing directly from this list
                 });
             });
-            series.seasons = seasons; [cite_start]// Attach grouped episodes [cite: 1]
+            series.seasons = seasons;
         }
 
-        console.log(`[API_VOD] Finished fetching episodes for all series.`); [cite_start]// [cite: 1]
+        console.log(`[API_VOD] Finished fetching episodes for all series.`); 
 
         // 4. Respond
         res.json({
@@ -1569,7 +1569,7 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
         });
 
     } catch (error) {
-        console.error(`[API_VOD] Error fetching VOD library from DB: ${error.message}`); [cite_start]// [cite: 1]
+        console.error(`[API_VOD] Error fetching VOD library from DB: ${error.message}`);
         res.status(500).json({ error: "Could not retrieve VOD library from database." });
     }
 });
