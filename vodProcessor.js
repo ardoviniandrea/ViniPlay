@@ -175,7 +175,7 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
                         }
                     }
                 } catch (epError) {
-                    console.error(`[VOD Processor] Failed to process episodes for series ${name}:`, epError.message);
+                    console.error(`[VOD Processor] Failed to process episodes for series ${name}:`, epError); // Log the full error object
                 }
             }
             await new Promise(resolve => seriesInsertStmt.finalize(resolve));
