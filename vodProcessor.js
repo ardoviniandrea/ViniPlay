@@ -49,7 +49,7 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
             movieMap.set(null, new Map(existingMovies.map(m => [m.imdb_id, m.id])));
             movieMap.set(null, movieMap.get(null).set(null, new Map(existingMovies.map(m => [`${m.name}_${m.year}`, m.id]))));
 
-            const movieInsertStmt = db.prepare(`INSERT INTO movies (name, year, description, logo, tmdb_id, imdb_id) VALUES (?, ?, ?, ?, ?, ?)`);
+            const movieInsertStmt = db.prepare(`INSERT INTO movies (name, year, description, logo, tmdb_id, imdb_id, category_name) VALUES (?, ?, ?, ?, ?, ?, ?)`); // Added category_name
             const relationInsertStmt = db.prepare(`INSERT OR REPLACE INTO provider_movie_relations (provider_id, movie_id, stream_id, container_extension, last_seen) VALUES (?, ?, ?, ?, ?)`);
             
             for (const movieData of movies) {
@@ -70,7 +70,8 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
                 if (!movieId) {
                     // Create new movie
                     const result = await new Promise((resolve, reject) => {
-                        movieInsertStmt.run(name, year, plot, stream_icon, (tmdb_id && tmdb_id != "0") ? tmdb_id : null, (imdb_id && imdb_id != "0") ? imdb_id : null, function(err) {
+                        // Added movieData.category_name || null as the last parameter
+                        movieInsertStmt.run(name, year, plot, stream_icon, (tmdb_id && tmdb_id != "0") ? tmdb_id : null, (imdb_id && imdb_id != "0") ? imdb_id : null, movieData.category_name || null, function(err) {
                             if (err) return reject(err);
                             resolve(this);
                         });
@@ -103,7 +104,7 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
             seriesMap.set(null, new Map(existingSeries.map(s => [s.imdb_id, s.id])));
             seriesMap.set(null, seriesMap.get(null).set(null, new Map(existingSeries.map(s => [`${s.name}_${s.year}`, s.id]))));
 
-            const seriesInsertStmt = db.prepare(`INSERT INTO series (name, year, description, logo, tmdb_id, imdb_id) VALUES (?, ?, ?, ?, ?, ?)`);
+            const seriesInsertStmt = db.prepare(`INSERT INTO series (name, year, description, logo, tmdb_id, imdb_id, category_name) VALUES (?, ?, ?, ?, ?, ?, ?)`);
             const seriesRelationInsertStmt = db.prepare(`INSERT OR REPLACE INTO provider_series_relations (provider_id, series_id, external_series_id, last_seen) VALUES (?, ?, ?, ?)`);
             const episodeInsertStmt = db.prepare(`INSERT INTO episodes (series_id, season_num, episode_num, name, description, air_date, tmdb_id) VALUES (?, ?, ?, ?, ?, ?, ?)`);
             const episodeRelationInsertStmt = db.prepare(`INSERT OR REPLACE INTO provider_episode_relations (provider_id, episode_id, provider_stream_id, last_seen) VALUES (?, ?, ?, ?)`);
@@ -126,7 +127,8 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
                 if (!seriesId) {
                     // Create new series
                     const result = await new Promise((resolve, reject) => {
-                        seriesInsertStmt.run(name, year, plot, cover, (tmdb_id && tmdb_id != "0") ? tmdb_id : null, (imdb_id && imdb_id != "0") ? imdb_id : null, function(err) {
+                        // Added seriesData.category_name || null as the last parameter
+                        seriesInsertStmt.run(name, year, plot, cover, (tmdb_id && tmdb_id != "0") ? tmdb_id : null, (imdb_id && imdb_id != "0") ? imdb_id : null, seriesData.category_name || null, function(err) {
                             if (err) return reject(err);
                             resolve(this);
                         });
