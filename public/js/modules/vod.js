@@ -181,10 +181,7 @@ function renderVodGrid() {
     renderVodPaginationControls();
 }
 
-// Add fetchSeriesDetails to the import statement at the top of vod.js
-import { saveUserSetting, fetchVodLibrary, fetchSeriesDetails } from './api.js';
 
-// ... other functions ...
 
 /**
  * Opens the VOD details modal and populates it with item info.
@@ -264,7 +261,6 @@ async function openVodDetails(item) { // Make the function async
             UIElements.vodEpisodeList.innerHTML = `<p class="p-4 text-center text-gray-400">No episodes found for this series.</p>`;
             seasonSelect.innerHTML = '<option disabled selected>No Seasons</option>';
         }
-        // --- End UI Population ---
     }
 
     openModal(UIElements.vodDetailsModal); // Open modal at the end
