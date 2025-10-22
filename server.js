@@ -1617,7 +1617,7 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
             
             const episodeQuery = `
                 SELECT e.id, e.season_num, e.episode_num, e.name, e.description, e.air_date, e.tmdb_id,
-                       r.provider_stream_id, r.container_extension, r.provider_id
+                       r.provider_stream_id, r.provider_id
                 FROM episodes e
                 JOIN provider_episode_relations r ON e.id = r.episode_id
                 WHERE e.series_id = ? AND r.provider_id IN (${providerIdPlaceholders})
