@@ -24,6 +24,16 @@ const si = require('systeminformation'); // NEW: For system health monitoring
 //vod processor
 const { refreshVodContent, dbRun, dbGet } = require('./vodProcessor');
 const XtreamClient = require('./xtreamClient');
+
+const dbAll = (db, sql, params = []) => {
+    return new Promise((resolve, reject) => {
+        db.all(sql, params, (err, rows) => {
+            if (err) return reject(err);
+            resolve(rows);
+        });
+    });
+};
+
 // --- NEW: Live Activity Tracking for Redirects ---
 const activeRedirectStreams = new Map(); // Tracks live redirect streams for the admin UI
 
@@ -549,36 +559,26 @@ function getSettings() {
  * Initiates the VOD refresh process for a given XC provider.
  * @param {object} provider - The M3U source object (must be type 'xc').
  * @param {sqlite3.Database} dbInstance - The active database connection.
+ * @param {function} sendStatus - Function to send status updates.
  */
-async function triggerVodRefreshForProvider(provider, dbInstance) {
+async function triggerVodRefreshForProvider(provider, dbInstance, sendStatus = () => {}) {
     if (!provider || provider.type !== 'xc' || !provider.xc_data) {
         console.error(`[VOD Trigger] Invalid provider object passed for VOD refresh. ID: ${provider?.id}`);
         return;
     }
 
     console.log(`[VOD Trigger] Starting VOD refresh for provider: ${provider.name} (ID: ${provider.id})`);
+    sendStatus(`Triggering VOD refresh for ${provider.name}...`, 'info');
 
     try {
-        const xcInfo = JSON.parse(provider.xc_data);
-        const { server, username, password } = xcInfo;
-
-        if (!server || !username || !password) {
-            console.error(`[VOD Trigger] Missing credentials for XC provider ${provider.name}. Cannot refresh VOD.`);
-            return;
-        }
-
-        // Create an instance of the XtreamClient
-        const client = new XtreamClient(server, username, password);
-
         // Call the main processing function from vodProcessor.js
-        // Pass the client, the provider object (contains provider.id), and the db instance
-        await refreshVodContent(dbInstance, provider);
+        await refreshVodContent(dbInstance, provider, sendStatus);
 
         console.log(`[VOD Trigger] Successfully finished VOD refresh for provider: ${provider.name}`);
 
     } catch (error) {
         console.error(`[VOD Trigger] Error during VOD refresh for ${provider.name}: ${error.message}`);
-        // Optionally update the source status in settings here if needed
+        sendStatus(`VOD refresh FAILED for ${provider.name}: ${error.message}`, 'error');
     }
 }
 
@@ -855,7 +855,7 @@ async function processAndMergeSources(req) {
                 sendProcessingStatus(req, ` -> Triggering VOD content refresh for XC source "${source.name}"...`, 'info');
                 // Use setImmediate to run the VOD refresh *after* the current M3U processing finishes
                 // Pass the source object and the global db instance
-                setImmediate(() => triggerVodRefreshForProvider(source, db));
+                await triggerVodRefreshForProvider(source, db, (msg, type) => sendProcessingStatus(req, msg, type));
             }
             // --- END VOD Trigger ---
 
@@ -1499,86 +1499,132 @@ app.get('/api/config', requireAuth, (req, res) => {
     }
 });
 
-// --- NEW: VOD Library Endpoint (Reads from DB) ---
+// --- NEW: VOD Library Endpoint (Reads from DB and builds URLs) ---
 app.get('/api/vod/library', requireAuth, async (req, res) => {
     console.log('[API_VOD] Request received for /api/vod/library (DB Query)');
     try {
-        // 1. Fetch all movies
-        const movies = await new Promise((resolve, reject) => {
-            db.all("SELECT id, name, year, description, logo, tmdb_id, imdb_id FROM movies ORDER BY name", [], (err, rows) => {
-                if (err) return reject(err);
-                // Add type:'movie' and ensure 'id' is a string for frontend consistency
-                resolve(rows.map(m => ({ ...m, type: 'movie', id: String(m.id) })));
-            });
-        });
-        console.log(`[API_VOD] Fetched ${movies.length} movies from DB.`);
-
-        // 2. Fetch all series headers
-        const seriesList = await new Promise((resolve, reject) => {
-            db.all("SELECT id, name, year, description, logo, tmdb_id, imdb_id FROM series ORDER BY name", [], (err, rows) => {
-                if (err) return reject(err);
-                 // Add type:'series' and ensure 'id' is a string
-                resolve(rows.map(s => ({ ...s, type: 'series', id: String(s.id) })));
-            });
-        });
-         console.log(`[API_VOD] Fetched ${seriesList.length} series headers from DB.`);
-
-        // 3. Fetch episodes for each series
-        for (const series of seriesList) {
-            const episodes = await new Promise((resolve, reject) => {
-                // Use numeric series.id for the query
-                const numericSeriesId = parseInt(String(series.id).replace('series-', ''), 10); // Extract numeric ID if needed, handle potential errors
-                if (isNaN(numericSeriesId)) {
-                     console.error(`[API_VOD] Invalid numeric ID extracted for series: ${series.id}`);
-                     return reject(new Error(`Invalid series ID format: ${series.id}`));
-                }
-                // *** CORRECTED db.all call below ***
-                db.all(`
-                    SELECT id, season_num, episode_num, name, description, air_date, tmdb_id, imdb_id
-                    FROM episodes
-                    WHERE series_id = ?
-                    ORDER BY season_num, episode_num
-                `,
-                [numericSeriesId], 
-                (err, rows) => { 
-                    if (err) return reject(err);
-                    resolve(rows);
+        // 1. Get active XC providers from settings
+        const settings = getSettings();
+        const activeXcProviders = settings.m3uSources.filter(s => s.isActive && s.type === 'xc');
+        const providerMap = new Map();
+        activeXcProviders.forEach(p => {
+            try {
+                const xcInfo = JSON.parse(p.xc_data);
+                const url = new URL(xcInfo.server);
+                providerMap.set(p.id, {
+                    baseUrl: `${url.protocol}//${url.host}`,
+                    username: xcInfo.username,
+                    password: xcInfo.password
                 });
-            });
+            } catch (e) {
+                console.error(`[API_VOD] Skipping provider ${p.name}, invalid XC data: ${e.message}`);
+            }
+        });
+        const activeProviderIds = Array.from(providerMap.keys());
+        if (activeProviderIds.length === 0) {
+            console.log('[API_VOD] No active XC providers found. Returning empty library.');
+            return res.json({ movies: [], series: [] });
+        }
+        
+        const providerIdPlaceholders = activeProviderIds.map(() => '?').join(',');
+
+        // 2. Fetch all movies from active providers
+        const movieQuery = `
+            SELECT m.id, m.name, m.year, m.description, m.logo, m.tmdb_id, m.imdb_id, r.stream_id, r.container_extension, r.provider_id
+            FROM movies m
+            JOIN provider_movie_relations r ON m.id = r.movie_id
+            WHERE r.provider_id IN (${providerIdPlaceholders})
+            ORDER BY m.name
+        `;
+        const movies = await dbAll(db, movieQuery, activeProviderIds);
+        
+        const processedMovies = movies.map(m => {
+            const provider = providerMap.get(m.provider_id);
+            const ext = m.container_extension || 'mp4';
+            // Build the full playable URL
+            const url = `${provider.baseUrl}/movie/${provider.username}/${provider.password}/${m.stream_id}.${ext}`;
+            return {
+                id: String(m.id),
+                name: m.name,
+                year: m.year,
+                description: m.description,
+                logo: m.logo,
+                tmdb_id: m.tmdb_id,
+                imdb_id: m.imdb_id,
+                url: url, // The all-important URL
+                type: 'movie',
+                group: 'Movies' // You can enhance this later
+            };
+        });
+        console.log(`[API_VOD] Fetched ${processedMovies.length} movies from DB.`);
+
+        // 3. Fetch all series headers from active providers
+        const seriesQuery = `
+            SELECT DISTINCT s.id, s.name, s.year, s.description, s.logo, s.tmdb_id, s.imdb_id
+            FROM series s
+            JOIN provider_series_relations r ON s.id = r.series_id
+            WHERE r.provider_id IN (${providerIdPlaceholders})
+            ORDER BY s.name
+        `;
+        const seriesList = await dbAll(db, seriesQuery, activeProviderIds);
+        console.log(`[API_VOD] Fetched ${seriesList.length} series headers from DB.`);
+
+        // 4. Fetch episodes for each series
+        for (const series of seriesList) {
+            const numericSeriesId = parseInt(String(series.id), 10);
+            
+            const episodeQuery = `
+                SELECT e.id, e.season_num, e.episode_num, e.name, e.description, e.air_date, e.tmdb_id,
+                       r.stream_id, r.container_extension, r.provider_id
+                FROM episodes e
+                JOIN provider_episode_relations r ON e.id = r.episode_id
+                WHERE e.series_id = ? AND r.provider_id IN (${providerIdPlaceholders})
+                ORDER BY e.season_num, e.episode_num
+            `;
+            const episodes = await dbAll(db, episodeQuery, [numericSeriesId, ...activeProviderIds]);
 
             // Group episodes by season
-            const seasons = {};
+            const seasons = new Map();
             episodes.forEach(ep => {
+                const provider = providerMap.get(ep.provider_id);
+                if (!provider) return; // Skip episode if its provider is not active
+                
+                const ext = ep.container_extension || 'mp4';
+                // Build the full playable URL
+                const epUrl = `${provider.baseUrl}/series/${provider.username}/${provider.password}/${ep.stream_id}.${ext}`;
+
                 const seasonNum = ep.season_num;
-                if (!seasons[seasonNum]) {
-                    seasons[seasonNum] = [];
+                if (!seasons.has(seasonNum)) {
+                    seasons.set(seasonNum, []);
                 }
-                // Add episode data, ensuring 'id' is a string
-                seasons[seasonNum].push({
+                seasons.get(seasonNum).push({
                     id: String(ep.id),
                     name: ep.name,
                     description: ep.description,
                     air_date: ep.air_date,
                     tmdb_id: ep.tmdb_id,
-                    imdb_id: ep.imdb_id,
                     season: ep.season_num,
-                    episode: ep.episode_num
-                    // Playback URL details would need separate logic if playing directly from this list
+                    episode: ep.episode_num,
+                    url: epUrl // The all-important URL
                 });
             });
-            series.seasons = seasons;
+            
+            // Convert Map to the object structure the frontend expects
+            series.seasons = Object.fromEntries(seasons);
+            series.type = 'series'; // Add type
+            series.id = String(series.id); // Ensure string ID
         }
 
         console.log(`[API_VOD] Finished fetching episodes for all series.`);
 
-        // 4. Respond
+        // 5. Respond
         res.json({
-            movies: movies,
-            series: seriesList // This now contains the nested seasons/episodes
+            movies: processedMovies,
+            series: seriesList 
         });
 
     } catch (error) {
-        console.error(`[API_VOD] Error fetching VOD library from DB: ${error.message}`);
+        console.error(`[API_VOD] Error fetching VOD library from DB: ${error.message}`, error);
         res.status(500).json({ error: "Could not retrieve VOD library from database." });
     }
 });
@@ -1840,7 +1886,7 @@ app.put('/api/sources/:sourceType/:id', requireAuth, (req, res) => {
     res.json({ success: true, message: 'Source updated.', settings: getSettings() });
 });
 
-app.delete('/api/sources/:sourceType/:id', requireAuth, (req, res) => {
+app.delete('/api/sources/:sourceType/:id', requireAuth, async (req, res) => {
     const { sourceType, id } = req.params;
     console.log(`[SOURCES_API] Deleting source ID: ${id}, Type: ${sourceType}`);
     
@@ -1877,7 +1923,31 @@ app.delete('/api/sources/:sourceType/:id', requireAuth, (req, res) => {
     }
 
     saveSettings(settings);
-    console.log(`[SOURCES_API] Source ${id} deleted successfully.`);
+    console.log(`[SOURCES_API] Source ${id} deleted successfully from settings.`);
+
+    // --- NEW: VOD Database Cleanup ---
+    if (sourceType === 'm3u' && source.type === 'xc') {
+        try {
+            console.log(`[SOURCES_API] Deleting VOD relations for provider: ${id}`);
+            await dbRun(db, "BEGIN TRANSACTION");
+            await dbRun(db, `DELETE FROM provider_movie_relations WHERE provider_id = ?`, [id]);
+            await dbRun(db, `DELETE FROM provider_series_relations WHERE provider_id = ?`, [id]);
+            await dbRun(db, `DELETE FROM provider_episode_relations WHERE provider_id = ?`, [id]);
+            
+            // Cleanup orphans
+            await dbRun(db, `DELETE FROM movies WHERE id NOT IN (SELECT DISTINCT movie_id FROM provider_movie_relations)`);
+            await dbRun(db, `DELETE FROM series WHERE id NOT IN (SELECT DISTINCT series_id FROM provider_series_relations)`);
+            await dbRun(db, `DELETE FROM episodes WHERE id NOT IN (SELECT DISTINCT episode_id FROM provider_episode_relations)`);
+            
+            await dbRun(db, "COMMIT");
+            console.log(`[SOURCES_API] Successfully cleaned up VOD data for provider: ${id}`);
+        } catch (dbErr) {
+            await dbRun(db, "ROLLBACK");
+            console.error(`[SOURCES_API] Error cleaning up VOD data for provider ${id}:`, dbErr.message);
+        }
+    }
+    // --- END NEW ---
+
     res.json({ success: true, message: 'Source deleted.', settings: getSettings() });
 });
 
