@@ -154,7 +154,7 @@ async function refreshVodContent(db, provider, sendStatus = () => {}) {
             const seriesInsertStmt = db.prepare(`INSERT INTO series (name, year, description, logo, tmdb_id, imdb_id) VALUES (?, ?, ?, ?, ?, ?)`);
             const seriesRelationInsertStmt = db.prepare(`INSERT OR REPLACE INTO provider_series_relations (provider_id, series_id, external_series_id, last_seen) VALUES (?, ?, ?, ?)`);
             const episodeInsertStmt = db.prepare(`INSERT INTO episodes (series_id, season_num, episode_num, name, description, air_date, tmdb_id) VALUES (?, ?, ?, ?, ?, ?, ?)`);
-            const episodeRelationInsertStmt = db.prepare(`INSERT OR REPLACE INTO provider_episode_relations (provider_id, episode_id, stream_id, container_extension, last_seen) VALUES (?, ?, ?, ?, ?)`);
+            const episodeRelationInsertStmt = db.prepare(`INSERT OR REPLACE INTO provider_episode_relations (provider_id, episode_id, provider_stream_id, container_extension, last_seen) VALUES (?, ?, ?, ?, ?)`);
 
             for (const seriesData of series) {
                 const { name, tmdb_id, imdb_id, plot, cover, series_id: external_series_id } = seriesData;
