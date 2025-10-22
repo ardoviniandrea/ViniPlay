@@ -1816,6 +1816,7 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
 
         // 4. Build the response structure
         const seasons = new Map();
+        const settings = getSettings();
         const activeXcProviders = settings.m3uSources.filter(s => s.isActive && s.type === 'xc');
         const providerMap = new Map();
         activeXcProviders.forEach(p => {
