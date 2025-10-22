@@ -131,6 +131,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
                 logo TEXT,
                 tmdb_id TEXT UNIQUE,
                 imdb_id TEXT UNIQUE,
+                category_name TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )`, (err) => { if (err) console.error("[DB] Error creating 'movies' table:", err.message); });
@@ -143,6 +144,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
                 logo TEXT,
                 tmdb_id TEXT UNIQUE,
                 imdb_id TEXT UNIQUE,
+                category_name TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )`, (err) => { if (err) console.error("[DB] Error creating 'series' table:", err.message); });
