@@ -166,19 +166,20 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
             db.run(`CREATE TABLE IF NOT EXISTS provider_movie_relations (
                 provider_id TEXT NOT NULL,
                 movie_id INTEGER NOT NULL,
-                provider_stream_id TEXT NOT NULL, -- The stream ID from the XC provider
+                stream_id TEXT NOT NULL,
+                container_extension TEXT,
                 last_seen TEXT NOT NULL,
                 FOREIGN KEY (movie_id) REFERENCES movies(id) ON DELETE CASCADE,
-                PRIMARY KEY (provider_id, movie_id)
+                PRIMARY KEY (provider_id, stream_id)
             )`, (err) => { if (err) console.error("[DB] Error creating 'provider_movie_relations' table:", err.message); });
             
             db.run(`CREATE TABLE IF NOT EXISTS provider_series_relations (
                 provider_id TEXT NOT NULL,
                 series_id INTEGER NOT NULL,
-                provider_series_id TEXT NOT NULL, -- The series ID from the XC provider
+                external_series_id TEXT NOT NULL,
                 last_seen TEXT NOT NULL,
                 FOREIGN KEY (series_id) REFERENCES series(id) ON DELETE CASCADE,
-                PRIMARY KEY (provider_id, series_id)
+                PRIMARY KEY (provider_id, external_series_id)
             )`, (err) => { if (err) console.error("[DB] Error creating 'provider_series_relations' table:", err.message); });
             
              db.run(`CREATE TABLE IF NOT EXISTS provider_episode_relations (
