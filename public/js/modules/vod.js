@@ -215,7 +215,7 @@ function openVodDetails(item) {
         // Populate season dropdown
         const seasonSelect = UIElements.vodSeasonSelect;
         seasonSelect.innerHTML = '';
-        const sortedSeasonKeys = Array.from(item.seasons.keys()).sort((a, b) => a - b);
+        const sortedSeasonKeys = Object.keys(item.seasons).map(Number).sort((a, b) => a - b);
         
         for (const seasonNum of sortedSeasonKeys) {
             const option = document.createElement('option');
