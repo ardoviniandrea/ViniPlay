@@ -22,7 +22,7 @@ const schedule = require('node-schedule');
 const disk = require('diskusage');
 const si = require('systeminformation'); // NEW: For system health monitoring
 //vod processor
-const { refreshVodContent, dbRun, dbGet } = require('./vodProcessor');
+const { refreshVodContent } = require('./vodProcessor');
 const XtreamClient = require('./xtreamClient');
 
 const dbAll = (db, sql, params = []) => {
@@ -295,6 +295,56 @@ function sendProcessingStatus(req, message, type = 'info') {
         sendSseEvent(req.session.userId, 'processing-status', { message, type });
     }
 }
+
+// --- Database Helper Functions ---
+/**
+ * Promisified version of db.run
+ * @param {sqlite3.Database} db - The database instance.
+ * @param {string} sql - The SQL query.
+ * @param {Array} params - Query parameters.
+ * @returns {Promise<object>} - { lastID, changes }
+ */
+const dbRun = (db, sql, params = []) => {
+    return new Promise((resolve, reject) => {
+        db.run(sql, params, function (err) {
+            if (err) return reject(err);
+            resolve(this);
+        });
+    });
+};
+
+/**
+ * Promisified version of db.get
+ * @param {sqlite3.Database} db - The database instance.
+ * @param {string} sql - The SQL query.
+ * @param {Array} params - Query parameters.
+ * @returns {Promise<object|null>} - The first row found.
+ */
+const dbGet = (db, sql, params = []) => {
+    return new Promise((resolve, reject) => {
+        db.get(sql, params, (err, row) => {
+            if (err) return reject(err);
+            resolve(row);
+        });
+    });
+};
+
+/**
+ * Promisified version of db.all
+ * @param {sqlite3.Database} db - The database instance.
+ * @param {string} sql - The SQL query.
+ * @param {Array} params - Query parameters.
+ * @returns {Promise<Array>} - An array of rows.
+ */
+const dbAll = (db, sql, params = []) => {
+    return new Promise((resolve, reject) => {
+        db.all(sql, params, (err, rows) => {
+            if (err) return reject(err);
+            resolve(rows);
+        });
+    });
+};
+// --- End Database Helper Functions ---
 
 
 /**
@@ -572,7 +622,7 @@ async function triggerVodRefreshForProvider(provider, dbInstance, sendStatus = (
 
     try {
         // Call the main processing function from vodProcessor.js
-        await refreshVodContent(dbInstance, provider, sendStatus);
+        await refreshVodContent(dbInstance, dbGet, dbAll, dbRun, provider, sendStatus);
 
         console.log(`[VOD Trigger] Successfully finished VOD refresh for provider: ${provider.name}`);
 
