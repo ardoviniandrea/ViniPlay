@@ -151,9 +151,9 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
                                 const { id: episode_stream_id, season: season_num, episode_num, title, plot: description, air_date, tmdb_id: episode_tmdb_id, container_extension } = episodeData;
                                 
                                 // Find or create episode
-                                let episodeRow = await dbGet('SELECT id FROM episodes WHERE series_id = ? AND season_num = ? AND episode_num = ?', [seriesId, season_num, episode_num]);
+                                let episodeRow = await dbGet(db, 'SELECT id FROM episodes WHERE series_id = ? AND season_num = ? AND episode_num = ?', [seriesId, season_num, episode_num]);
                                 if (episode_tmdb_id && episode_tmdb_id != "0" && !episodeRow) {
-                                    episodeRow = await dbGet('SELECT id FROM episodes WHERE tmdb_id = ?', [episode_tmdb_id]);
+                                    episodeRow = await dbGet(db, 'SELECT id FROM episodes WHERE tmdb_id = ?', [episode_tmdb_id]);
                                 }
                                 
                                 let episodeId;
