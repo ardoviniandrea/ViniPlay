@@ -1574,7 +1574,7 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
 
         // 2. Fetch all movies from active providers
         const movieQuery = `
-            SELECT m.id, m.name, m.year, m.description, m.logo, m.tmdb_id, m.imdb_id, r.stream_id, r.container_extension, r.provider_id
+            SELECT m.id, m.name, m.year, m.description, m.logo, m.tmdb_id, m.imdb_id, m.category_name, r.stream_id, r.container_extension, r.provider_id
             FROM movies m
             JOIN provider_movie_relations r ON m.id = r.movie_id
             WHERE r.provider_id IN (${providerIdPlaceholders})
@@ -1597,14 +1597,14 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
                 imdb_id: m.imdb_id,
                 url: url, // The all-important URL
                 type: 'movie',
-                group: 'Movies' // You can enhance this later
+                group: m.category_name 
             };
         });
         console.log(`[API_VOD] Fetched ${processedMovies.length} movies from DB.`);
 
         // 3. Fetch all series headers from active providers
         const seriesQuery = `
-            SELECT DISTINCT s.id, s.name, s.year, s.description, s.logo, s.tmdb_id, s.imdb_id
+            SELECT DISTINCT s.id, s.name, s.year, s.description, s.logo, s.tmdb_id, s.imdb_id, s.category_name
             FROM series s
             JOIN provider_series_relations r ON s.id = r.series_id
             WHERE r.provider_id IN (${providerIdPlaceholders})
@@ -1657,6 +1657,7 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
             series.seasons = Object.fromEntries(seasons);
             series.type = 'series'; // Add type
             series.id = String(series.id); // Ensure string ID
+            series.group = series.category_name
         }
 
         console.log(`[API_VOD] Finished fetching episodes for all series.`);
