@@ -243,7 +243,7 @@ function openVodDetails(item) {
  */
 function renderEpisodeList(series, seasonNum) {
     const episodeListEl = UIElements.vodEpisodeList;
-    const episodes = series.seasons.get(seasonNum);
+    const episodes = series.seasons[seasonNum]; // Use object property access
 
     if (!episodes || episodes.length === 0) {
         episodeListEl.innerHTML = `<p class="p-4 text-center text-gray-400">No episodes found for this season.</p>`;
