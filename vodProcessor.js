@@ -2,60 +2,12 @@
 const XtreamClient = require('./xtreamClient');
 
 /**
- * Promisified version of db.run
- * @param {sqlite.Database} db - The database instance.
- * @param {string} sql - The SQL query.
- * @param {Array} params - Query parameters.
- * @returns {Promise<object>} - { lastID, changes }
- */
-const dbRun = (db, sql, params = []) => {
-    return new Promise((resolve, reject) => {
-        db.run(sql, params, function (err) {
-            if (err) return reject(err);
-            resolve(this);
-        });
-    });
-};
-
-/**
- * Promisified version of db.get
- * @param {sqlite.Database} db - The database instance.
- * @param {string} sql - The SQL query.
- * @param {Array} params - Query parameters.
- * @returns {Promise<object|null>} - The first row found.
- */
-const dbGet = (db, sql, params = []) => {
-    return new Promise((resolve, reject) => {
-        db.get(sql, params, (err, row) => {
-            if (err) return reject(err);
-            resolve(row);
-        });
-    });
-};
-
-/**
- * Promisified version of db.all
- * @param {sqlite.Database} db - The database instance.
- * @param {string} sql - The SQL query.
- * @param {Array} params - Query parameters.
- * @returns {Promise<Array>} - An array of rows.
- */
-const dbAll = (db, sql, params = []) => {
-    return new Promise((resolve, reject) => {
-        db.all(sql, params, (err, rows) => {
-            if (err) return reject(err);
-            resolve(rows);
-        });
-    });
-};
-
-/**
  * Main function to refresh all VOD content for a given provider.
  * @param {sqlite.Database} db - The database instance.
  * @param {object} provider - The provider object (id, server_url, username, password).
  * @param {function} sendStatus - Function to send status updates to the client.
  */
-async function refreshVodContent(db, provider, sendStatus = () => {}) {
+async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus = () => {}) {
     console.log(`[VOD Processor] Starting VOD refresh for: ${provider.name}`);
     const scanStartTime = new Date().toISOString();
     
@@ -261,4 +213,4 @@ async function refreshVodContent(db, provider, sendStatus = () => {}) {
     }
 }
 
-module.exports = { refreshVodContent, dbRun, dbGet };
+module.exports = { refreshVodContent };
