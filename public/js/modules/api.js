@@ -359,3 +359,36 @@ export async function fetchVodLibrary() {
         return null;
     }
 }
+
+/**
+ * Fetches the detailed information for a specific series, including episodes (lazy loading).
+ * @param {string|number} seriesId - The ID of the series to fetch.
+ * @returns {Promise<object|null>} A series object with seasons and episodes, or null on failure.
+ */
+export async function fetchSeriesDetails(seriesId) {
+    console.log(`[API] Fetching details for Series ID: ${seriesId} from /api/vod/series/${seriesId}.`);
+    // Add timestamp to prevent caching
+    const response = await apiFetch(`/api/vod/series/${seriesId}?t=${Date.now()}`);
+    if (!response) {
+        console.error(`[API] Failed to fetch details for Series ID ${seriesId}: No response from apiFetch.`);
+        showNotification('Could not load series details.', true); // Use showNotification
+        return null;
+    }
+
+    try {
+        const seriesData = await response.json();
+        console.log(`[API] Series details for ID ${seriesId} fetched successfully.`);
+        // We expect the server to send the full series object including 'seasons'
+        if (seriesData && seriesData.seasons) {
+            return seriesData;
+        } else {
+            console.error(`[API] Series details format is incorrect for ID ${seriesId}. Expected 'seasons' property.`);
+            showNotification('Failed to parse series details from server.', true); // Use showNotification
+            return null;
+        }
+    } catch (e) {
+        console.error(`[API] Error parsing series details JSON for ID ${seriesId}:`, e);
+        showNotification('Failed to parse series details.', true); // Use showNotification
+        return null;
+    }
+}
