@@ -7,7 +7,7 @@
 import { appState, UIElements, guideState } from './state.js'; // Keep guideState for settings
 import { openModal, closeModal, showNotification } from './ui.js';
 import { ICONS } from './icons.js';
-import { saveUserSetting, fetchVodLibrary } from './api.js'; // Import fetchVodLibrary
+import { saveUserSetting, fetchVodLibrary, fetchSeriesDetails } from './api.js';
 import { playVOD } from './player.js';
 
 // Local state for VOD page
@@ -38,11 +38,14 @@ export async function initVodPage() {
     const library = await fetchVodLibrary();
 
     if (library) {
-        // The server sends { movies: [], series: [] }
-        // We combine them and sort alphabetically
+        // --- MODIFY THIS PART ---
+        // Combine movies and series (which now only contain basic info)
         vodState.fullLibrary = [...library.movies, ...library.series];
+        // Ensure all IDs are strings for consistent lookup later
+        vodState.fullLibrary.forEach(item => item.id = String(item.id));
         vodState.fullLibrary.sort((a, b) => a.name.localeCompare(b.name));
-        console.log(`[VOD] Library loaded: ${library.movies.length} movies, ${library.series.length} series.`);
+        console.log(`[VOD] Library loaded: ${library.movies.length} movies, ${library.series.length} series headers.`);
+        // --- END MODIFICATION ---
     } else {
         console.error('[VOD] Failed to load VOD library from server.');
         vodState.fullLibrary = [];
@@ -70,21 +73,35 @@ export async function initVodPage() {
  * Populates the "All Categories" dropdown filter.
  */
 function populateVodGroups() {
-    const groups = new Set(['all']);
+    const groups = new Set(); // Use a Set to automatically handle duplicates
     vodState.fullLibrary.forEach(item => {
-        if (item.group) {
-            groups.add(item.group);
+        // --- FIX: Check if group exists and is not empty ---
+        if (item.group && String(item.group).trim()) {
+            groups.add(String(item.group).trim()); // Add the valid group name
         }
+        // --- END FIX ---
     });
 
     const selectEl = UIElements.vodGroupFilter;
-    selectEl.innerHTML = '';
-    Array.from(groups).sort().forEach(group => {
+    selectEl.innerHTML = ''; // Clear existing options
+
+    // Always add "All Categories"
+    const allOption = document.createElement('option');
+    allOption.value = 'all';
+    allOption.textContent = 'All Categories';
+    selectEl.appendChild(allOption);
+
+    // Add sorted group names
+    Array.from(groups).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })).forEach(group => {
         const option = document.createElement('option');
-        option.value = group;
-        option.textContent = group === 'all' ? 'All Categories' : group;
+        // --- FIX: Ensure value attribute handles potential quotes ---
+        option.value = group; // Use the direct group name as value
+        // --- END FIX ---
+        option.textContent = group;
         selectEl.appendChild(option);
     });
+
+    console.log(`[VOD] Populated group filter with ${groups.size} categories.`); // Add log
 }
 
 /**
@@ -164,76 +181,93 @@ function renderVodGrid() {
     renderVodPaginationControls();
 }
 
+// Add fetchSeriesDetails to the import statement at the top of vod.js
+import { saveUserSetting, fetchVodLibrary, fetchSeriesDetails } from './api.js';
+
+// ... other functions ...
+
 /**
  * Opens the VOD details modal and populates it with item info.
- * @param {object} item - The movie or series object to display.
+ * Handles lazy loading for series episodes.
+ * @param {object} item - The movie or series object (basic info) to display.
  */
-function openVodDetails(item) {
+async function openVodDetails(item) { // Make the function async
     if (!item) return;
 
-    // Set common fields
+    // --- Common Fields (No Change) ---
     UIElements.vodDetailsTitle.textContent = item.name;
-    UIElements.vodDetailsPoster.src = item.logo || `https_placehold.co/400x600/1f2937/d1d5db?text=${encodeURIComponent(item.name)}`;
-    UIElements.vodDetailsBackdropImg.src = item.logo || ''; // Use poster as backdrop for now
-
-    // Reset all fields
-    UIElements.vodDetailsYear.textContent = '';
-    UIElements.vodDetailsRating.textContent = '';
-    UIElements.vodDetailsDuration.textContent = '';
+    UIElements.vodDetailsPoster.src = item.logo || `https://placehold.co/400x600/1f2937/d1d5db?text=${encodeURIComponent(item.name)}`;
+    UIElements.vodDetailsBackdropImg.src = item.logo || '';
+    UIElements.vodDetailsYear.textContent = item.year || '';
+    UIElements.vodDetailsRating.textContent = ''; // Placeholder
+    UIElements.vodDetailsDuration.textContent = ''; // Placeholder
     UIElements.vodDetailsGenre.textContent = item.group || 'N/A';
-    UIElements.vodDetailsDirector.textContent = 'N/A';
-    UIElements.vodDetailsCast.textContent = 'N/A';
-    UIElements.vodDetailsDesc.textContent = `Details for ${item.name}. (TMDB integration planned)`;
+    UIElements.vodDetailsDirector.textContent = 'N/A'; // Placeholder
+    UIElements.vodDetailsCast.textContent = 'N/A'; // Placeholder
+    UIElements.vodDetailsDesc.textContent = item.description || `Details for ${item.name}.`; // Use description if available
 
+    // --- Reset visibility and clear previous dynamic content ---
+    UIElements.vodDetailsMovieActions.classList.add('hidden');
+    UIElements.vodDetailsSeriesActions.classList.add('hidden');
+    UIElements.vodSeasonSelect.innerHTML = '';
+    UIElements.vodEpisodeList.innerHTML = '<div class="p-4 text-center text-gray-400">Loading episodes...</div>'; // Show loading state
+
+    // --- Movie Logic (No Change) ---
     if (item.type === 'movie') {
-        // Show movie info and play button
         UIElements.vodDetailsType.textContent = 'Movie';
         UIElements.vodDetailsMovieActions.classList.remove('hidden');
-        UIElements.vodDetailsSeriesActions.classList.add('hidden');
-
-        // --- Attach play button listener ---
-        // Ensure we use the 'item' passed directly to openVodDetails
         const movieUrl = item.url;
         const movieName = item.name;
-        console.log(`[VOD_DETAILS] Setting up play button for Movie: "${movieName}" URL: ${movieUrl}`); // Add log
-
-        // Remove any previous listener to be safe (though generally not needed if assigned directly)
         UIElements.vodPlayMovieBtn.onclick = null;
         UIElements.vodPlayMovieBtn.onclick = () => {
-            console.log(`[VOD_DETAILS] Play button clicked for: "${movieName}"`); // Add log
-            playVOD(movieUrl, movieName); // Use variables captured in this scope
+            playVOD(movieUrl, movieName);
             closeModal(UIElements.vodDetailsModal);
         };
-        // --- End Play Button Logic ---
 
+    // --- Series Logic (Lazy Loading) ---
     } else if (item.type === 'series') {
-        // Show series info and episode list
         UIElements.vodDetailsType.textContent = 'Series';
-        UIElements.vodDetailsMovieActions.classList.add('hidden');
-        UIElements.vodDetailsSeriesActions.classList.remove('hidden');
+        UIElements.vodDetailsSeriesActions.classList.remove('hidden'); // Show series section immediately
 
-        // Populate season dropdown
-        const seasonSelect = UIElements.vodSeasonSelect;
-        seasonSelect.innerHTML = '';
-        const sortedSeasonKeys = Object.keys(item.seasons).map(Number).sort((a, b) => a - b);
-        
-        for (const seasonNum of sortedSeasonKeys) {
-            const option = document.createElement('option');
-            option.value = seasonNum;
-            option.textContent = `Season ${seasonNum}`;
-            seasonSelect.appendChild(option);
+        // Fetch full series details including episodes
+        const fullSeriesData = await fetchSeriesDetails(item.id);
+
+        if (!fullSeriesData || !fullSeriesData.seasons || Object.keys(fullSeriesData.seasons).length === 0) {
+            // Handle case where fetching fails or returns no seasons/episodes
+            UIElements.vodEpisodeList.innerHTML = `<p class="p-4 text-center text-gray-400">Could not load episodes for this series.</p>`;
+            UIElements.vodSeasonSelect.innerHTML = '<option disabled selected>No Seasons</option>';
+            return; // Stop further processing for this series
         }
 
-        // Render episodes for the first season
-        renderEpisodeList(item, sortedSeasonKeys[0]);
+        // --- Populate UI *after* data is fetched ---
+        const seasonSelect = UIElements.vodSeasonSelect;
+        seasonSelect.innerHTML = ''; // Clear previous options
+        const sortedSeasonKeys = Object.keys(fullSeriesData.seasons).map(Number).sort((a, b) => a - b);
 
-        // Add listener for season changes
-        seasonSelect.onchange = (e) => {
-            renderEpisodeList(item, parseInt(e.target.value, 10));
-        };
+        if (sortedSeasonKeys.length > 0) {
+            for (const seasonNum of sortedSeasonKeys) {
+                const option = document.createElement('option');
+                option.value = seasonNum;
+                option.textContent = `Season ${seasonNum}`;
+                seasonSelect.appendChild(option);
+            }
+
+            // Render episodes for the first season by default
+            renderEpisodeList(fullSeriesData, sortedSeasonKeys[0]);
+
+            // Add listener for season changes (only if seasons exist)
+            seasonSelect.onchange = (e) => {
+                renderEpisodeList(fullSeriesData, parseInt(e.target.value, 10));
+            };
+        } else {
+            // Handle case where series exists but has no seasons/episodes listed
+            UIElements.vodEpisodeList.innerHTML = `<p class="p-4 text-center text-gray-400">No episodes found for this series.</p>`;
+            seasonSelect.innerHTML = '<option disabled selected>No Seasons</option>';
+        }
+        // --- End UI Population ---
     }
 
-    openModal(UIElements.vodDetailsModal);
+    openModal(UIElements.vodDetailsModal); // Open modal at the end
 }
 
 /**
@@ -330,14 +364,18 @@ function setupVodEventListeners() {
     UIElements.vodGrid.addEventListener('click', (e) => {
         const vodItemEl = e.target.closest('.vod-item');
         if (vodItemEl) {
-            const itemId = vodItemEl.dataset.id; // ID should already be a string from data-*
-            console.log(`[VOD_CLICK] Click detected on item with data-id: ${itemId}`);
-            // Find item comparing strings, ensure IDs from library are also strings
-            const item = vodState.fullLibrary.find(i => String(i.id) === itemId); // Ensure string comparison
+            const itemId = vodItemEl.dataset.id; // ID is always a string from data-*
+            console.log(`[VOD_CLICK] Click detected on item with data-id: ${itemId}`); // Keep log
+
+            // --- FIX: Ensure string comparison ---
+            const item = vodState.fullLibrary.find(i => String(i.id) === itemId);
+            // --- END FIX ---
+
             if (item) {
-                console.log(`[VOD_CLICK] Found item in library:`, item);
-                openVodDetails(item);
+                console.log(`[VOD_CLICK] Found item in library:`, item); // Keep log
+                openVodDetails(item); // Call openVodDetails with the found item
             } else {
+                // Keep error handling
                 console.error(`[VOD_CLICK] Could not find VOD item in fullLibrary with ID: ${itemId}`);
                 showNotification(`Error: Could not find details for the selected item (ID: ${itemId}).`, true);
             }
