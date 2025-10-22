@@ -1614,6 +1614,7 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
         console.log(`[API_VOD] Fetched ${seriesList.length} series headers from DB.`);
 
         // 4. Fetch episodes for each series
+        /*
         for (const series of seriesList) {
             const numericSeriesId = parseInt(String(series.id), 10);
             
@@ -1661,7 +1662,18 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
         }
 
         console.log(`[API_VOD] Finished fetching episodes for all series.`);
+        */
 
+        // --- ADD this minimal processing step instead ---
+        seriesList.forEach(series => {
+            series.type = 'series';
+            series.id = String(series.id);
+            series.group = series.category_name;
+            // Ensure seasons object is NOT present
+            delete series.seasons;
+        });
+        console.log(`[API_VOD] Processed series headers. Episodes will be lazy-loaded.`);
+        
         // 5. Respond
         res.json({
             movies: processedMovies,
@@ -1673,7 +1685,191 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
         res.status(500).json({ error: "Could not retrieve VOD library from database." });
     }
 });
-// --- END VOD Library Endpoint ---
+
+// --- NEW: Lazy Loading Endpoint for Series Details ---
+app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
+    const seriesIdParam = req.params.seriesId;
+    const numericSeriesId = parseInt(seriesIdParam, 10);
+
+    if (isNaN(numericSeriesId)) {
+        return res.status(400).json({ error: 'Invalid Series ID format.' });
+    }
+
+    console.log(`[API_VOD_SERIES] Request received for Series ID: ${numericSeriesId}`);
+
+    try {
+        // 1. Fetch basic series info
+        const seriesInfo = await dbGet(db, "SELECT * FROM series WHERE id = ?", [numericSeriesId]);
+        if (!seriesInfo) {
+            return res.status(404).json({ error: 'Series not found.' });
+        }
+
+        // 2. Check if episodes exist in DB
+        const existingEpisodes = await dbAll(db, `
+            SELECT e.*, r.provider_id, r.provider_stream_id
+            FROM episodes e
+            JOIN provider_episode_relations r ON e.id = r.episode_id
+            WHERE e.series_id = ?
+            ORDER BY e.season_num, e.episode_num
+        `, [numericSeriesId]);
+
+        let episodesToReturn = existingEpisodes;
+
+        // 3. If no episodes in DB, fetch from XC API and save
+        if (existingEpisodes.length === 0) {
+            console.log(`[API_VOD_SERIES] No episodes found in DB for Series ID ${numericSeriesId}. Fetching from provider...`);
+
+            // Find the provider details for this series
+            const relation = await dbGet(db, "SELECT provider_id, external_series_id FROM provider_series_relations WHERE series_id = ? LIMIT 1", [numericSeriesId]);
+            if (!relation) {
+                return res.status(404).json({ error: 'Could not find provider information for this series.' });
+            }
+
+            const settings = getSettings();
+            const providerConfig = settings.m3uSources.find(s => s.id === relation.provider_id);
+            if (!providerConfig || providerConfig.type !== 'xc' || !providerConfig.xc_data) {
+                return res.status(500).json({ error: 'Could not find or parse XC provider configuration for this series.' });
+            }
+
+            let xcInfo;
+            try {
+                xcInfo = JSON.parse(providerConfig.xc_data);
+            } catch (e) {
+                return res.status(500).json({ error: 'Failed to parse XC provider credentials.' });
+            }
+
+            const client = new XtreamClient(xcInfo.server, xcInfo.username, xcInfo.password);
+            const seriesDetails = await client.getSeriesInfo(relation.external_series_id);
+
+            if (!seriesDetails || !seriesDetails.episodes) {
+                console.warn(`[API_VOD_SERIES] Provider returned no episode data for external ID ${relation.external_series_id}.`);
+                // Return basic series info even if no episodes found from provider
+                episodesToReturn = [];
+            } else {
+                console.log(`[API_VOD_SERIES] Fetched ${Object.values(seriesDetails.episodes).flat().length} episodes from provider. Saving to DB...`);
+                // Save fetched episodes to DB
+                const episodeInsertStmt = db.prepare(`INSERT OR IGNORE INTO episodes (series_id, season_num, episode_num, name, description, air_date, tmdb_id, imdb_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+                const episodeRelationInsertStmt = db.prepare(`INSERT OR IGNORE INTO provider_episode_relations (provider_id, episode_id, provider_stream_id, last_seen) VALUES (?, ?, ?, ?)`);
+                const lastSeen = new Date().toISOString();
+
+                await dbRun(db, "BEGIN TRANSACTION");
+                try {
+                    for (const seasonNum in seriesDetails.episodes) {
+                        for (const epData of seriesDetails.episodes[seasonNum]) {
+                            // Insert into episodes table
+                            const epResult = await new Promise((resolve, reject) => {
+                                episodeInsertStmt.run(
+                                    numericSeriesId,
+                                    epData.season || seasonNum,
+                                    epData.episode_num,
+                                    epData.title,
+                                    epData.info?.plot,
+                                    epData.info?.releasedate,
+                                    epData.info?.movie_image, // Assuming this might be tmdb or similar
+                                    epData.info?.imdb_id,
+                                    function (err) {
+                                        if (err) reject(err);
+                                        else resolve(this);
+                                    }
+                                );
+                            });
+                            const episodeId = epResult.lastID;
+
+                            // Insert into relations table
+                            await new Promise((resolve, reject) => {
+                                episodeRelationInsertStmt.run(
+                                    relation.provider_id,
+                                    episodeId,
+                                    epData.id, // This is the stream_id for the episode from XC
+                                    lastSeen,
+                                    function (err) {
+                                        if (err) reject(err);
+                                        else resolve(this);
+                                    }
+                                );
+                            });
+                        }
+                    }
+                    await dbRun(db, "COMMIT");
+                    console.log(`[API_VOD_SERIES] Successfully saved episodes for Series ID ${numericSeriesId} to DB.`);
+                    // Re-fetch from DB to ensure consistency
+                    episodesToReturn = await dbAll(db, `
+                        SELECT e.*, r.provider_id, r.provider_stream_id
+                        FROM episodes e
+                        JOIN provider_episode_relations r ON e.id = r.episode_id
+                        WHERE e.series_id = ?
+                        ORDER BY e.season_num, e.episode_num
+                    `, [numericSeriesId]);
+
+                } catch (dbError) {
+                    await dbRun(db, "ROLLBACK");
+                    console.error(`[API_VOD_SERIES] DB Error saving episodes for Series ID ${numericSeriesId}: ${dbError.message}`);
+                    return res.status(500).json({ error: 'Failed to save fetched episodes to database.' });
+                } finally {
+                    episodeInsertStmt.finalize();
+                    episodeRelationInsertStmt.finalize();
+                }
+            }
+        } else {
+             console.log(`[API_VOD_SERIES] Found ${existingEpisodes.length} episodes in DB for Series ID ${numericSeriesId}.`);
+        }
+
+        // 4. Build the response structure
+        const seasons = new Map();
+        const activeXcProviders = settings.m3uSources.filter(s => s.isActive && s.type === 'xc');
+        const providerMap = new Map();
+        activeXcProviders.forEach(p => {
+            try {
+                const xcInfo = JSON.parse(p.xc_data);
+                const url = new URL(xcInfo.server);
+                providerMap.set(p.id, {
+                    baseUrl: `${url.protocol}//${url.host}`,
+                    username: xcInfo.username,
+                    password: xcInfo.password
+                });
+            } catch (e) { /* ignore */ }
+        });
+
+
+        episodesToReturn.forEach(ep => {
+            const provider = providerMap.get(ep.provider_id);
+            if (!provider) return; // Skip if provider details not found (e.g., provider deactivated)
+
+            const ext = 'mp4'; // Default extension, XC usually uses server-side logic
+            const epUrl = `${provider.baseUrl}/series/${provider.username}/${provider.password}/${ep.provider_stream_id}.${ext}`;
+            const seasonNum = ep.season_num;
+
+            if (!seasons.has(seasonNum)) {
+                seasons.set(seasonNum, []);
+            }
+            seasons.get(seasonNum).push({
+                id: String(ep.id),
+                name: ep.name,
+                description: ep.description,
+                air_date: ep.air_date,
+                tmdb_id: ep.tmdb_id,
+                season: ep.season_num,
+                episode: ep.episode_num,
+                url: epUrl
+            });
+        });
+
+        const finalSeriesData = {
+            ...seriesInfo,
+            id: String(seriesInfo.id), // Ensure string ID
+            type: 'series',
+            group: seriesInfo.category_name,
+            seasons: Object.fromEntries(seasons) // Convert Map to object
+        };
+
+        res.json(finalSeriesData);
+
+    } catch (error) {
+        console.error(`[API_VOD_SERIES] Error fetching details for Series ID ${numericSeriesId}: ${error.message}`, error);
+        res.status(500).json({ error: "Could not retrieve series details." });
+    }
+});
+// --- END NEW ENDPOINT ---
 
 const upload = multer({
     storage: multer.diskStorage({
