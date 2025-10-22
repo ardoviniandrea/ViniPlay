@@ -141,42 +141,10 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
                 // "Upsert" the series relation
                 seriesRelationInsertStmt.run(providerId, seriesId, external_series_id, scanStartTime);
 
-                // --- 3. Process Episodes for this Series ---
-                try {
-                    const seriesInfo = await client.getSeriesInfo(external_series_id);
-                    if (seriesInfo && seriesInfo.episodes) {
-                        const seasons = Object.values(seriesInfo.episodes);
-                        for (const season of seasons) {
-                            for (const episodeData of season) {
-                                const { id: episode_stream_id, season: season_num, episode_num, title, plot: description, air_date, tmdb_id: episode_tmdb_id, container_extension } = episodeData;
-                                
-                                // Find or create episode
-                                let episodeRow = await dbGet(db, 'SELECT id FROM episodes WHERE series_id = ? AND season_num = ? AND episode_num = ?', [seriesId, season_num, episode_num]);
-                                if (episode_tmdb_id && episode_tmdb_id != "0" && !episodeRow) {
-                                    episodeRow = await dbGet(db, 'SELECT id FROM episodes WHERE tmdb_id = ?', [episode_tmdb_id]);
-                                }
-                                
-                                let episodeId;
-                                if (episodeRow) {
-                                    episodeId = episodeRow.id;
-                                } else {
-                                    // Create new episode
-                                    const epResult = await new Promise((resolve, reject) => {
-                                        episodeInsertStmt.run(seriesId, season_num, episode_num, title, description, air_date, (episode_tmdb_id && episode_tmdb_id != "0") ? episode_tmdb_id : null, function(err) {
-                                            if (err) return reject(err);
-                                            resolve(this);
-                                        });
-                                    });
-                                    episodeId = epResult.lastID;
-                                }
-                                // "Upsert" the episode relation
-                                episodeRelationInsertStmt.run(providerId, episodeId, episode_stream_id, scanStartTime);
-                            }
-                        }
-                    }
-                } catch (epError) {
-                    console.error(`[VOD Processor] Failed to process episodes for series ${name}:`, epError); // Log the full error object
-                }
+                // --- Episode Processing Removed (Lazy loading to be implemented later) ---
+                // The client.getSeriesInfo() call and subsequent episode processing
+                // have been removed from this loop to prevent log spam and performance issues.
+                // Episode details will be fetched on demand when the user selects a series.
             }
             await new Promise(resolve => seriesInsertStmt.finalize(resolve));
             await new Promise(resolve => seriesRelationInsertStmt.finalize(resolve));
