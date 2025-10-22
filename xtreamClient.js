@@ -66,6 +66,11 @@ class XtreamClient {
         return this._makeRequest('get_series');
     }
 
+    /** Fetches detailed info for one movie. */
+    async getVodInfo(vodId) {
+        return this._makeRequest('get_vod_info', { vod_id: vodId });
+    }
+
     /** Fetches detailed info for one series, including episodes. */
     async getSeriesInfo(seriesId) {
         return this._makeRequest('get_series_info', { series_id: seriesId });
