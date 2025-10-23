@@ -233,7 +233,7 @@ async function openVodDetails(item) { // Make the function async
             // Handle case where fetching fails or returns no seasons/episodes
             UIElements.vodEpisodeList.innerHTML = `<p class="p-4 text-center text-gray-400">Could not load episodes for this series.</p>`;
             UIElements.vodSeasonSelect.innerHTML = '<option disabled selected>No Seasons</option>';
-            return; // Stop further processing for this series
+            //return; // Stop further processing for this series
         }
 
         // --- Populate UI *after* data is fetched ---
