@@ -72,7 +72,7 @@ async function addDefaultGpuProfiles(hardware) {
     // Radeon/AMD Profiles
     if (hardware.radeon_vaapi) {
         if (!streamProfiles.some(p => p.id === 'ffmpeg-vaapi-amd')) {
-            streamProfiles.push({ id: 'ffmpeg-vaapi-amd', name: 'ffmpeg (VA-API) AMD', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false });
+            streamProfiles.push({ id: 'ffmpeg-vaapi-amd', name: 'ffmpeg (VA-API) Radeon/AMD', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false });
             changesMade = true;
         }
         if (!dvrProfiles.some(p => p.id === 'dvr-mp4-radeon-vaapi')) {
