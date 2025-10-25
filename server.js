@@ -25,7 +25,7 @@ const si = require('systeminformation'); // NEW: For system health monitoring
 const activeRedirectStreams = new Map(); // Tracks live redirect streams for the admin UI
 
 const app = express();
-const port = 8998;
+const port = process.env.PORT || 8998;
 const saltRounds = 10;
 // Initialize global variables at the top-level scope
 let notificationCheckInterval = null;
