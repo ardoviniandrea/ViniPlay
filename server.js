@@ -241,6 +241,14 @@ async function detectHardwareAcceleration() {
                 detectedHardware.intel_vaapi = 'Intel VA-API (Legacy)';
                 console.log('[HW] Intel VA-API (i965 driver) detected.');
             }
+        }
+    });
+    // use Direct Rendering Manager as display to check HW directly whether or not physical display is connected
+    exec('vainfo --display drm', (err, stdout, stderr) => {
+        if (err || stderr) {
+            console.log('[HW] VA-API Radeon/AMD not detected or vainfo command failed.');
+            detectedHardware.radeon_vaapi = null;
+        } else {
             // radeonsi driver is Radeon/AMD that supports VA-API
             if (stdout.includes('radeonsi_drv_video.so')){
                 detectedHardware.radeon_vaapi = 'Radeon/AMD VA-API';
