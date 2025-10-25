@@ -51,6 +51,7 @@ RUN apt-get update && \
     ca-certificates \
     intel-media-va-driver \
     vainfo && \
+    mesa-va-drivers && \
     curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     # Clean up apt caches to reduce final image size
