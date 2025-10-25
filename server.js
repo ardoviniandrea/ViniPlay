@@ -245,12 +245,13 @@ async function detectHardwareAcceleration() {
     });
     // use Direct Rendering Manager as display to check HW directly whether or not physical display is connected
     exec('vainfo --display drm', (err, stdout, stderr) => {
-        if (err || stderr) {
+        if (err) {
             console.log('[HW] VA-API Radeon/AMD not detected or vainfo command failed.');
             detectedHardware.radeon_vaapi = null;
         } else {
             // radeonsi driver is Radeon/AMD that supports VA-API
-            if (stdout.includes('radeonsi_drv_video.so')){
+            // vainfo outputs logs to stderr
+            if (stderr.includes('radeonsi_drv_video.so')){
                 detectedHardware.radeon_vaapi = 'Radeon/AMD VA-API';
                 console.log('[HW] Radeon VA-API (radeonsi driver) detected.');
             }
