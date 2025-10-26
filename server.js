@@ -571,12 +571,61 @@ async function processAndMergeSources(req) { // <-- MODIFIED
                 const fetchOptions = {
                     headers: { 'User-Agent': 'VLC/3.0.20 (Linux; x86_64)' }
                 };
-                const m3uUrl = `${server}/get.php?username=${username}&password=${password}&type=m3u_plus&output=ts`;
+                const m3uUrl = `${server}/player_api.php?username=${username}&password=${password}&type=m3u_plus&output=ts`;
                 console.log(`[M3U] Constructed XC URL for "${source.name}": ${m3uUrl}`);
                 sendProcessingStatus(req, ` -> Fetching content from XC server...`, 'info'); // <-- NEW
                 content = await fetchUrlContent(m3uUrl, fetchOptions);
                 sourcePathForLog = m3uUrl;
                 sendProcessingStatus(req, ` -> Successfully fetched M3U content from XC server.`, 'info'); // <-- NEW
+
+                // Fetch live streams from XC API
+                try {
+                    sendProcessingStatus(req, ` -> Fetching live categories from XC server...`, 'info');
+                    const liveCategoriesUrl = `${server}/player_api.php?username=${username}&password=${password}&action=get_live_categories`;
+                    const liveCategoriesResponse = await fetchUrlContent(liveCategoriesUrl, fetchOptions);
+                    const liveCategories = JSON.parse(liveCategoriesResponse);
+                    
+                    sendProcessingStatus(req, ` -> Fetching live streams from XC server...`, 'info');
+                    const liveStreamsUrl = `${server}/player_api.php?username=${username}&password=${password}&action=get_live_streams`;
+                    const liveStreamsResponse = await fetchUrlContent(liveStreamsUrl, fetchOptions);
+                    const liveStreams = JSON.parse(liveStreamsResponse);
+                    
+                    // Filter and convert live streams to M3U format
+                    let liveM3uContent = '';
+                    let liveStreamCount = 0;
+                    
+                    if (Array.isArray(liveStreams)) {
+                        for (const stream of liveStreams) {
+                            if (stream.stream_type === 'live') {
+                                liveStreamCount++;
+                                const streamUrl = `${server}/live/${username}/${password}/${stream.stream_id}.ts`;
+                                
+                                // Find category name from categories array
+                                const categoryName = Array.isArray(liveCategories) 
+                                    ? liveCategories.find(cat => cat.category_id == stream.category_id)?.category_name || 'Live'
+                                    : 'Live';
+                                
+                                // Use epg_channel_id if available, otherwise use stream_id
+                                const tvgId = stream.epg_channel_id || stream.stream_id;
+                                
+                                liveM3uContent += `#EXTINF:-1 tvg-id="${tvgId}" tvg-name="${stream.name}" tvg-logo="${stream.stream_icon || ''}" group-title="${categoryName}",${stream.name}\n`;
+                                liveM3uContent += `${streamUrl}\n`;
+                            }
+                        }
+                    }
+                    
+                    if (liveStreamCount > 0) {
+                        content += '\n' + liveM3uContent;
+                        sendProcessingStatus(req, ` -> Added ${liveStreamCount} live streams to content.`, 'info');
+                    } else {
+                        sendProcessingStatus(req, ` -> No live streams found with stream_type = 'live'.`, 'info');
+                    }
+                } catch (liveError) {
+                    console.error(`[XC Live] Error fetching live streams for "${source.name}": ${liveError.message}`);
+                    sendProcessingStatus(req, ` -> Warning: Could not fetch live streams: ${liveError.message}`, 'warning');
+                }
+
+
 
                 const epgUrl = `${server}/xmltv.php?username=${username}&password=${password}`;
                 const epgSource = {
