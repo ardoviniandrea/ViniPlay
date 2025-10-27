@@ -70,6 +70,18 @@ async function addDefaultGpuProfiles(hardware) {
         }
     }
 
+    // Radeon/AMD Profiles
+    if (hardware.radeon_vaapi) {
+        if (!streamProfiles.some(p => p.id === 'ffmpeg-vaapi-amd')) {
+            streamProfiles.push({ id: 'ffmpeg-vaapi-amd', name: 'ffmpeg (VA-API) Radeon/AMD', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false });
+            changesMade = true;
+        }
+        if (!dvrProfiles.some(p => p.id === 'dvr-mp4-radeon-vaapi')) {
+            dvrProfiles.push({ id: 'dvr-mp4-radeon-vaapi', name: 'Radeon/AMD VA-API MP4 (H.264/AAC)', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false });
+            changesMade = true;
+        }
+    }
+
     if (changesMade) {
         console.log('[SETTINGS] New GPU profiles detected. Saving to settings...');
         settingsToSave.streamProfiles = streamProfiles;
@@ -147,10 +159,18 @@ async function handleHardwareDetection() {
              }
             console.log(`[SETTINGS] Intel QSV found.`);
         }
+        if (hardware.radeon_vaapi) {
+             if (infoText !== 'None') {
+                infoText += ` & ${hardware.radeon_vaapi}`;
+             } else {
+                infoText = hardware.radeon_vaapi;
+             }
+            console.log(`[SETTINGS] Radeon/AMD VA-API found.`);
+        }
         
         UIElements.hardwareInfoText.textContent = infoText;
 
-        if (hardware.nvidia || hardware.intel) {
+        if (hardware.nvidia || hardware.intel || hardware.radeon_vaapi) {
             UIElements.hardwareInfoBtn.classList.remove('hidden');
             populateHardwareInfoModal(hardware);
             // This will check for missing profiles, save them, and trigger a UI refresh if needed.

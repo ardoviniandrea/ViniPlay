@@ -1,7 +1,7 @@
 # Stage 1: The Builder
 # Use the full CUDA development image to build dependencies.
 # We're using a specific version for reproducibility.
-FROM nvidia/cuda:12.2.2-devel-ubuntu22.04 AS builder
+FROM ubuntu24.04 AS builder
 
 # Set environment to non-interactive to avoid prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -10,10 +10,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
+    ca-certificates \
     curl \
-    gnupg && \
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
-    apt-get install -y --no-install-recommends nodejs && \
+    gnupg \
+    python3-setuptools && \
+    curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
+    apt-get install -y nodejs && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -34,7 +36,7 @@ COPY . .
 # Stage 2: The Final Image
 # Use a much smaller CUDA 'base' image for the runtime environment.
 # This image contains the necessary NVIDIA drivers and libraries but not the full SDK.
-FROM nvidia/cuda:12.2.2-base-ubuntu22.04
+FROM ubuntu24.04
 
 # Set environment variables for NVIDIA capabilities
 ENV NVIDIA_DRIVER_CAPABILITIES all
@@ -47,12 +49,16 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     curl \
     gnupg \
-    ffmpeg \
     ca-certificates \
-    intel-media-va-driver \
+    mesa-va-drivers \
     vainfo && \
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
-    apt-get install -y --no-install-recommends nodejs && \
+    curl -s https://repo.jellyfin.org/ubuntu/jellyfin_team.gpg.key | gpg --dearmor | tee /usr/share/keyrings/jellyfin.gpg >/dev/null && \
+    echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/jellyfin.gpg] https://repo.jellyfin.org/ubuntu noble main' > /etc/apt/sources.list.d/jellyfin.list && \
+    curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
+    apt-get install -y --no-install-recommends \
+    jellyfin-ffmpeg7 \
+    nodejs && \
+    ln -s /usr/lib/jellyfin-ffmpeg/ffmpeg /usr/bin/ffmpeg && \
     # Clean up apt caches to reduce final image size
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
