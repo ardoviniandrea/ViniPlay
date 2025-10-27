@@ -58,6 +58,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     jellyfin-ffmpeg7 \
     nodejs && \
+    ln -s /usr/lib/jellyfin-ffmpeg/ffmpeg /usr/bin/ffmpeg && \
     # Clean up apt caches to reduce final image size
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
