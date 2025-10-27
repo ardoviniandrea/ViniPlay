@@ -1,7 +1,7 @@
 # Stage 1: The Builder
 # Use the full CUDA development image to build dependencies.
 # We're using a specific version for reproducibility.
-FROM ubuntu24.04 AS builder
+FROM ubuntu:24.04 AS builder
 
 # Set environment to non-interactive to avoid prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -36,7 +36,7 @@ COPY . .
 # Stage 2: The Final Image
 # Use a much smaller CUDA 'base' image for the runtime environment.
 # This image contains the necessary NVIDIA drivers and libraries but not the full SDK.
-FROM ubuntu24.04
+FROM ubuntu:24.04
 
 # Set environment variables for NVIDIA capabilities
 ENV NVIDIA_DRIVER_CAPABILITIES all
