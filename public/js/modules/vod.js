@@ -53,7 +53,7 @@ export async function initVodPage() {
     }
 
     // 2. Populate the category filter dropdown
-    populateVodGroups();
+    populateVodGroups(library.categories); // Pass fetched categories
     UIElements.vodGroupFilter.value = 'all'; // Ensure "All Categories" is selected
 
     // 3. Set initial state of the VOD Direct Play checkbox
@@ -72,16 +72,7 @@ export async function initVodPage() {
 /**
  * Populates the "All Categories" dropdown filter.
  */
-function populateVodGroups() {
-    const groups = new Set(); // Use a Set to automatically handle duplicates
-    vodState.fullLibrary.forEach(item => {
-        // --- FIX: Check if group exists and is not empty ---
-        if (item.group && String(item.group).trim()) {
-            groups.add(String(item.group).trim()); // Add the valid group name
-        }
-        // --- END FIX ---
-    });
-
+function populateVodGroups(categories) {
     const selectEl = UIElements.vodGroupFilter;
     selectEl.innerHTML = ''; // Clear existing options
 
@@ -92,16 +83,16 @@ function populateVodGroups() {
     selectEl.appendChild(allOption);
 
     // Add sorted group names
-    Array.from(groups).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })).forEach(group => {
-        const option = document.createElement('option');
-        // --- FIX: Ensure value attribute handles potential quotes ---
-        option.value = group; // Use the direct group name as value
-        // --- END FIX ---
-        option.textContent = group;
-        selectEl.appendChild(option);
-    });
+    if (categories && Array.isArray(categories)) {
+        categories.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })).forEach(group => {
+            const option = document.createElement('option');
+            option.value = group;
+            option.textContent = group;
+            selectEl.appendChild(option);
+        });
+    }
 
-    console.log(`[VOD] Populated group filter with ${groups.size} categories.`); // Add log
+    console.log(`[VOD] Populated group filter with ${categories ? categories.length : 0} categories.`);
 }
 
 /**
@@ -209,6 +200,9 @@ async function openVodDetails(item) { // Make the function async
     UIElements.vodSeasonSelect.innerHTML = '';
     UIElements.vodEpisodeList.innerHTML = '<div class="p-4 text-center text-gray-400">Loading episodes...</div>'; // Show loading state
 
+    // Open the modal immediately to show the loading state
+    openModal(UIElements.vodDetailsModal);
+
     // --- Movie Logic (No Change) ---
     if (item.type === 'movie') {
         UIElements.vodDetailsType.textContent = 'Movie';
@@ -228,12 +222,15 @@ async function openVodDetails(item) { // Make the function async
 
         // Fetch full series details including episodes
         const fullSeriesData = await fetchSeriesDetails(item.id);
+        console.log(`[VOD] Fetched full series data for ID ${item.id}:`, fullSeriesData);
 
+        // --- FIX: Robust check for invalid or empty series data ---
         if (!fullSeriesData || !fullSeriesData.seasons || Object.keys(fullSeriesData.seasons).length === 0) {
             // Handle case where fetching fails or returns no seasons/episodes
-            UIElements.vodEpisodeList.innerHTML = `<p class="p-4 text-center text-gray-400">Could not load episodes for this series.</p>`;
+            const errorMessage = fullSeriesData ? "No episodes found for this series." : "Could not load episodes for this series. The provider may be offline or slow to respond.";
+            UIElements.vodEpisodeList.innerHTML = `<p class="p-4 text-center text-gray-400">${errorMessage}</p>`;
             UIElements.vodSeasonSelect.innerHTML = '<option disabled selected>No Seasons</option>';
-            //return; // Stop further processing for this series
+            return; // IMPORTANT: Stop further processing
         }
 
         // --- Populate UI *after* data is fetched ---
@@ -253,6 +250,7 @@ async function openVodDetails(item) { // Make the function async
             renderEpisodeList(fullSeriesData, sortedSeasonKeys[0]);
 
             // Add listener for season changes (only if seasons exist)
+            seasonSelect.onchange = null; // FIX: Clear previous listener
             seasonSelect.onchange = (e) => {
                 renderEpisodeList(fullSeriesData, parseInt(e.target.value, 10));
             };
@@ -262,8 +260,6 @@ async function openVodDetails(item) { // Make the function async
             seasonSelect.innerHTML = '<option disabled selected>No Seasons</option>';
         }
     }
-
-    openModal(UIElements.vodDetailsModal); // Open modal at the end
 }
 
 /**
@@ -274,6 +270,7 @@ async function openVodDetails(item) { // Make the function async
 function renderEpisodeList(series, seasonNum) {
     const episodeListEl = UIElements.vodEpisodeList;
     const episodes = series.seasons[seasonNum]; // Use object property access
+    console.log(`[VOD] Rendering episodes for Series ID ${series.id}, Season ${seasonNum}:`, episodes);
 
     if (!episodes || episodes.length === 0) {
         episodeListEl.innerHTML = `<p class="p-4 text-center text-gray-400">No episodes found for this season.</p>`;
