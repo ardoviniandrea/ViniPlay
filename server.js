@@ -124,45 +124,55 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 
             // --- NEW: VOD Tables ---
             db.run(`CREATE TABLE IF NOT EXISTS movies (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                year INTEGER,
-                description TEXT,
-                logo TEXT,
-                tmdb_id TEXT UNIQUE,
-                imdb_id TEXT UNIQUE,
-                category_name TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )`, (err) => { if (err) console.error("[DB] Error creating 'movies' table:", err.message); });
-            
-            db.run(`CREATE TABLE IF NOT EXISTS series (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                year INTEGER,
-                description TEXT,
-                logo TEXT,
-                tmdb_id TEXT UNIQUE,
-                imdb_id TEXT UNIQUE,
-                category_name TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )`, (err) => { if (err) console.error("[DB] Error creating 'series' table:", err.message); });
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				name TEXT NOT NULL,
+				year INTEGER,
+				description TEXT,
+				logo TEXT,
+				tmdb_id TEXT,
+				imdb_id TEXT,
+				category_name TEXT,
+				provider_unique_id TEXT UNIQUE,
+				created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+				updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+			)`, (err) => { if (err) console.error("[DB] Error creating 'movies' table:", err.message); });
+			
+			db.run(`CREATE TABLE IF NOT EXISTS series (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				name TEXT NOT NULL,
+				year INTEGER,
+				description TEXT,
+				logo TEXT,
+				tmdb_id TEXT,
+				imdb_id TEXT,
+				category_name TEXT,
+				provider_unique_id TEXT UNIQUE,
+				created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+				updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+			)`, (err) => { if (err) console.error("[DB] Error creating 'series' table:", err.message); });
             
             db.run(`CREATE TABLE IF NOT EXISTS episodes (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				series_id INTEGER NOT NULL,
+				season_num INTEGER NOT NULL,
+				episode_num INTEGER NOT NULL,
+				name TEXT,
+				description TEXT,
+				air_date TEXT,
+				tmdb_id TEXT,
+				imdb_id TEXT,
+				created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+				updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+				FOREIGN KEY (series_id) REFERENCES series(id) ON DELETE CASCADE
+			)`, (err) => { if (err) console.error("[DB] Error creating 'episodes' table:", err.message); });
+            
+            db.run(`CREATE TABLE IF NOT EXISTS vod_categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                series_id INTEGER NOT NULL,
-                season_num INTEGER NOT NULL,
-                episode_num INTEGER NOT NULL,
-                name TEXT,
-                description TEXT,
-                air_date TEXT,
-                tmdb_id TEXT UNIQUE,
-                imdb_id TEXT UNIQUE,
+                category_id TEXT UNIQUE NOT NULL,
+                category_name TEXT NOT NULL,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (series_id) REFERENCES series(id) ON DELETE CASCADE
-            )`, (err) => { if (err) console.error("[DB] Error creating 'episodes' table:", err.message); });
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )`, (err) => { if (err) console.error("[DB] Error creating 'vod_categories' table:", err.message); });
             
             // --- NEW: VOD Relation Tables (Linking Providers to Content) ---
             // Note: Assuming 'provider_id' refers to the ID of the M3U source entry in settings
@@ -197,7 +207,20 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
             // --- END NEW VOD TABLES ---
             
             //-- ENHANCEMENT: Modify stream history table to include more data for the admin panel.
-            db.run(`CREATE TABLE IF NOT EXISTS stream_history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, username TEXT NOT NULL, channel_id TEXT, channel_name TEXT, start_time TEXT NOT NULL, end_time TEXT, duration_seconds INTEGER, status TEXT NOT NULL, client_ip TEXT, channel_logo TEXT, stream_profile_name TEXT)`, (err) => {
+            db.run(`CREATE TABLE IF NOT EXISTS stream_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                username TEXT NOT NULL,
+                channel_id TEXT,
+                channel_name TEXT,
+                start_time TEXT NOT NULL,
+                end_time TEXT,
+                duration_seconds INTEGER,
+                status TEXT NOT NULL,
+                client_ip TEXT,
+                channel_logo TEXT,
+                stream_profile_name TEXT
+            )`, (err) => {
                 if (!err) {
                     // Add new columns non-destructively if the table already exists
                     db.run("ALTER TABLE stream_history ADD COLUMN channel_logo TEXT", () => {});
@@ -1574,7 +1597,7 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
 
         // 2. Fetch all movies from active providers
         const movieQuery = `
-            SELECT m.id, m.name, m.year, m.description, m.logo, m.tmdb_id, m.imdb_id, m.category_name, r.stream_id, r.container_extension, r.provider_id
+            SELECT m.provider_unique_id, m.name, m.year, m.description, m.logo, m.tmdb_id, m.imdb_id, m.category_name, r.stream_id, r.container_extension, r.provider_id
             FROM movies m
             JOIN provider_movie_relations r ON m.id = r.movie_id
             WHERE r.provider_id IN (${providerIdPlaceholders})
@@ -1584,11 +1607,12 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
         
         const processedMovies = movies.map(m => {
             const provider = providerMap.get(m.provider_id);
+            if (!provider) return null; // Skip if provider is not active
             const ext = m.container_extension || 'mp4';
             // Build the full playable URL
             const url = `${provider.baseUrl}/movie/${provider.username}/${provider.password}/${m.stream_id}.${ext}`;
             return {
-                id: String(m.id),
+                id: m.provider_unique_id, // Use the stable provider_unique_id
                 name: m.name,
                 year: m.year,
                 description: m.description,
@@ -1599,12 +1623,12 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
                 type: 'movie',
                 group: m.category_name 
             };
-        });
+        }).filter(Boolean); // Filter out null entries
         console.log(`[API_VOD] Fetched ${processedMovies.length} movies from DB.`);
 
         // 3. Fetch all series headers from active providers
         const seriesQuery = `
-            SELECT DISTINCT s.id, s.name, s.year, s.description, s.logo, s.tmdb_id, s.imdb_id, s.category_name
+            SELECT DISTINCT s.provider_unique_id, s.name, s.year, s.description, s.logo, s.tmdb_id, s.imdb_id, s.category_name
             FROM series s
             JOIN provider_series_relations r ON s.id = r.series_id
             WHERE r.provider_id IN (${providerIdPlaceholders})
@@ -1667,7 +1691,7 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
         // --- ADD this minimal processing step instead ---
         seriesList.forEach(series => {
             series.type = 'series';
-            series.id = String(series.id);
+            series.id = series.provider_unique_id; // Use the stable provider_unique_id
             series.group = series.category_name;
             // Ensure seasons object is NOT present
             delete series.seasons;
@@ -1675,9 +1699,13 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
         console.log(`[API_VOD] Processed series headers. Episodes will be lazy-loaded.`);
         
         // 5. Respond
+        const categories = await dbAll(db, "SELECT category_name FROM vod_categories ORDER BY category_name");
+        const categoryNames = categories.map(cat => cat.category_name);
+
         res.json({
             movies: processedMovies,
-            series: seriesList 
+            series: seriesList,
+            categories: categoryNames
         });
 
     } catch (error) {
@@ -1689,20 +1717,16 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
 // --- NEW: Lazy Loading Endpoint for Series Details ---
 app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
     const seriesIdParam = req.params.seriesId;
-    const numericSeriesId = parseInt(seriesIdParam, 10);
 
-    if (isNaN(numericSeriesId)) {
-        return res.status(400).json({ error: 'Invalid Series ID format.' });
-    }
-
-    console.log(`[API_VOD_SERIES] Request received for Series ID: ${numericSeriesId}`);
+    console.log(`[API_VOD_SERIES] Request received for Series ID: ${seriesIdParam}`);
 
     try {
-        // 1. Fetch basic series info
-        const seriesInfo = await dbGet(db, "SELECT * FROM series WHERE id = ?", [numericSeriesId]);
+        // 1. Fetch basic series info using the provider_unique_id
+        const seriesInfo = await dbGet(db, "SELECT * FROM series WHERE provider_unique_id = ?", [seriesIdParam]);
         if (!seriesInfo) {
             return res.status(404).json({ error: 'Series not found.' });
         }
+        const numericSeriesId = seriesInfo.id; // Get the internal numeric ID for relations
 
         // 2. Check if episodes exist in DB
         const existingEpisodes = await dbAll(db, `
@@ -1739,15 +1763,19 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
             }
 
             const client = new XtreamClient(xcInfo.server, xcInfo.username, xcInfo.password);
-            const seriesDetails = await client.getSeriesInfo(relation.external_series_id);
+            let seriesDetails;
+            try {
+                seriesDetails = await client.getSeriesInfo(relation.external_series_id);
+            } catch (xcError) {
+                console.error(`[API_VOD_SERIES] XC Client error for series ${numericSeriesId}: ${xcError.message}`);
+                return res.status(504).json({ error: `Provider timeout: Could not fetch series details from the provider. Please try again later.` });
+            }
 
             if (!seriesDetails || !seriesDetails.episodes) {
                 console.warn(`[API_VOD_SERIES] Provider returned no episode data for external ID ${relation.external_series_id}.`);
-                // Return basic series info even if no episodes found from provider
                 episodesToReturn = [];
             } else {
                 console.log(`[API_VOD_SERIES] Fetched ${Object.values(seriesDetails.episodes).flat().length} episodes from provider. Saving to DB...`);
-                // Save fetched episodes to DB
                 const episodeInsertStmt = db.prepare(`INSERT OR IGNORE INTO episodes (series_id, season_num, episode_num, name, description, air_date, tmdb_id, imdb_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
                 const episodeRelationInsertStmt = db.prepare(`INSERT OR IGNORE INTO provider_episode_relations (provider_id, episode_id, provider_stream_id, last_seen) VALUES (?, ?, ?, ?)`);
                 const lastSeen = new Date().toISOString();
@@ -1756,51 +1784,31 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
                 try {
                     for (const seasonNum in seriesDetails.episodes) {
                         for (const epData of seriesDetails.episodes[seasonNum]) {
-                            // Insert into episodes table
-                            const epResult = await new Promise((resolve, reject) => {
-                                episodeInsertStmt.run(
-                                    numericSeriesId,
-                                    epData.season || seasonNum,
-                                    epData.episode_num,
-                                    epData.title,
-                                    epData.info?.plot,
-                                    epData.info?.releasedate,
-                                    epData.info?.movie_image, // Assuming this might be tmdb or similar
-                                    epData.info?.imdb_id,
-                                    function (err) {
-                                        if (err) reject(err);
-                                        else resolve(this);
-                                    }
-                                );
-                            });
-                            const episodeId = epResult.lastID;
+                            let episodeId;
+                            const existingEp = await dbGet(db, `SELECT id FROM episodes WHERE series_id = ? AND season_num = ? AND episode_num = ?`, [numericSeriesId, epData.season || seasonNum, epData.episode_num]);
 
-                            // Insert into relations table
-                            await new Promise((resolve, reject) => {
-                                episodeRelationInsertStmt.run(
-                                    relation.provider_id,
-                                    episodeId,
-                                    epData.id, // This is the stream_id for the episode from XC
-                                    lastSeen,
-                                    function (err) {
+                            if (existingEp) {
+                                episodeId = existingEp.id;
+                            } else {
+                                const epResult = await new Promise((resolve, reject) => {
+                                    episodeInsertStmt.run(numericSeriesId, epData.season || seasonNum, epData.episode_num, epData.title, epData.info?.plot, epData.info?.releasedate, null, null, function (err) {
                                         if (err) reject(err);
                                         else resolve(this);
-                                    }
-                                );
+                                    });
+                                });
+                                episodeId = epResult.lastID;
+                            }
+
+                            await new Promise((resolve, reject) => {
+                                episodeRelationInsertStmt.run(relation.provider_id, episodeId, epData.id, lastSeen, function (err) {
+                                    if (err) reject(err);
+                                    else resolve(this);
+                                });
                             });
                         }
                     }
                     await dbRun(db, "COMMIT");
                     console.log(`[API_VOD_SERIES] Successfully saved episodes for Series ID ${numericSeriesId} to DB.`);
-                    // Re-fetch from DB to ensure consistency
-                    episodesToReturn = await dbAll(db, `
-                        SELECT e.*, r.provider_id, r.provider_stream_id
-                        FROM episodes e
-                        JOIN provider_episode_relations r ON e.id = r.episode_id
-                        WHERE e.series_id = ?
-                        ORDER BY e.season_num, e.episode_num
-                    `, [numericSeriesId]);
-
                 } catch (dbError) {
                     await dbRun(db, "ROLLBACK");
                     console.error(`[API_VOD_SERIES] DB Error saving episodes for Series ID ${numericSeriesId}: ${dbError.message}`);
@@ -1809,6 +1817,13 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
                     episodeInsertStmt.finalize();
                     episodeRelationInsertStmt.finalize();
                 }
+                episodesToReturn = await dbAll(db, `
+                    SELECT e.*, r.provider_id, r.provider_stream_id
+                    FROM episodes e
+                    JOIN provider_episode_relations r ON e.id = r.episode_id
+                    WHERE e.series_id = ?
+                    ORDER BY e.season_num, e.episode_num
+                `, [numericSeriesId]);
             }
         } else {
              console.log(`[API_VOD_SERIES] Found ${existingEpisodes.length} episodes in DB for Series ID ${numericSeriesId}.`);
@@ -1834,9 +1849,9 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
 
         episodesToReturn.forEach(ep => {
             const provider = providerMap.get(ep.provider_id);
-            if (!provider) return; // Skip if provider details not found (e.g., provider deactivated)
+            if (!provider) return;
 
-            const ext = 'mp4'; // Default extension, XC usually uses server-side logic
+            const ext = 'mp4';
             const epUrl = `${provider.baseUrl}/series/${provider.username}/${provider.password}/${ep.provider_stream_id}.${ext}`;
             const seasonNum = ep.season_num;
 
@@ -1857,20 +1872,33 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
 
         const finalSeriesData = {
             ...seriesInfo,
-            id: String(seriesInfo.id), // Ensure string ID
+            id: seriesInfo.provider_unique_id, // Use the stable provider_unique_id
             type: 'series',
             group: seriesInfo.category_name,
-            seasons: Object.fromEntries(seasons) // Convert Map to object
+            seasons: Object.fromEntries(seasons)
         };
 
         res.json(finalSeriesData);
 
     } catch (error) {
-        console.error(`[API_VOD_SERIES] Error fetching details for Series ID ${numericSeriesId}: ${error.message}`, error);
+        console.error(`[API_VOD_SERIES] Error fetching details for Series ID ${seriesIdParam}: ${error.message}`, error);
         res.status(500).json({ error: "Could not retrieve series details." });
     }
 });
 // --- END NEW ENDPOINT ---
+
+// --- NEW: VOD Categories Endpoint ---
+app.get('/api/vod/categories', requireAuth, async (req, res) => {
+    console.log('[API_VOD] Request received for /api/vod/categories');
+    try {
+        const categories = await dbAll(db, "SELECT category_name FROM vod_categories ORDER BY category_name");
+        const categoryNames = categories.map(cat => cat.category_name);
+        res.json({ success: true, categories: categoryNames });
+    } catch (error) {
+        console.error(`[API_VOD] Error fetching VOD categories: ${error.message}`, error);
+        res.status(500).json({ error: "Could not retrieve VOD categories." });
+    }
+});
 
 const upload = multer({
     storage: multer.diskStorage({
