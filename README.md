@@ -5,6 +5,8 @@
 **A powerful, self-hosted IPTV player with a modern web interface.**
 
 Stream your M3U playlists with EPG data, manage users, cast to your TV, and watch multiple channels at once.
+
+Join my <a href="https://discord.gg/DXxvAw22Us">discord</a> to talk with the community.
 <p>
     <img src="https://img.shields.io/badge/docker-ready-blue.svg?style=for-the-badge&logo=docker" alt="Docker Ready">
     <img src="https://img.shields.io/badge/platform-node-green.svg?style=for-the-badge&logo=node.js" alt="Node.js Backend">
@@ -183,6 +185,12 @@ Upcoming features and fixes include:
 -   Implementing full horizontal scroll in the TV Guide.
 
 ---
-## 📄 License
+## ⚖️ License
 
-This project is licensed under the MIT License.
+ViniPlay is licensed under **CC BY-NC-SA 4.0**:
+
+- **BY**: Give credit where credit’s due.
+- **NC**: No commercial use.
+- **SA**: Share alike if you remix.
+
+For full license details, see [LICENSE](https://creativecommons.org/licenses/by-nc-sa/4.0/).
