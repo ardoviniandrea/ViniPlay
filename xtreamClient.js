@@ -20,7 +20,7 @@ class XtreamClient {
         this.password = password;
     
         this.client = axios.create({
-            timeout: 20000, // 20 second timeout
+            timeout: 60000, // 60 second timeout
             headers: { 'User-Agent': 'Xtream-JS-Client' }
         });
         console.log(`[XC Client Constructor] Client initialized for base URL: ${this.baseUrl}`); // Added log
@@ -74,6 +74,16 @@ class XtreamClient {
     /** Fetches detailed info for one series, including episodes. */
     async getSeriesInfo(seriesId) {
         return this._makeRequest('get_series_info', { series_id: seriesId });
+    }
+
+    /** Fetches all VOD categories. */
+    async getVodCategories() {
+        return this._makeRequest('get_vod_categories');
+    }
+
+    /** Fetches all Series categories. */
+    async getSeriesCategories() {
+        return this._makeRequest('get_series_categories');
     }
 }
 
