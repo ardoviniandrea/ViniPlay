@@ -345,11 +345,11 @@ export async function fetchVodLibrary() {
         const library = await response.json();
         console.log('[API] VOD library fetched successfully.');
 
-        // We expect the server to send { movies: [...], series: [...] }
-        if (library.movies && library.series) {
+        // We expect the server to send { movies: [...], series: [...], categories: [...] }
+        if (library.movies && library.series && library.categories) {
             return library;
         } else {
-            console.error('[API] VOD library format is incorrect. Expected { movies: [], series: [] }');
+            console.error('[API] VOD library format is incorrect. Expected { movies: [], series: [], categories: [] }');
             showNotification('Failed to parse VOD library from server.', true);
             return null;
         }
