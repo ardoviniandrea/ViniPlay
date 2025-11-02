@@ -246,4 +246,138 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
     sendStatus(`VOD refresh successful for ${provider.name}.`, 'success');
 }
 
-module.exports = { refreshVodContent };
+/**
+ * Processes VOD content from a raw M3U file string.
+ * @param {sqlite.Database} db - The database instance.
+ * @param {function} dbGet - Promisified db.get.
+ * @param {function} dbAll - Promisified db.all.
+ * @param {function} dbRun - Promisified db.run.
+ * @param {string} m3uContent - The full M3U file content as a string.
+ * @param {object} provider - The provider object from settings.
+ * @param {function} sendStatus - Function to send status updates to the client.
+ */
+async function processM3uVod(db, dbGet, dbAll, dbRun, m3uContent, provider, sendStatus = () => {}) {
+    console.log(`[VOD Processor M3U] Starting VOD processing for M3U source: ${provider.name}`);
+    const scanStartTime = new Date().toISOString();
+    const providerId = provider.id;
+
+    try {
+        const lines = m3uContent.split('\n');
+        let currentExtInf = null;
+        const movies = [];
+        const series = [];
+
+        // Regex to extract attributes from #EXTINF
+        const attributeRegex = /([a-zA-Z0-9_-]+)="([^"]*)"/g;
+
+        for (const line of lines) {
+            if (line.startsWith('#EXTINF:')) {
+                currentExtInf = { line: line.trim(), attributes: {} };
+                let match;
+                while ((match = attributeRegex.exec(line)) !== null) {
+                    currentExtInf.attributes[match[1]] = match[2];
+                }
+                const nameMatch = line.match(/,(.*)$/);
+                currentExtInf.name = nameMatch ? nameMatch[1].trim() : 'Untitled';
+            } else if (line.trim().startsWith('http') && currentExtInf) {
+                const url = line.trim();
+                const isMovie = url.includes('/movie/') || currentExtInf.attributes['tvg-type'] === 'movie';
+                const isSeries = url.includes('/series/') || currentExtInf.attributes['tvg-type'] === 'series';
+
+                if (isMovie) {
+                    movies.push({ ...currentExtInf, url });
+                } else if (isSeries) {
+                    series.push({ ...currentExtInf, url });
+                }
+                currentExtInf = null; // Reset after processing a URL
+            }
+        }
+
+        console.log(`[VOD Processor M3U] Found ${movies.length} movies and ${series.length} series in M3U.`);
+        sendStatus(`Processing ${movies.length} movies and ${series.length} series from ${provider.name}...`, 'info');
+
+        // Use a transaction for efficiency
+        await dbRun(db, "BEGIN TRANSACTION");
+
+        // Process Movies
+        if (movies.length > 0) {
+            const movieInsertStmt = db.prepare(`INSERT OR IGNORE INTO movies (name, year, logo, category_name, provider_unique_id) VALUES (?, ?, ?, ?, ?)`);
+            const movieRelationInsertStmt = db.prepare(`INSERT OR REPLACE INTO provider_movie_relations (provider_id, movie_id, stream_id, container_extension, last_seen) VALUES (?, ?, ?, ?, ?)`);
+            const existingMovies = await dbAll(db, 'SELECT id, provider_unique_id FROM movies WHERE provider_unique_id IS NOT NULL');
+            const providerUniqueIdMap = new Map(existingMovies.map(m => [m.provider_unique_id, m.id]));
+
+            for (const movieData of movies) {
+                const { name, attributes, url } = movieData;
+                const streamId = url.substring(url.lastIndexOf('/') + 1).split('.')[0];
+                const providerUniqueId = `movie_${providerId}_${streamId}`;
+                const yearMatch = name.match(/\((\d{4})\)/);
+                const year = yearMatch ? parseInt(yearMatch[1]) : null;
+                const logo = attributes['tvg-logo'] || null;
+                const categoryName = attributes['group-title'] || 'VOD';
+
+                let movieId = providerUniqueIdMap.get(providerUniqueId);
+                if (!movieId) {
+                    const result = await new Promise((resolve, reject) => {
+                        movieInsertStmt.run(name, year, logo, categoryName, providerUniqueId, function(err) {
+                            if (err) return reject(err);
+                            resolve(this);
+                        });
+                    });
+                    movieId = result.lastID;
+                    providerUniqueIdMap.set(providerUniqueId, movieId);
+                }
+                
+                const extension = url.split('.').pop() || 'mp4';
+                await new Promise((resolve, reject) => movieRelationInsertStmt.run(providerId, movieId, streamId, extension, scanStartTime, (err) => err ? reject(err) : resolve()));
+            }
+            await new Promise(resolve => movieInsertStmt.finalize(resolve));
+            await new Promise(resolve => movieRelationInsertStmt.finalize(resolve));
+        }
+
+        // Process Series (basic info, not episodes from M3U)
+        if (series.length > 0) {
+            const seriesInsertStmt = db.prepare(`INSERT OR IGNORE INTO series (name, year, logo, category_name, provider_unique_id) VALUES (?, ?, ?, ?, ?)`);
+            const seriesRelationInsertStmt = db.prepare(`INSERT OR REPLACE INTO provider_series_relations (provider_id, series_id, external_series_id, last_seen) VALUES (?, ?, ?, ?)`);
+            const existingSeries = await dbAll(db, 'SELECT id, provider_unique_id FROM series WHERE provider_unique_id IS NOT NULL');
+            const providerUniqueIdMap = new Map(existingSeries.map(s => [s.provider_unique_id, s.id]));
+
+            for (const seriesData of series) {
+                const { name, attributes, url } = seriesData;
+                // For M3U, we might not have a distinct series_id, so we create one from the name
+                const externalSeriesId = name.replace(/\s+/g, '_').toLowerCase();
+                const providerUniqueId = `series_${providerId}_${externalSeriesId}`;
+                const yearMatch = name.match(/\((\d{4})\)/);
+                const year = yearMatch ? parseInt(yearMatch[1]) : null;
+                const logo = attributes['tvg-logo'] || null;
+                const categoryName = attributes['group-title'] || 'Series';
+
+                let seriesId = providerUniqueIdMap.get(providerUniqueId);
+                if (!seriesId) {
+                    const result = await new Promise((resolve, reject) => {
+                        seriesInsertStmt.run(name, year, logo, categoryName, providerUniqueId, function(err) {
+                            if (err) return reject(err);
+                            resolve(this);
+                        });
+                    });
+                    seriesId = result.lastID;
+                    providerUniqueIdMap.set(providerUniqueId, seriesId);
+                }
+                
+                await new Promise((resolve, reject) => seriesRelationInsertStmt.run(providerId, seriesId, externalSeriesId, scanStartTime, (err) => err ? reject(err) : resolve()));
+            }
+            await new Promise(resolve => seriesInsertStmt.finalize(resolve));
+            await new Promise(resolve => seriesRelationInsertStmt.finalize(resolve));
+        }
+
+        await dbRun(db, "COMMIT");
+        sendStatus(`Successfully processed VOD content from ${provider.name}.`, 'success');
+
+    } catch (error) {
+        await dbRun(db, "ROLLBACK");
+        console.error(`[VOD Processor M3U] Processing FAILED for ${provider.name}:`, error.message);
+        sendStatus(`M3U VOD processing FAILED for ${provider.name}: ${error.message}`, 'error');
+    }
+}
+
+
+module.exports = { refreshVodContent, processM3uVod };
