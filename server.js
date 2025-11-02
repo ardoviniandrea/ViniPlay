@@ -22,7 +22,7 @@ const schedule = require('node-schedule');
 const disk = require('diskusage');
 const si = require('systeminformation'); // NEW: For system health monitoring
 //vod processor
-const { refreshVodContent } = require('./vodProcessor');
+const { refreshVodContent, processM3uVod } = require('./vodProcessor');
 const XtreamClient = require('./xtreamClient');
 
 
@@ -849,6 +849,14 @@ async function processAndMergeSources(req) {
                 }
             }
 
+            // --- NEW: Trigger VOD Refresh for all non-XC Sources ---
+            if (source.type === 'file' || source.type === 'url') {
+                console.log(`[PROCESS] Source "${source.name}" is a non-XC M3U. Triggering VOD processing.`);
+                sendProcessingStatus(req, ` -> Triggering VOD content processing for M3U source "${source.name}"...`, 'info');
+                await processM3uVod(db, dbGet, dbAll, dbRun, content, source, (msg, type) => sendProcessingStatus(req, msg, type));
+            }
+            // --- END VOD Trigger ---
+
             const lines = content.split('\n');
             let currentExtInf = '';
             let liveStreamCount = 0;
@@ -865,10 +873,7 @@ async function processAndMergeSources(req) {
                 if (line.startsWith('http') && currentExtInf) {
                     const streamUrl = line;
 
-                    if (streamUrl.includes('/movie/') || streamUrl.includes('/series/')) {
-                        currentExtInf = ''; // Reset for next entry
-                        continue; // Skip this entry, it's VOD
-                    }
+
 
                     // --- GROUP FILTER LOGIC ---
                     const groupMatch = currentExtInf.match(groupTitleRegex);
