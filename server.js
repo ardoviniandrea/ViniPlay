@@ -2398,7 +2398,7 @@ async function startRecording(job) {
     const safeFilename = `${job.id}_${job.programTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase()}${fileExtension}`;
     const fullFilePath = path.join(DVR_DIR, safeFilename);
 
-    const commandTemplate = recProfile.command
+    const commandTemplate = "-v level+warning " + recProfile.command
         .replace(/{streamUrl}/g, streamUrlToRecord)
         .replace(/{userAgent}/g, userAgent.value)
         .replace(/{filePath}/g, fullFilePath);
