@@ -72,11 +72,11 @@ async function addDefaultGpuProfiles(hardware) {
     // Radeon/AMD Profiles
     if (hardware.radeon_vaapi) {
         if (!streamProfiles.some(p => p.id === 'ffmpeg-vaapi-amd')) {
-            streamProfiles.push({ id: 'ffmpeg-vaapi-amd', name: 'ffmpeg (VA-API) Radeon/AMD', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false });
+            streamProfiles.push({ id: 'ffmpeg-vaapi-amd', name: 'ffmpeg (VA-API) Radeon/AMD', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -qp 20 -vf scale_vaapi=format=nv12 -c:a aac -ac 2 -b:a 128k -f mpegts pipe:1', isDefault: false });
             changesMade = true;
         }
         if (!dvrProfiles.some(p => p.id === 'dvr-mp4-radeon-vaapi')) {
-            dvrProfiles.push({ id: 'dvr-mp4-radeon-vaapi', name: 'Radeon/AMD VA-API MP4 (H.264/AAC)', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false });
+            dvrProfiles.push({ id: 'dvr-mp4-radeon-vaapi', name: 'Radeon/AMD VA-API MP4 (H.264/AAC)', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -preset medium -vf scale_vaapi=format=nv12 -c:a aac -ac 2 -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false });
             changesMade = true;
         }
     }
