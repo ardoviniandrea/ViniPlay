@@ -212,7 +212,7 @@ const renderSourceTable = (sourceType) => {
     sources.forEach(source => {
         const pathDisplay = source.type === 'file' ? (source.path.split('/').pop() || source.path.split('\\').pop()) : source.path;
         const lastUpdated = new Date(source.lastUpdated).toLocaleString();
-        const refreshText = source.type === 'url' && source.refreshHours > 0 ? `Every ${source.refreshHours}h` : 'Disabled';
+        const refreshText = (source.type === 'url' || source.type === 'xc') && source.refreshHours > 0 ? `Every ${source.refreshHours}h` : 'Disabled';
         const tr = document.createElement('tr');
         tr.dataset.sourceId = source.id;
         tr.innerHTML = `

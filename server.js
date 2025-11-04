@@ -830,20 +830,20 @@ const updateAndScheduleSourceRefreshes = () => {
     console.log('[SCHEDULER] Updating and scheduling all source refreshes...');
     const settings = getSettings();
     const allSources = [...(settings.m3uSources || []), ...(settings.epgSources || [])];
-    const activeUrlSources = new Set();
+    const activeRefreshSources = new Set();
 
     allSources.forEach(source => {
-        if (source.type === 'url' && source.isActive && source.refreshHours > 0) {
-            activeUrlSources.add(source.id);
+        if ((source.type === 'url' || source.type === 'xc') && source.isActive && source.refreshHours > 0) {
+            activeRefreshSources.add(source.id);
             if (sourceRefreshTimers.has(source.id)) {
                 clearTimeout(sourceRefreshTimers.get(source.id));
             }
 
-            console.log(`[SCHEDULER] Scheduling refresh for "${source.name}" (ID: ${source.id}) every ${source.refreshHours} hours.`);
+            console.log(`[SCHEDULER] Scheduling refresh for "${source.name}" (ID: ${source.id}, Type: ${source.type}) every ${source.refreshHours} hours.`);
             
             const scheduleNext = () => {
                 const timeoutId = setTimeout(async () => {
-                    console.log(`[SCHEDULER_RUN] Auto-refresh triggered for "${source.name}".`);
+                    console.log(`[SCHEDULER_RUN] Auto-refresh triggered for "${source.name}" (Type: ${source.type}).`);
                     try {
                         const result = await processAndMergeSources();
                         if(result.success) {
@@ -864,7 +864,7 @@ const updateAndScheduleSourceRefreshes = () => {
     });
 
     for (const [sourceId, timeoutId] of sourceRefreshTimers.entries()) {
-        if (!activeUrlSources.has(sourceId)) {
+        if (!activeRefreshSources.has(sourceId)) {
             console.log(`[SCHEDULER] Clearing obsolete refresh timer for source ID: ${sourceId}`);
             clearTimeout(timeoutId);
             sourceRefreshTimers.delete(sourceId);
