@@ -831,22 +831,6 @@ async function processAndMergeSources(req) {
                 }
                 sourcePathForLog = m3uUrl;
                 sendProcessingStatus(req, ` -> Successfully fetched M3U content from XC server.`, 'info');
-
-                const epgUrl = `${server}/xmltv.php?username=${username}&password=${password}`;
-                const epgSource = {
-                    id: `epg_for_${source.id}`,
-                    name: `${source.name} (EPG)`,
-                    type: 'url',
-                    path: epgUrl,
-                    isActive: true,
-                    isXcEpg: true,
-                    fetchOptions: m3uFetchOptions // Pass fetch options to EPG
-                };
-
-                if (!activeEpgSources.some(s => s.id === epgSource.id)) {
-                    activeEpgSources.push(epgSource);
-                    sendProcessingStatus(req, ` -> Automatically added EPG source for "${source.name}".`, 'info');
-                }
             }
 
             // --- NEW: Trigger VOD Refresh for all non-XC Sources ---
@@ -962,8 +946,6 @@ async function processAndMergeSources(req) {
     }
 
     for (const source of activeEpgSources) {
-        if (!source.isActive && !source.isXcEpg) continue;
-
         console.log(`[EPG] Processing source: "${source.name}" (ID: ${source.id}, Type: ${source.type}, Path: ${source.path})`);
         sendProcessingStatus(req, `Processing EPG source: "${source.name}"...`, 'info');
         try {
@@ -1261,25 +1243,22 @@ app.post('/api/sources/fetch-groups', requireAuth, async (req, res) => {
         // --- END CACHE CHECK ---
 
         // --- Fetch if cache wasn't used or refresh was forced ---
+        if (type === 'xc' && xc) {
+            const xcInfo = JSON.parse(xc);
+            if (!xcInfo.server || !xcInfo.username || !xcInfo.password) {
+                return res.status(400).json({ error: 'XC source requires server, username, and password.' });
+            }
+            console.log('[API_GROUPS] Source is XC type. Using XtreamClient to fetch all categories.');
+            const client = new XtreamClient(xcInfo.server, xcInfo.username, xcInfo.password);
+            const allCategories = await client.getAllCategories();
+            return res.json({ success: true, groups: allCategories, usedCache: false });
+        }
+
         if (!usedCache) {
             console.log(`[API_GROUPS] ${forceRefresh ? 'Refresh forced' : 'Cache not used/found'}. Fetching from original source.`);
             if (type === 'url' && url) {
                 fetchUrl = url;
                 content = await fetchUrlContent(fetchUrl, fetchOptions);
-            } else if (type === 'xc' && xc) {
-                const xcInfo = JSON.parse(xc);
-                if (!xcInfo.server || !xcInfo.username || !xcInfo.password) {
-                    return res.status(400).json({ error: 'XC source requires server, username, and password.' });
-                }
-
-                // --- NEW XC CATEGORY FETCHING LOGIC ---
-                console.log('[API_GROUPS] Using XtreamClient to fetch all categories.');
-                const client = new XtreamClient(xcInfo.server, xcInfo.username, xcInfo.password);
-                const allCategories = await client.getAllCategories(); // This is the new method
-                
-                // The rest of the old logic for parsing M3U is now skipped for XC sources.
-                return res.json({ success: true, groups: allCategories, usedCache: false });
-                // --- END NEW LOGIC ---
             } else if (type === 'file' && url) { // Assuming url holds file path for type file
                  const filePath = sourceToUse?.path || path.join(SOURCES_DIR, path.basename(url)); // Prefer path from settings if available
                  if (fs.existsSync(filePath)) {
@@ -1991,6 +1970,56 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
             return res.status(400).json({ error: 'Existing file source requires a new file if original is missing.' });
         }
 
+        // --- NEW: XC EPG Sync Logic on Update ---
+        const wasXc = sourceToUpdate.type === 'xc';
+        const isNowXc = (xc !== undefined && xc !== null);
+
+        // Case 1: Type changed FROM XC to something else (URL or File)
+        if (wasXc && !isNowXc) {
+            const epgIdToDelete = `epg_for_${id}`;
+            const initialEpgCount = settings.epgSources.length;
+            settings.epgSources = settings.epgSources.filter(epg => epg.id !== epgIdToDelete);
+            if (settings.epgSources.length < initialEpgCount) {
+                console.log(`[SOURCES_API] Deleted managed EPG source ${epgIdToDelete} because parent source type changed from XC.`);
+            }
+        }
+
+        // Case 2: Type changed TO XC from something else, or it IS XC and is being updated
+        if (isNowXc) {
+            const epgId = `epg_for_${id}`;
+            let epgSource = settings.epgSources.find(epg => epg.id === epgId);
+
+            try {
+                const xcData = JSON.parse(xc);
+                const newEpgUrl = `${xcData.server}/xmltv.php?username=${xcData.username}&password=${xcData.password}`;
+
+                if (epgSource) { // EPG already exists, update it
+                    console.log(`[SOURCES_API] Found and updating managed EPG source ${epgId}.`);
+                    epgSource.name = `${name} (EPG)`;
+                    epgSource.path = newEpgUrl;
+                    epgSource.refreshHours = parseInt(refreshHours, 10) || 0;
+                } else { // EPG does not exist, create it
+                    console.log(`[SOURCES_API] Creating new managed EPG source ${epgId} because parent source type changed to XC.`);
+                    epgSource = {
+                        id: epgId,
+                        name: `${name} (EPG)`,
+                        type: 'url',
+                        path: newEpgUrl,
+                        isActive: true,
+                        isXcEpg: true,
+                        refreshHours: parseInt(refreshHours, 10) || 0,
+                        lastUpdated: new Date().toISOString(),
+                        status: 'Pending',
+                        statusMessage: 'Managed by XC source. Process to load data.'
+                    };
+                    settings.epgSources.push(epgSource);
+                }
+            } catch (e) {
+                console.error(`[SOURCES_API] Error processing XC data for EPG sync on update:`, e.message);
+            }
+        }
+        // --- END NEW ---
+
         // Cache cleanup on source type/path/details change during update ---
         let shouldDeleteCache = false;
         const existingCachePath = sourceToUpdate.cachedRawPath; // Store existing path before potential changes
@@ -2108,6 +2137,32 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
         }
 
         sourceList.push(newSource);
+
+        // --- NEW: Automatically add an EPG source for new XC sources ---
+        if (newSource.type === 'xc') {
+            try {
+                const xcData = JSON.parse(newSource.xc_data);
+                const epgUrl = `${xcData.server}/xmltv.php?username=${xcData.username}&password=${xcData.password}`;
+                const newEpgSource = {
+                    id: `epg_for_${newSource.id}`,
+                    name: `${newSource.name} (EPG)`,
+                    type: 'url',
+                    path: epgUrl,
+                    isActive: true, // Default to active
+                    isXcEpg: true, // Mark as a managed XC EPG
+                    refreshHours: newSource.refreshHours, // Sync refresh interval
+                    lastUpdated: new Date().toISOString(),
+                    status: 'Pending',
+                    statusMessage: 'Managed by XC source. Process to load data.'
+                };
+                settings.epgSources.push(newEpgSource);
+                console.log(`[SOURCES_API] Automatically added managed EPG source for XC source "${newSource.name}".`);
+            } catch (e) {
+                console.error(`[SOURCES_API] Failed to create automatic EPG for new XC source ${newSource.id}:`, e.message);
+            }
+        }
+        // --- END NEW ---
+
         saveSettings(settings);
         console.log(`[SOURCES_API] New source "${name}" added successfully (ID: ${newSource.id}).`);
         res.json({ success: true, message: 'Source added successfully.', settings: getSettings() });
@@ -2177,6 +2232,17 @@ app.delete('/api/sources/:sourceType/:id', requireAuth, async (req, res) => {
         console.warn(`[SOURCES_API] Source ID ${id} not found for deletion.`);
         return res.status(404).json({ error: 'Source not found.' });
     }
+
+    // --- NEW: Automatically delete the managed EPG when an XC source is deleted ---
+    if (sourceType === 'm3u' && source && source.type === 'xc') {
+        const epgIdToDelete = `epg_for_${id}`;
+        const initialEpgCount = settings.epgSources.length;
+        settings.epgSources = settings.epgSources.filter(epg => epg.id !== epgIdToDelete);
+        if (settings.epgSources.length < initialEpgCount) {
+            console.log(`[SOURCES_API] Automatically deleted managed EPG source ${epgIdToDelete} as its parent XC source was deleted.`);
+        }
+    }
+    // --- END NEW ---
 
     saveSettings(settings);
     console.log(`[SOURCES_API] Source ${id} deleted successfully from settings.`);
