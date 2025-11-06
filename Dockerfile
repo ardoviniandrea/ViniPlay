@@ -1,7 +1,7 @@
 # Stage 1: The Builder
-# Use the full CUDA development image to build dependencies.
+# Use the ubuntu image as nvidia container toolkit injects CUDA bits into a container runtime.
 # We're using a specific version for reproducibility.
-FROM nvidia/cuda:12.2.2-devel-ubuntu22.04 AS builder
+FROM ubuntu:24.04 AS builder
 
 # Set environment to non-interactive to avoid prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -10,10 +10,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
+    ca-certificates \
     curl \
-    gnupg && \
+    gnupg \
+    python3-setuptools && \
     curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
-    apt-get install -y --no-install-recommends nodejs && \
+    apt-get install -y nodejs && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -32,27 +34,34 @@ COPY . .
 # ---
 
 # Stage 2: The Final Image
-# Use a much smaller CUDA 'base' image for the runtime environment.
-# This image contains the necessary NVIDIA drivers and libraries but not the full SDK.
-FROM nvidia/cuda:12.2.2-base-ubuntu22.04
+FROM ubuntu:24.04
 
 # Set environment variables for NVIDIA capabilities
 ENV NVIDIA_DRIVER_CAPABILITIES all
 ENV DEBIAN_FRONTEND=noninteractive
+ENV LD_LIBRARY_PATH=/usr/lib/jellyfin-ffmpeg/lib
 
 # Install only the necessary runtime dependencies: Node.js, FFmpeg, and drivers.
 # We also add 'ca-certificates' which is crucial for making HTTPS requests from Node.js.
-# MODIFIED: Added intel-media-va-driver and vainfo for Intel QSV / VA-API hardware acceleration.
+# MODIFIED: Added mesa-va-drivers and vainfo for Intel QSV / VA-API hardware acceleration.
+# Use jellyfin's ffmpeg as it's purpose built for hw transcode and has the necessary
+# libraries included for Intel QSV.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     curl \
     gnupg \
-    ffmpeg \
     ca-certificates \
-    intel-media-va-driver \
-    vainfo && \
+    mesa-va-drivers && \
+    curl -s https://repo.jellyfin.org/ubuntu/jellyfin_team.gpg.key | gpg --dearmor | tee /usr/share/keyrings/jellyfin.gpg >/dev/null && \
+    echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/jellyfin.gpg] https://repo.jellyfin.org/ubuntu noble main' > /etc/apt/sources.list.d/jellyfin.list && \
     curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
-    apt-get install -y --no-install-recommends nodejs && \
+    apt-get install -y --no-install-recommends \
+    jellyfin-ffmpeg7 \
+    nodejs && \
+    # Symlink Jellyfin's ffmpeg, ffprobe and vainfo for systemwide use
+    ln -s /usr/lib/jellyfin-ffmpeg/ffmpeg /usr/bin/ffmpeg && \
+    ln -s /usr/lib/jellyfin-ffmpeg/ffprobe /usr/bin/ffprobe && \
+    ln -s /usr/lib/jellyfin-ffmpeg/vainfo /usr/bin/vainfo && \
     # Clean up apt caches to reduce final image size
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
