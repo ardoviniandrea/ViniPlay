@@ -200,10 +200,18 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
                 provider_id TEXT NOT NULL,
                 episode_id INTEGER NOT NULL,
                 provider_stream_id TEXT NOT NULL, -- The stream ID for the episode from XC
+                container_extension TEXT,
                 last_seen TEXT NOT NULL,
                 FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE,
                 PRIMARY KEY (provider_id, episode_id)
-             )`, (err) => { if (err) console.error("[DB] Error creating 'provider_episode_relations' table:", err.message); });
+             )`, (err) => { 
+                if (err) {
+                    console.error("[DB] Error creating 'provider_episode_relations' table:", err.message);
+                } else {
+                    // Add new column non-destructively
+                    db.run("ALTER TABLE provider_episode_relations ADD COLUMN container_extension TEXT", () => {});
+                }
+            });
             // --- END NEW VOD TABLES ---
             
             //-- ENHANCEMENT: Modify stream history table to include more data for the admin panel.
@@ -1772,7 +1780,7 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
 
         // 2. Check if episodes exist in DB
         const existingEpisodes = await dbAll(db, `
-            SELECT e.*, r.provider_id, r.provider_stream_id
+            SELECT e.*, r.provider_id, r.provider_stream_id, r.container_extension
             FROM episodes e
             JOIN provider_episode_relations r ON e.id = r.episode_id
             WHERE e.series_id = ?
@@ -1819,7 +1827,7 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
             } else {
                 console.log(`[API_VOD_SERIES] Fetched ${Object.values(seriesDetails.episodes).flat().length} episodes from provider. Saving to DB...`);
                 const episodeInsertStmt = db.prepare(`INSERT OR IGNORE INTO episodes (series_id, season_num, episode_num, name, description, air_date, tmdb_id, imdb_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-                const episodeRelationInsertStmt = db.prepare(`INSERT OR IGNORE INTO provider_episode_relations (provider_id, episode_id, provider_stream_id, last_seen) VALUES (?, ?, ?, ?)`);
+                const episodeRelationInsertStmt = db.prepare(`INSERT OR IGNORE INTO provider_episode_relations (provider_id, episode_id, provider_stream_id, container_extension, last_seen) VALUES (?, ?, ?, ?, ?)`);
                 const lastSeen = new Date().toISOString();
 
                 await dbRun(db, "BEGIN TRANSACTION");
@@ -1842,7 +1850,7 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
                             }
 
                             await new Promise((resolve, reject) => {
-                                episodeRelationInsertStmt.run(relation.provider_id, episodeId, epData.id, lastSeen, function (err) {
+                                episodeRelationInsertStmt.run(relation.provider_id, episodeId, epData.id, epData.container_extension || 'mp4', lastSeen, function (err) {
                                     if (err) reject(err);
                                     else resolve(this);
                                 });
@@ -1860,7 +1868,7 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
                     episodeRelationInsertStmt.finalize();
                 }
                 episodesToReturn = await dbAll(db, `
-                    SELECT e.*, r.provider_id, r.provider_stream_id
+                    SELECT e.*, r.provider_id, r.provider_stream_id, r.container_extension
                     FROM episodes e
                     JOIN provider_episode_relations r ON e.id = r.episode_id
                     WHERE e.series_id = ?
@@ -1893,7 +1901,7 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
             const provider = providerMap.get(ep.provider_id);
             if (!provider) return;
 
-            const ext = 'mp4';
+            const ext = ep.container_extension || 'mp4';
             const epUrl = `${provider.baseUrl}/series/${provider.username}/${provider.password}/${ep.provider_stream_id}.${ext}`;
             const seasonNum = ep.season_num;
 
