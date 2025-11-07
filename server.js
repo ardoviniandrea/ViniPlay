@@ -581,7 +581,7 @@ function getSettings() {
         },
         activeUserAgentId: `default-ua-1724778434000`,
         activeStreamProfileId: 'ffmpeg-default',
-        searchScope: 'channels_only',
+        searchScope: 'all_channels_unfiltered',
         notificationLeadTime: 10,
         sourcesLastUpdated: null
     };
