@@ -826,9 +826,10 @@ export function setupGuideEventListeners() {
         handleSearchAndFilter();
     });
     UIElements.sourceFilter.addEventListener('change', () => handleSearchAndFilter());
-    UIElements.searchInput.addEventListener('input', () => {
-        clearTimeout(appState.searchDebounceTimer);
-        appState.searchDebounceTimer = setTimeout(() => handleSearchAndFilter(false), 250);
+    UIElements.searchInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            handleSearchAndFilter(false);
+        }
     });
     document.addEventListener('click', e => {
         if (!UIElements.searchInput.contains(e.target) && !UIElements.searchResultsContainer.contains(e.target) && !e.target.closest('.search-result-channel') && !e.target.closest('.search-result-program')) {
