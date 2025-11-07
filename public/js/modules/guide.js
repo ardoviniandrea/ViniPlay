@@ -678,7 +678,7 @@ export function handleSearchAndFilter(isFirstLoad = false) {
         // Perform the program search if the scope allows it.
         let programResults = [];
         if (searchScope.includes('programs') && appState.fusePrograms) {
-            programResults = appState.fusePrograms.search(searchTerm).slice(0, 20);
+            programResults = appState.fusePrograms.search(searchTerm); //programResults = appState.fusePrograms.search(searchTerm).slice(0, 20);
         }
 
         // BUG FIX: Include channels from both channel search AND program search
