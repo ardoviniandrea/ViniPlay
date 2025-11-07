@@ -276,7 +276,7 @@ export const updateUIFromSettings = async () => {
         console.warn("Could not detect user's IANA timezone.", e);
     }
     
-    settings.searchScope = settings.searchScope || 'channels_only_filtered';
+    settings.searchScope = settings.searchScope || 'all_channels_unfiltered';
     settings.notificationLeadTime = settings.notificationLeadTime ?? 10;
     
     settings.dvr = settings.dvr || {};
