@@ -785,9 +785,9 @@
                         <select id="group-filter" class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500"></select>
                         <select id="source-filter" class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500"></select>
                         <input type="search" id="search-input" placeholder="Search..." class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500 sm:w-48">
-                        <div id="search-results-container" class="hidden absolute top-full right-0 w-full sm:w-96 max-h-80 overflow-y-auto bg-gray-800 border border-gray-600 rounded-md mt-1 z-[51] custom-scrollbar shadow-lg"></div>
                     </div>
                 </div>
+                <div id="search-results-container" class="hidden absolute top-[100px] right-0 w-full sm:w-96 max-h-80 overflow-y-auto bg-gray-800 border border-gray-600 rounded-md mt-1 z-[55] custom-scrollbar shadow-lg"></div>
 
                 <div id="guide-container" class="flex-grow bg-gray-900 overflow-auto relative custom-scrollbar">
                     <div id="guide-placeholder" class="absolute inset-0 flex items-center justify-center z-40">
@@ -1363,9 +1363,9 @@
                                  <label for="search-scope-select" class="block text-sm font-medium text-gray-400 mb-1">Guide Search Scope</label>
                                   <p class="text-xs text-gray-500 mb-2">Control what the search bar in the TV Guide looks for.</p>
                                  <select id="search-scope-select" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
-                                    <option value="channels_only_filtered" selected>Search Channels Only (in filtered group)</option>
+                                    <option value="channels_only_filtered">Search Channels Only (in filtered group)</option>
                                     <option value="channels_programs_filtered">Search Channels & Programs (in filtered group)</option>
-                                    <option value="all_channels_unfiltered">Search All Channels (ignore group filter)</option>
+                                    <option value="all_channels_unfiltered" selected>Search All Channels (ignore group filter)</option>
                                     <option value="all_channels_programs_unfiltered">Search All Channels & Programs (ignore group filter)</option>
                                 </select>
                              </div>
