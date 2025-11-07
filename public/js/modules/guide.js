@@ -675,14 +675,21 @@ export function handleSearchAndFilter(isFirstLoad = false) {
         const fuseForChannels = new Fuse(channelSearchPool, { keys: ['name', 'displayName', 'source', 'chno'], threshold: 0.4, includeScore: true });
         const channelResults = fuseForChannels.search(searchTerm);
 
-        // The guide itself should now ONLY display the results of the search.
-        channelsForGuide = channelResults.map(result => result.item);
-
         // Perform the program search if the scope allows it.
         let programResults = [];
         if (searchScope.includes('programs') && appState.fusePrograms) {
             programResults = appState.fusePrograms.search(searchTerm).slice(0, 20);
         }
+
+        // BUG FIX: Include channels from both channel search AND program search
+        // This ensures that searching for program titles (e.g., "Shark Tank") 
+        // will display all channels that have matching programs, not just channels
+        // whose names match the search term.
+        const channelIdsFromChannelSearch = new Set(channelResults.map(r => r.item.id));
+        const channelIdsFromProgramSearch = new Set(programResults.map(r => r.item.channel.id));
+        const allRelevantChannelIds = new Set([...channelIdsFromChannelSearch, ...channelIdsFromProgramSearch]);
+        
+        channelsForGuide = channelSearchPool.filter(ch => allRelevantChannelIds.has(ch.id));
         
         // Render the search results dropdown.
         renderSearchResults(channelResults.slice(0, 10), programResults);
