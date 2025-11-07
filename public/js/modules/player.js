@@ -308,7 +308,7 @@ export const playChannel = (url, name, channelId) => {
  * @param {string} url - The direct URL to the VOD file (e.g., .mp4, .mkv).
  * @param {string} title - The title of the VOD to display.
  */
-export const playVOD = async (url, title) => {
+export const playVOD = async (url, title, logo = '') => {
     const useDirectPlay = guideState.settings.vodDirectPlayEnabled === true;
     console.log(`[VOD_PLAYER] Attempting to play VOD: "${title}" | Direct Play: ${useDirectPlay}`);
 
@@ -381,7 +381,7 @@ export const playVOD = async (url, title) => {
     // VODs always go through the /stream endpoint now, unless the profile is 'redirect'
     const streamUrlToPlay = profile.command === 'redirect'
         ? url // If redirect, still use mpegts.js but with the direct URL
-        : `/stream?url=${encodeURIComponent(url)}&profileId=${profileId}&userAgentId=${userAgentId}`;
+        : `/stream?url=${encodeURIComponent(url)}&profileId=${profileId}&userAgentId=${userAgentId}&vodName=${encodeURIComponent(title)}&vodLogo=${encodeURIComponent(logo)}`;
 
     console.log(`[VOD_PLAYER] Final mpegts.js stream URL: ${streamUrlToPlay}`);
     logToPlayerConsole(`Final stream URL: ${streamUrlToPlay}`);

@@ -85,6 +85,48 @@ class XtreamClient {
     async getSeriesCategories() {
         return this._makeRequest('get_series_categories');
     }
+
+    /** Fetches all Live TV categories. */
+    async getLiveCategories() {
+        return this._makeRequest('get_live_categories');
+    }
+
+    /**
+     * Fetches all category types (Live, VOD, Series) concurrently and returns a merged, unique list.
+     * @returns {Promise<string[]>} A sorted array of unique category names.
+     */
+    async getAllCategories() {
+        try {
+            console.log('[XC Client] Fetching all category types concurrently...');
+            const [live, vod, series] = await Promise.all([
+                this.getLiveCategories(),
+                this.getVodCategories(),
+                this.getSeriesCategories()
+            ]);
+
+            const allCategories = new Set();
+
+            // Add categories from all responses, checking if they are arrays
+            if (Array.isArray(live)) {
+                live.forEach(c => allCategories.add(c.category_name));
+            }
+            if (Array.isArray(vod)) {
+                vod.forEach(c => allCategories.add(c.category_name));
+            }
+            if (Array.isArray(series)) {
+                series.forEach(c => allCategories.add(c.category_name));
+            }
+
+            const sortedCategories = Array.from(allCategories).sort((a, b) => a.localeCompare(b));
+            console.log(`[XC Client] Found ${sortedCategories.length} unique categories across all types.`);
+            return sortedCategories;
+
+        } catch (error) {
+            console.error(`[XC Client] Failed to fetch all categories: ${error.message}`);
+            // Depending on desired behavior, you might re-throw or return an empty array
+            throw new Error(`Failed to fetch all categories: ${error.message}`);
+        }
+    }
 }
 
 module.exports = XtreamClient;

@@ -209,9 +209,10 @@ async function openVodDetails(item) { // Make the function async
         UIElements.vodDetailsMovieActions.classList.remove('hidden');
         const movieUrl = item.url;
         const movieName = item.name;
+        const movieLogo = item.logo; // Get the logo
         UIElements.vodPlayMovieBtn.onclick = null;
         UIElements.vodPlayMovieBtn.onclick = () => {
-            playVOD(movieUrl, movieName);
+            playVOD(movieUrl, movieName, movieLogo); // Pass the logo
             closeModal(UIElements.vodDetailsModal);
         };
 
@@ -223,6 +224,9 @@ async function openVodDetails(item) { // Make the function async
         // Fetch full series details including episodes
         const fullSeriesData = await fetchSeriesDetails(item.id);
         console.log(`[VOD] Fetched full series data for ID ${item.id}:`, fullSeriesData);
+
+        // Store the logo on the episode list element to be accessed by the click listener
+        UIElements.vodEpisodeList.dataset.seriesLogo = fullSeriesData.logo || item.logo || '';
 
         // --- FIX: Robust check for invalid or empty series data ---
         if (!fullSeriesData || !fullSeriesData.seasons || Object.keys(fullSeriesData.seasons).length === 0) {
@@ -388,7 +392,8 @@ function setupVodEventListeners() {
         if (episodeItem) {
             const url = episodeItem.dataset.url;
             const title = episodeItem.dataset.title;
-            playVOD(url, title);
+            const seriesLogo = UIElements.vodEpisodeList.dataset.seriesLogo || ''; // Get logo from parent
+            playVOD(url, title, seriesLogo); // Pass logo
             closeModal(UIElements.vodDetailsModal);
         }
     });
