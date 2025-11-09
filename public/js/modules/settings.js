@@ -1109,7 +1109,8 @@ export function setupSettingsEventListeners() {
         const lowerCaseSearch = searchTerm.toLowerCase();
         // Keep track of originally selected groups case-insensitively for checking
         const lowerCaseSelected = new Set(selectedGroups.map(g => g.toLowerCase()));
-        const filteredGroups = groupsForType.filter(g => g.toLowerCase().includes(lowerCaseSearch));
+        const re = new RegExp(searchTerm, 'g');
+        const filteredGroups = groupsForType.filter(g => g.match(re));
         const currentSelectedSet = new Set(selectedGroups);
 
         if (filteredGroups.length === 0) {
