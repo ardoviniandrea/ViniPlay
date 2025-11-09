@@ -373,6 +373,28 @@ const dbAll = (db, sql, params = []) => {
 
 
 /**
+ * NEW: Extracts GPU details from vainfo output.
+ */
+function extractVainfoGPUDetails(vainfo_stdout) {
+    const start_tag = "Driver version: ";
+    const end_tag = "vainfo: Supported profile";
+
+    let vainfo_gpu_details = vainfo_stdout.substring(
+        vainfo_stdout.indexOf(start_tag) + start_tag.length,
+        vainfo_stdout.lastIndexOf(end_tag) - 1
+    );
+    // If we can't find the relevant GPU info section, return all to debug.
+    // Likely means the output format of vainfo has been changed.
+    if (vainfo_gpu_details === "") {
+        vainfo_gpu_details = vainfo_stdout;
+    } else
+    {
+        console.log(`[HW] Detected: ${vainfo_gpu_details}`)
+    }
+    return vainfo_gpu_details;
+}
+
+/**
  * NEW: Detects available hardware for transcoding.
  */
 async function detectHardwareAcceleration() {
@@ -388,46 +410,47 @@ async function detectHardwareAcceleration() {
         }
     });
 
-    // MODIFIED: Use 'vainfo' with enhanced logging
+    // MODIFIED: Use 'vainfo' for more robust detection of AMD, Intel VA-API and QSV
+    // vainfo can give stderr as well as stdout, especially in dockers, so don't assume
+    // presence of err|stderr means no stdout.  Check stdout first.
     exec('vainfo', (err, stdout, stderr) => {
-        // Log the raw output regardless of error
-        console.log(`[HW_DEBUG] vainfo stdout:\n${stdout}`);
-        console.error(`[HW_DEBUG] vainfo stderr:\n${stderr}`);
+        if (stdout) {
+            let found = false;
+            const trimmed_stdout = stdout.trim()
 
-        if (err) {
-            console.error('[HW] Error executing vainfo:', err); // Log the actual error object
-            console.error('[HW] vainfo command failed. VA-API/QSV detection skipped.');
+            // iHD driver is for modern Intel GPUs (Gen9+) and is preferred for QSV
+            if (stdout.includes('iHD_drv_video.so')) {
+                detectedHardware.intel_qsv = extractVainfoGPUDetails(trimmed_stdout);
+                found = true;
+            }
+            // AMD Radeon detection
+            if (stdout.includes('AMD')) {
+                detectedHardware.radeon_vaapi = extractVainfoGPUDetails(trimmed_stdout);
+                found = true;
+            }
+            // i965 driver is for older Intel GPUs (pre-Gen9)
+            if (stdout.includes('i965_drv_video.so')) {
+                detectedHardware.intel_vaapi = extractVainfoGPUDetails(trimmed_stdout);
+                found = true;
+            }
+
+            if (!found) {
+                // vainfo dumped some regular output but not for a GPU we expect.
+                // So log the information.
+                console.log(`[HW] Unexpected GPU detected: ${stdout.trim()}`);
+            }
+            // Since vainfo can detect a GPU but still show errors, print any.
+            if (stderr) {
+              console.log(`[HW] Possible Issue detected in vainfo stderr: ${stderr.trim()}`);
+            }
+        } else if (err || stderr) {
+            // vainfo did not detect a GPU so log any errors for debug.
+            console.log(`[HW] Issue detected by vainfo stderr: ${stderr.trim()}`);
             detectedHardware.intel_qsv = null;
             detectedHardware.intel_vaapi = null;
-        } else if (stderr) {
-            // Sometimes vainfo prints errors to stderr even if it doesn't return an error code
-            console.warn(`[HW] vainfo reported errors/warnings to stderr, but executed successfully. VA-API/QSV detection might be unreliable.`);
-            // Proceed with detection but be aware it might be partial
-            if (stdout.includes('iHD_drv_video.so')) {
-                detectedHardware.intel_qsv = 'Intel Quick Sync Video';
-                console.log('[HW] Intel QSV (iHD driver) detected via VA-API (despite stderr warnings).');
-            }
-            if (stdout.includes('i965_drv_video.so')) {
-                detectedHardware.intel_vaapi = 'Intel VA-API (Legacy)';
-                console.log('[HW] Intel VA-API (i965 driver) detected (despite stderr warnings).');
-            }
-        } else {
-            // Success case (no error, no stderr)
-            console.log('[HW] vainfo executed successfully.');
-            if (stdout.includes('iHD_drv_video.so')) {
-                detectedHardware.intel_qsv = 'Intel Quick Sync Video';
-                console.log('[HW] Intel QSV (iHD driver) detected via VA-API.');
-            }
-            if (stdout.includes('i965_drv_video.so')) {
-                detectedHardware.intel_vaapi = 'Intel VA-API (Legacy)';
-                console.log('[HW] Intel VA-API (i965 driver) detected.');
-            }
-             if (!detectedHardware.intel_qsv && !detectedHardware.intel_vaapi) {
-                 console.log('[HW] vainfo ran, but no known Intel drivers (iHD or i965) were found in the output.');
-            }
+            detectedHardware.radeon_vaapi = null;
         }
     });
-
 	// use Direct Rendering Manager as display to check HW directly whether or not physical display is connected
 	exec('vainfo --display drm', (err, stdout, stderr) => {
         if (err) {
@@ -552,7 +575,7 @@ function getSettings() {
             { id: 'ffmpeg-intel', name: 'ffmpeg (Intel QSV)', command: '-hwaccel qsv -hwaccel_output_format qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -vf scale_qsv=format=nv12 -c:a aac -ac 2 -b:a 128k -f mpegts pipe:1', isDefault: false },
             // NEW: Add this line for VA-API
             { id: 'ffmpeg-vaapi', name: 'ffmpeg (VA-API)', command: '-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf "format=nv12|vaapi,hwupload" -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false },
-			{ id: 'ffmpeg-vaapi-amd', name: 'ffmpeg (VA-API) Radeon/AMD', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false },
+			{ id: 'ffmpeg-vaapi-amd', name: 'ffmpeg (VA-API) Radeon/AMD', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -qp 20 -vf scale_vaapi=format=nv12 -c:a aac -ac 2 -b:a 128k -f mpegts pipe:1', isDefault: false },
             { id: 'ffmpeg-nvidia-reconnect', name: 'ffmpeg (NVIDIA reconnect)', command: '-user_agent "{userAgent}" -re -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -i "{streamUrl}" -c:v h264_nvenc -preset p6 -tune hq -c:a copy -f mpegts pipe:1', isDefault: false },
             { id: 'redirect', name: 'Redirect (No Transcoding)', command: 'redirect', isDefault: false }
         ],
@@ -575,8 +598,8 @@ function getSettings() {
                 { id: 'dvr-mp4-nvidia', name: 'NVIDIA NVENC MP4 (H.264/AAC)', command: '-user_agent "{userAgent}" -i "{streamUrl}" -c:v h264_nvenc -preset p6 -tune hq -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false },
                 { id: 'dvr-mp4-intel', name: 'Intel QSV MP4 (H.264/AAC)', command: '-hwaccel qsv -hwaccel_output_format qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -vf scale_qsv=format=nv12 -c:a aac -ac 2 -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false },
                 // NEW: Add this line for VA-API recording
-                { id: 'dvr-mp4-vaapi', name: 'VA-API MP4 (H.264/AAC)', command: '-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf "format=nv12|vaapi,hwupload" -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false },
-				{ id: 'dvr-mp4-radeon-vaapi', name: 'Radeon/AMD VA-API MP4 (H.264/AAC)', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false }
+                { id: 'dvr-mp4-vaapi', name: 'VA-API MP4 (H.264/AAC)', command: '-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf \'format=nv12,hwupload\' -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false },
+				{ id: 'dvr-mp4-radeon-vaapi', name: 'Radeon/AMD VA-API MP4 (H.264/AAC)', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -preset medium -vf scale_vaapi=format=nv12 -c:a aac -ac 2 -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false }
             ]
         },
         activeUserAgentId: `default-ua-1724778434000`,
