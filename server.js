@@ -410,62 +410,42 @@ async function detectHardwareAcceleration() {
         }
     });
 
-    // MODIFIED: Use 'vainfo' for more robust detection of AMD, Intel VA-API and QSV
-    // vainfo can give stderr as well as stdout, especially in dockers, so don't assume
-    // presence of err|stderr means no stdout.  Check stdout first.
+    // MODIFIED: Use 'vainfo' for more robust detection of AMD, Intel VA-API
+    // and QSV GPUs. vainfo gives driver detection info on stderr and full
+    // detected GPU detail on stdout.
     exec('vainfo', (err, stdout, stderr) => {
-        if (stdout) {
+        if (stderr) {
             let found = false;
             const trimmed_stdout = stdout.trim()
 
             // iHD driver is for modern Intel GPUs (Gen9+) and is preferred for QSV
-            if (stdout.includes('iHD_drv_video.so')) {
+            if (stderr.includes('iHD_drv_video.so')) {
                 detectedHardware.intel_qsv = extractVainfoGPUDetails(trimmed_stdout);
                 found = true;
             }
             // AMD Radeon detection
-            if (stdout.includes('AMD')) {
+            if (stderr.includes('radeonsi_drv_video.so')) {
                 detectedHardware.radeon_vaapi = extractVainfoGPUDetails(trimmed_stdout);
                 found = true;
             }
             // i965 driver is for older Intel GPUs (pre-Gen9)
-            if (stdout.includes('i965_drv_video.so')) {
+            if (stderr.includes('i965_drv_video.so')) {
                 detectedHardware.intel_vaapi = extractVainfoGPUDetails(trimmed_stdout);
                 found = true;
             }
 
             if (!found) {
-                // vainfo dumped some regular output but not for a GPU we expect.
-                // So log the information.
-                console.log(`[HW] Unexpected GPU detected: ${stdout.trim()}`);
+                // Show full vainfo output for info/debug purposes.
+                console.log("[HW] vainfo did not detect any recognized GPU");
+                if (stderr) {
+                    console.log(`[HW] vainfo init (stderr): ${stderr.trim()}`);
+                }
+                if (stdout) {
+                    console.log(`[HW] vainfo GPU info (stdout): ${stdout.trim()}`);
+                }
             }
-            // Since vainfo can detect a GPU but still show errors, print any.
-            if (stderr) {
-              console.log(`[HW] Possible Issue detected in vainfo stderr: ${stderr.trim()}`);
-            }
-        } else if (err || stderr) {
-            // vainfo did not detect a GPU so log any errors for debug.
-            console.log(`[HW] Issue detected by vainfo stderr: ${stderr.trim()}`);
-            detectedHardware.intel_qsv = null;
-            detectedHardware.intel_vaapi = null;
-            detectedHardware.radeon_vaapi = null;
         }
     });
-	// use Direct Rendering Manager as display to check HW directly whether or not physical display is connected
-	exec('vainfo --display drm', (err, stdout, stderr) => {
-        if (err) {
-            console.log('[HW] VA-API Radeon/AMD not detected or vainfo command failed.');
-            detectedHardware.radeon_vaapi = null;
-        } else {
-            // radeonsi driver is Radeon/AMD that supports VA-API
-            // vainfo outputs logs to stderr
-            if (stderr.includes('radeonsi_drv_video.so')){
-                detectedHardware.radeon_vaapi = 'Radeon/AMD VA-API';
-                console.log('[HW] Radeon VA-API (radeonsi driver) detected.');
-            }
-        }
-    });	
-	
 }
 
 // MODIFIED: This function is now mostly for multi-view scenarios.
