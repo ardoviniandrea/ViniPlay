@@ -5,6 +5,7 @@
 require('dotenv').config();
 
 const express = require('express');
+const crypto = require('crypto');
 const { spawn, exec } = require('child_process');
 const http = require('http');
 const https = require('https');
@@ -235,6 +236,25 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
                     db.run("ALTER TABLE stream_history ADD COLUMN stream_profile_name TEXT", () => {});
                 }
             });
+            // --- DVR Job Loading and Scheduling (Moved from main execution flow) ---
+            console.log('[DVR] Loading and scheduling all pending DVR jobs from database...');
+            db.run("UPDATE dvr_jobs SET status = 'error', errorMessage = 'Server restarted during recording.' WHERE status = 'recording'", [], (err) => {
+                if (err) {
+                    console.error('[DVR] Error updating recording jobs status on startup:', err.message);
+                }
+            });
+
+            db.all("SELECT * FROM dvr_jobs WHERE status = 'scheduled'", [], (err, jobs) => {
+                if (err) {
+                    console.error('[DVR] Error fetching pending DVR jobs:', err);
+                    return;
+                }
+                jobs.forEach(job => {
+                    scheduleDvrJob(job);
+                });
+                console.log(`[DVR] Loaded and scheduled ${jobs.length} pending DVR jobs.`);
+            });
+            // --- End DVR Job Loading and Scheduling ---
         });
     }
 });
@@ -244,9 +264,85 @@ app.use(express.static(PUBLIC_DIR));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-const sessionSecret = process.env.SESSION_SECRET;
-if (!sessionSecret || sessionSecret.includes('replace_this')) {
-    console.warn('[SECURITY] Using a weak or default SESSION_SECRET.');
+const updateAndScheduleSourceRefreshes = () => {
+    console.log('[SCHEDULER] Updating and scheduling all source refreshes...');
+    const settings = getSettings();
+    const allSources = [...(settings.m3uSources || []), ...(settings.epgSources || [])];
+    const activeUrlSources = new Set();
+
+    allSources.forEach(source => {
+        if (source.type === 'url' && source.isActive && source.refreshHours > 0) {
+            activeUrlSources.add(source.id);
+            if (sourceRefreshTimers.has(source.id)) {
+                clearTimeout(sourceRefreshTimers.get(source.id));
+            }
+
+            console.log(`[SCHEDULER] Scheduling refresh for "${source.name}" (ID: ${source.id}) every ${source.refreshHours} hours.`);
+            
+            const scheduleNext = () => {
+                const timeoutId = setTimeout(async () => {
+                    console.log(`[SCHEDULER_RUN] Auto-refresh triggered for "${source.name}".`);
+                    try {
+                        const result = await processAndMergeSources();
+                        if(result.success) {
+                            fs.writeFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
+                            console.log(`[SCHEDULER_RUN] Successfully refreshed and processed sources for "${source.name}".`);
+                        }
+                    } catch (error) {
+                        console.error(`[SCHEDULER_RUN] Auto-refresh for "${source.name}" failed:`, error.message);
+                    }
+                    scheduleNext();
+                }, source.refreshHours * 3600 * 1000);
+
+                sourceRefreshTimers.set(source.id, timeoutId);
+            };
+
+            scheduleNext();
+        }
+    });
+
+    for (const [sourceId, timeoutId] of sourceRefreshTimers.entries()) {
+        if (!activeUrlSources.has(sourceId)) {
+            console.log(`[SCHEDULER] Clearing obsolete refresh timer for source ID: ${sourceId}`);
+            clearTimeout(timeoutId);
+            sourceRefreshTimers.delete(sourceId);
+        }
+    }
+    console.log(`[SCHEDULER] Finished scheduling. Active timers: ${sourceRefreshTimers.size}`);
+};
+
+function saveSettings(settings) {
+    try {
+        fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
+        console.log('[SETTINGS] Settings saved successfully.');
+        updateAndScheduleSourceRefreshes();
+    } catch (e) {
+        console.error("[SETTINGS] Error saving settings:", e);
+    }
+}
+
+// --- Session Management ---
+let sessionSecret = process.env.SESSION_SECRET;
+
+if (!sessionSecret) {
+    console.log('[SECURITY] SESSION_SECRET not found in environment. Checking settings.json...');
+    let settings = getSettings();
+    if (settings.generatedSessionSecret) {
+        console.log('[SECURITY] Found existing session secret in settings.json.');
+        sessionSecret = settings.generatedSessionSecret;
+    } else {
+        console.log('[SECURITY] No secret in settings.json. Generating a new one...');
+        sessionSecret = crypto.randomBytes(64).toString('hex');
+        settings.generatedSessionSecret = sessionSecret;
+        saveSettings(settings);
+        console.log('[SECURITY] New session secret generated and saved to settings.json.');
+    }
+} else {
+    console.log('[SECURITY] Loaded SESSION_SECRET from environment variable.');
+}
+
+if (sessionSecret.includes('replace_this')) {
+    console.warn('[SECURITY] Using a weak or default SESSION_SECRET. Please replace it.');
 }
 
 app.use(
@@ -667,8 +763,10 @@ async function triggerVodRefreshForProvider(provider, dbInstance, sendStatus = (
     sendStatus(`Triggering VOD refresh for ${provider.name}...`, 'info');
 
     try {
+        const settings = getSettings();
+        const activeUserAgent = settings.userAgents.find(ua => ua.id === settings.activeUserAgentId)?.value || 'VLC/3.0.20 (Linux; x86_64)';
         // Call the main processing function from vodProcessor.js
-        await refreshVodContent(dbInstance, dbGet, dbAll, dbRun, provider, sendStatus);
+        await refreshVodContent(dbInstance, dbGet, dbAll, dbRun, provider, sendStatus, activeUserAgent);
 
         console.log(`[VOD Trigger] Successfully finished VOD refresh for provider: ${provider.name}`);
 
@@ -679,16 +777,7 @@ async function triggerVodRefreshForProvider(provider, dbInstance, sendStatus = (
 }
 
 
-// ... existing helper functions (saveSettings, fetchUrlContent, parseEpgTime, processAndMergeSources, updateAndScheduleSourceRefreshes) remain the same ...
-function saveSettings(settings) {
-    try {
-        fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
-        console.log('[SETTINGS] Settings saved successfully.');
-        updateAndScheduleSourceRefreshes();
-    } catch (e) {
-        console.error("[SETTINGS] Error saving settings:", e);
-    }
-}
+// ... existing helper functions (fetchUrlContent, parseEpgTime, processAndMergeSources) remain the same ...
 
 function fetchUrlContent(url, options = {}) { // <-- MODIFIED
     return new Promise((resolve, reject) => {
@@ -834,8 +923,8 @@ async function processAndMergeSources(req) {
                     throw new Error("XC source is missing server, username, or password.");
                 }
 
-                // Use the default user agent for XC requests
-                m3uFetchOptions = { headers: { 'User-Agent': 'VLC/3.0.20 (Linux; x86_64)' } };
+                const activeUserAgent = settings.userAgents.find(ua => ua.id === settings.activeUserAgentId)?.value || 'VLC/3.0.20 (Linux; x86_64)';
+                m3uFetchOptions = { headers: { 'User-Agent': activeUserAgent } };
 
                 // Fetch live streams from XC API
                 const liveStreamsUrl = `${server}/player_api.php?username=${username}&password=${password}&action=get_live_streams`;
@@ -1131,52 +1220,6 @@ async function processAndMergeSources(req) {
     return { success: true, message: 'Sources merged successfully.', updatedSettings: settings };
 } 
 
-const updateAndScheduleSourceRefreshes = () => {
-    console.log('[SCHEDULER] Updating and scheduling all source refreshes...');
-    const settings = getSettings();
-    const allSources = [...(settings.m3uSources || []), ...(settings.epgSources || [])];
-    const activeUrlSources = new Set();
-
-    allSources.forEach(source => {
-        if (source.type === 'url' && source.isActive && source.refreshHours > 0) {
-            activeUrlSources.add(source.id);
-            if (sourceRefreshTimers.has(source.id)) {
-                clearTimeout(sourceRefreshTimers.get(source.id));
-            }
-
-            console.log(`[SCHEDULER] Scheduling refresh for "${source.name}" (ID: ${source.id}) every ${source.refreshHours} hours.`);
-            
-            const scheduleNext = () => {
-                const timeoutId = setTimeout(async () => {
-                    console.log(`[SCHEDULER_RUN] Auto-refresh triggered for "${source.name}".`);
-                    try {
-                        const result = await processAndMergeSources();
-                        if(result.success) {
-                            fs.writeFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
-                            console.log(`[SCHEDULER_RUN] Successfully refreshed and processed sources for "${source.name}".`);
-                        }
-                    } catch (error) {
-                        console.error(`[SCHEDULER_RUN] Auto-refresh for "${source.name}" failed:`, error.message);
-                    }
-                    scheduleNext();
-                }, source.refreshHours * 3600 * 1000);
-
-                sourceRefreshTimers.set(source.id, timeoutId);
-            };
-
-            scheduleNext();
-        }
-    });
-
-    for (const [sourceId, timeoutId] of sourceRefreshTimers.entries()) {
-        if (!activeUrlSources.has(sourceId)) {
-            console.log(`[SCHEDULER] Clearing obsolete refresh timer for source ID: ${sourceId}`);
-            clearTimeout(timeoutId);
-            sourceRefreshTimers.delete(sourceId);
-        }
-    }
-    console.log(`[SCHEDULER] Finished scheduling. Active timers: ${sourceRefreshTimers.size}`);
-};
 // ... existing helper functions ...
 
 // --- Authentication API Endpoints ---
@@ -1324,7 +1367,9 @@ app.post('/api/sources/fetch-groups', requireAuth, async (req, res) => {
                 return res.status(400).json({ error: 'XC source requires server, username, and password.' });
             }
             console.log('[API_GROUPS] Source is XC type. Using XtreamClient to fetch all categories.');
-            const client = new XtreamClient(xcInfo.server, xcInfo.username, xcInfo.password);
+            const settings = getSettings();
+            const activeUserAgent = settings.userAgents.find(ua => ua.id === settings.activeUserAgentId)?.value || 'VLC/3.0.20 (Linux; x86_64)';
+            const client = new XtreamClient(xcInfo.server, xcInfo.username, xcInfo.password, activeUserAgent);
             const allCategories = await client.getAllCategories();
             return res.json({ success: true, groups: allCategories, usedCache: false });
         }
@@ -1815,7 +1860,8 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
                 return res.status(500).json({ error: 'Failed to parse XC provider credentials.' });
             }
 
-            const client = new XtreamClient(xcInfo.server, xcInfo.username, xcInfo.password);
+            const activeUserAgent = settings.userAgents.find(ua => ua.id === settings.activeUserAgentId)?.value || 'VLC/3.0.20 (Linux; x86_64)';
+            const client = new XtreamClient(xcInfo.server, xcInfo.username, xcInfo.password, activeUserAgent);
             let seriesDetails;
             try {
                 seriesDetails = await client.getSeriesInfo(relation.external_series_id);
@@ -3512,25 +3558,7 @@ function scheduleDvrJob(job) {
 }
 
 
-function loadAndScheduleAllDvrJobs() {
-    console.log('[DVR] Loading and scheduling all pending DVR jobs from database...');
-    db.run("UPDATE dvr_jobs SET status = 'error', errorMessage = 'Server restarted during recording.' WHERE status = 'recording'", [], (err) => {
-        if (err) {
-            console.error('[DVR] Error updating recording jobs status on startup:', err.message);
-        } else {
-            console.log("[DVR] Updated status of previous 'recording' jobs to 'error'.");
-        }
-        
-        db.all("SELECT * FROM dvr_jobs WHERE status = 'scheduled'", [], (err, jobs) => {
-            if (err) {
-                console.error('[DVR] Error fetching pending DVR jobs:', err);
-                return;
-            }
-            console.log(`[DVR] Found ${jobs.length} jobs to schedule.`);
-            jobs.forEach(scheduleDvrJob);
-        });
-    });
-}
+
 // ... existing functions ...
 
 async function checkForConflicts(newJob, userId) {
@@ -4083,8 +4111,7 @@ detectHardwareAcceleration().then(() => {
         schedule.scheduleJob('0 2 * * *', autoDeleteOldRecordings);
         console.log('[DVR_STORAGE] Scheduled daily cleanup of old recordings.');
         
-        // **NEW: Load and schedule DVR jobs on startup**
-        loadAndScheduleAllDvrJobs();
+
     });
 });
 
