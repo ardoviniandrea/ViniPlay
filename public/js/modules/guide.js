@@ -8,7 +8,7 @@
 
 import { appState, guideState, UIElements, dvrState } from './state.js';
 import { saveUserSetting } from './api.js';
-import { parseM3U } from './utils.js';
+import { parseM3U, formatTimeWithOffset } from './utils.js';
 import { playChannel } from './player.js';
 import { showNotification, openModal, closeModal } from './ui.js';
 import { addOrRemoveNotification, findNotificationForProgram } from './notification.js';
@@ -72,7 +72,8 @@ export function openProgramDetails(progItem) {
     if (detailsTitle) detailsTitle.textContent = programData.title;
     const progStart = new Date(programData.start);
     const progStop = new Date(programData.stop);
-    if (detailsTime) detailsTime.textContent = `${progStart.toLocaleTimeString([],{hour:'2-digit', minute:'2-digit'})} - ${progStop.toLocaleTimeString([],{hour:'2-digit', minute:'2-digit'})}`;
+    const offset = guideState.settings.timezoneOffset || 0;
+    if (detailsTime) detailsTime.textContent = `${formatTimeWithOffset(progStart, offset)} - ${formatTimeWithOffset(progStop, offset)}`;
     if (detailsDesc) detailsDesc.textContent = programData.desc || "No description available.";
 
     if (detailsPlayBtn) {
@@ -388,9 +389,10 @@ const renderGuide = (channelsToRender, resetScroll = false) => {
         const timeBarCellEl = UIElements.guideGrid.querySelector('.time-bar-cell');
         if (timeBarCellEl) {
             timeBarCellEl.innerHTML = '';
+            const offset = guideState.settings.timezoneOffset || 0;
             for (let i = 0; i < guideState.guideDurationHours; i++) {
                 const time = new Date(guideStartUtc.getTime() + i * 3600 * 1000);
-                timeBarCellEl.innerHTML += `<div class="absolute top-0 bottom-0 flex items-center justify-start px-2 text-xs text-gray-400 border-r border-gray-700/50" style="left: ${i * guideState.hourWidthPixels}px; width:${guideState.hourWidthPixels}px;">${time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>`;
+                timeBarCellEl.innerHTML += `<div class="absolute top-0 bottom-0 flex items-center justify-start px-2 text-xs text-gray-400 border-r border-gray-700/50" style="left: ${i * guideState.hourWidthPixels}px; width:${guideState.hourWidthPixels}px;">${formatTimeWithOffset(time, offset)}</div>`;
             }
             timeBarCellEl.style.width = `${timelineWidth}px`;
         }
@@ -492,8 +494,9 @@ const renderGuide = (channelsToRender, resetScroll = false) => {
                     const dvrJob = findDvrJobForProgram({ ...prog, channelId: channel.id });
                     const recordingClass = dvrJob ? `has-recording status-${dvrJob.status}` : '';
 
+                    const offset = guideState.settings.timezoneOffset || 0;
 
-                    programsHTML += `<div class="programme-item absolute top-1 bottom-1 bg-gray-800 rounded-md p-2 overflow-hidden flex flex-col justify-center z-5 ${isLive ? 'live' : ''} ${progStop < now ? 'past' : ''} ${notificationClass} ${recordingClass}" style="left:${left}px; width:${Math.max(0, width - 2)}px" data-channel-url="${channel.url}" data-channel-id="${channel.id}" data-channel-name="${channelName}" data-prog-title="${prog.title}" data-prog-desc="${prog.desc}" data-prog-start="${progStart.toISOString()}" data-prog-stop="${progStop.toISOString()}" data-prog-id="${uniqueProgramId}"><div class="programme-progress" style="width:${progressWidth}%"></div><p class="prog-title text-white font-semibold truncate relative z-10">${prog.title}</p><p class="prog-time text-gray-400 truncate relative z-10">${progStart.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} - ${progStop.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</p></div>`;
+                    programsHTML += `<div class="programme-item absolute top-1 bottom-1 bg-gray-800 rounded-md p-2 overflow-hidden flex flex-col justify-center z-5 ${isLive ? 'live' : ''} ${progStop < now ? 'past' : ''} ${notificationClass} ${recordingClass}" style="left:${left}px; width:${Math.max(0, width - 2)}px" data-channel-url="${channel.url}" data-channel-id="${channel.id}" data-channel-name="${channelName}" data-prog-title="${prog.title}" data-prog-desc="${prog.desc}" data-prog-start="${progStart.toISOString()}" data-prog-stop="${progStop.toISOString()}" data-prog-id="${uniqueProgramId}"><div class="programme-progress" style="width:${progressWidth}%"></div><p class="prog-title text-white font-semibold truncate relative z-10">${prog.title}</p><p class="prog-time text-gray-400 truncate relative z-10">${formatTimeWithOffset(progStart, offset)} - ${formatTimeWithOffset(progStop, offset)}</p></div>`;
                 });
                 const timelineRowHTML = `<div class="timeline-row" style="width: ${timelineWidth}px;">${programsHTML}</div>`;
 
@@ -617,13 +620,18 @@ const populateGroupFilter = () => {
  * Populates the "source" filter dropdown.
  */
 const populateSourceFilter = () => {
-    const currentVal = UIElements.sourceFilter.value;
+    const savedFilter = guideState.settings.activeSourceFilter;
     UIElements.sourceFilter.innerHTML = `<option value="all">All Sources</option>`;
     [...guideState.channelSources].sort((a, b) => a.localeCompare(b)).forEach(source => {
         const cleanSource = source.replace(/"/g, '&quot;');
         UIElements.sourceFilter.innerHTML += `<option value="${cleanSource}">${source}</option>`;
     });
-    UIElements.sourceFilter.value = currentVal && UIElements.sourceFilter.querySelector(`option[value="${currentVal.replace(/"/g, '&quot;')}}"]`) ? currentVal : 'all';
+    
+    if (savedFilter && UIElements.sourceFilter.querySelector(`option[value="${savedFilter.replace(/"/g, '&quot;')}"]`)) {
+        UIElements.sourceFilter.value = savedFilter;
+    } else {
+        UIElements.sourceFilter.value = 'all';
+    }
 
     UIElements.sourceFilter.classList.remove('hidden');
     UIElements.sourceFilter.style.display = guideState.channelSources.size <= 1 ? 'none' : 'block';
@@ -825,7 +833,12 @@ export function setupGuideEventListeners() {
         guideState.settings.activeGroupFilter = selectedGroup;
         handleSearchAndFilter();
     });
-    UIElements.sourceFilter.addEventListener('change', () => handleSearchAndFilter());
+    UIElements.sourceFilter.addEventListener('change', () => {
+        const selectedSource = UIElements.sourceFilter.value;
+        saveUserSetting('activeSourceFilter', selectedSource);
+        guideState.settings.activeSourceFilter = selectedSource;
+        handleSearchAndFilter();
+    });
     UIElements.searchInput.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') {
             handleSearchAndFilter(false);
