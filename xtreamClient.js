@@ -2,7 +2,7 @@
 const axios = require('axios');
 
 class XtreamClient {
-    constructor(baseUrl, username, password) {
+    constructor(baseUrl, username, password, userAgent = 'Xtream-JS-Client') {
         if (!baseUrl || typeof baseUrl !== 'string') {
             throw new Error('[XC Client Constructor] Invalid or missing baseUrl provided.');
         }
@@ -21,9 +21,9 @@ class XtreamClient {
     
         this.client = axios.create({
             timeout: 60000, // 60 second timeout
-            headers: { 'User-Agent': 'Xtream-JS-Client' }
+            headers: { 'User-Agent': userAgent }
         });
-        console.log(`[XC Client Constructor] Client initialized for base URL: ${this.baseUrl}`); // Added log
+        console.log(`[XC Client Constructor] Client initialized for base URL: ${this.baseUrl} with User-Agent: ${userAgent}`); // Added log
     }
 
     /**
