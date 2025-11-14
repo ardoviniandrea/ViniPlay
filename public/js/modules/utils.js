@@ -43,3 +43,28 @@ export function parseM3U(data) {
     }
     return channels;
 }
+
+/**
+ * NEW: Formats a date object to a time string with a specified UTC offset.
+ * @param {Date} date - The date object to format.
+ * @param {number} offsetHours - The timezone offset in hours (e.g., -5 for EST).
+ * @returns {string} The formatted time string (e.g., "14:30").
+ */
+export function formatTimeWithOffset(date, offsetHours = 0) {
+    if (!(date instanceof Date)) {
+        date = new Date(date);
+    }
+
+    // Calculate the UTC time in milliseconds
+    const utcTime = date.getTime() + (date.getTimezoneOffset() * 60000);
+
+    // Apply the desired offset
+    const targetTime = new Date(utcTime + (offsetHours * 3600000));
+
+    // Format the time using toLocaleTimeString with specified options for consistency
+    return targetTime.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false // Using 24-hour format for simplicity
+    });
+}
