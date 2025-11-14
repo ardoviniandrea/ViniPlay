@@ -205,7 +205,7 @@ async function handleHardwareDetection() {
              if (infoText !== 'None') {
                 infoText += ` & ${hardware.intel_vaapi}`;
              } else {
-                infoText = hardware.intel_Vaapi;
+                infoText = hardware.intel_vaapi;
              }
             console.log(`[SETTINGS] Intel VA-API found.`);
         }
