@@ -161,7 +161,7 @@ function populateHardwareInfoModal(hardware) {
     if (hardware.radeon_vaapi) {
         contentHTML += `
             <div class="mt-4 pt-4 border-t border-gray-700">
-                <h4 class="text-lg font-semibold text-white">Intel (VA-API)</h4>
+                <h4 class="text-lg font-semibold text-white">AMD Radeon (VA-API)</h4>
                 <p class="text-xs text-gray-400 mb-2">GPU: ${hardware.radeon_vaapi}</p>
                 <p class="text-sm mb-2">Uses the integrated GPU on Radeon processors. A great low-power option for transcoding.</p>
                 <p class="text-sm font-semibold mb-1">Example Stream Command:</p>
