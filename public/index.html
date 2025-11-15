@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VINI PLAY</title>
-    <link rel="icon" type="image/png" href="https://i.imgur.com/rwa8SjI.png">
+    <link rel="icon" type="image/png" href="/viniplay.png">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/mpegts.js/dist/mpegts.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/fuse.js/dist/fuse.min.js"></script>
@@ -508,7 +508,8 @@
             @apply flex items-center justify-center px-3 h-8 leading-tight text-gray-400 bg-gray-800 border border-gray-700 hover:bg-gray-700 hover:text-white;
         }
         .pagination-btn.active {
-            @apply z-10 text-blue-500 border-blue-600 bg-gray-700;
+            @apply z-10 text-white font-bold border-blue-600 bg-blue-600;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.5); /* blue-500 with 50% opacity */
         }
         .pagination-btn:first-child { @apply rounded-l-lg; }
         .pagination-btn:last-child { @apply rounded-r-lg; }
@@ -702,7 +703,7 @@
     <!-- Auth Container -->
     <div id="auth-container" class="fixed inset-0 bg-gray-900 z-[100] flex items-center justify-center p-4">
         <div class="w-full max-w-sm mx-auto">
-             <img src="https://i.imgur.com/rwa8SjI.png" alt="VINI PLAY Logo" class="h-16 w-16 mx-auto mb-4">
+             <img src="/viniplay.png" alt="VINI PLAY Logo" class="h-16 w-16 mx-auto mb-4">
             <form id="login-form" class="hidden bg-gray-800 p-8 rounded-xl shadow-lg space-y-6">
                 <h2 class="text-2xl font-bold text-center text-white">Welcome Back</h2>
                 <div id="login-error" class="hidden bg-red-900/50 border border-red-700/50 text-red-300 px-4 py-2 rounded-md text-sm"></div>
@@ -747,7 +748,7 @@
                 <button id="mobile-menu-toggle" class="lg:hidden text-gray-300 hover:text-white p-2 rounded-md transition-colors">
                     <span data-icon="menu"></span>
                 </button>
-                <img src="https://i.imgur.com/rwa8SjI.png" alt="VINI PLAY Logo" class="h-8 w-8">
+                <img src="/viniplay.png" alt="VINI PLAY Logo" class="h-8 w-8">
                 <h1 class="text-xl sm:text-2xl font-bold">VINI PLAY</h1>
             </div>
             <div class="flex items-center gap-4">
