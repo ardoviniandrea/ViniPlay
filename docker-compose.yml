@@ -21,7 +21,11 @@ services:
     # 'unless-stopped' ensures the container automatically restarts if it crashes,
     # but not when you manually stop it.
     restart: unless-stopped
-    
+
+    # Cleans up the vainfo and ffmpeg logs for AMD gpu's.
+    security_opt:
+      - "seccomp=allow-kcmp.json"
+
     # Add volumes for persistent data.
     # This maps the './viniplay-data' directory on your host to the '/data'
     # directory inside the container for app settings and sources.
