@@ -2618,7 +2618,9 @@ app.get('/stream', requireAuth, async (req, res) => {
     
     console.log(`[STREAM] Using Profile='${profile.name}' (ID=${profile.id}), UserAgent='${userAgent.name}'`);
 
-    const commandTemplate = profile.command
+  // Prefix ffmpeg command with "-v level+{loglevel}" here to control log spamming.
+  // Using warning loglevel limits messages to actual warnings and errors.
+    const commandTemplate = "-v level+warning " + profile.command
         .replace(/{streamUrl}/g, streamUrl)
         .replace(/{userAgent}|{clientUserAgent}/g, userAgent.value);
         
@@ -3275,7 +3277,7 @@ async function startRecording(job) {
     const safeFilename = `${job.id}_${job.programTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase()}${fileExtension}`;
     const fullFilePath = path.join(DVR_DIR, safeFilename);
 
-    const commandTemplate = recProfile.command
+    const commandTemplate = "-v level+warning " + recProfile.command
         .replace(/{streamUrl}/g, streamUrlToRecord)
         .replace(/{userAgent}/g, userAgent.value)
         .replace(/{filePath}/g, fullFilePath);
