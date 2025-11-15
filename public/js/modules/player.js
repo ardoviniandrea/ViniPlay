@@ -146,6 +146,7 @@ export const stopAndCleanupPlayer = async () => { // MODIFIED: Made function asy
 
 /**
  * Updates the stream info overlay with the latest stats from mpegts.js.
+ * mpegts.js reports speed in KB/s so divide by 1024 for MB/s.
  */
 function updateStreamInfo() {
     if (!appState.player || !appState.player.statisticsInfo) return;
@@ -154,14 +155,21 @@ function updateStreamInfo() {
     const video = UIElements.videoElement;
 
     const resolution = (video.videoWidth && video.videoHeight) ? `${video.videoWidth}x${video.videoHeight}` : 'N/A';
-    const speed = `${(stats.speed / 1024).toFixed(2)} KB/s`;
-    const fps = (stats.decodedFrames > 0 && typeof stats.fps === 'number') ? stats.fps.toFixed(2) : '0.00';
+    const speed = `${(stats.speed / 1024).toFixed(2)} MB/s`;
+    const dropped = (stats.droppedFrames >= 0 && typeof stats.droppedFrames === 'number') ? stats.droppedFrames : 'N/A'
     const buffer = video.buffered.length > 0 ? `${(video.buffered.end(0) - video.currentTime).toFixed(2)}s` : '0.00s';
+    const mediaInfo = appState.player.mediaInfo;
+    const fps = mediaInfo.fps;
+    const videoCodec = mediaInfo.videoCodec;
+    const audioCodec = mediaInfo.audioCodec;
 
     UIElements.streamInfoResolution.textContent = `Resolution: ${resolution}`;
     UIElements.streamInfoBandwidth.textContent = `Bandwidth: ${speed}`;
     UIElements.streamInfoFps.textContent = `FPS: ${fps}`;
+    UIElements.streamInfoDropped.textContent = `Dropped: ${dropped}`;
     UIElements.streamInfoBuffer.textContent = `Buffer: ${buffer}`;
+    UIElements.streamInfoVideo.textContent = `V Codec: ${videoCodec}`;
+    UIElements.streamInfoAudio.textContent = `A Codec: ${audioCodec}`;
 }
 
 
