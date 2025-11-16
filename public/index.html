@@ -1334,7 +1334,37 @@
                             </div>
                         </div>
                     </div>
-                    
+ 
+                    <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
+                        <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">FFmpeg Logging Settings</h2>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-8">
+                            <div>
+                                <label for="player-log-level-select" class="block text-sm font-medium text-gray-400 mb-2">Player FFmpeg Logging Level</label>
+                                <p class="text-xs text-gray-500 mb-2">Tell player what ffmpeg messages should be logged. Typically not changed unless debugging.</p>
+                                <select id="player-log-level-select" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500 mb-2">
+                                    <option value="error">[error] Log all errors including handled ones</option>
+                                    <option value="warning" selected>[warning] Log all warnings and errors</option>
+                                    <option value="info">[info] Log info messages, warnings and errors</option>
+                                    <option value="verbose">[verbose] Log more info messages, warnings and errors</option>
+                                    <option value="debug">[debug] Log absolutely everything including debug messages</option>
+
+                                </select>
+                            </div>
+                            <div>
+                                <label for="dvr-log-level-select" class="block text-sm font-medium text-gray-400 mb-2">DVR FFmpeg Logging Level</label>
+                                <p class="text-xs text-gray-500 mb-2">Tell DVR what ffmpeg messages should be logged. Typically not changed  unless debugging.</p>
+                                <select id="dvr-log-level-select" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500 mb-2">
+                                    <option value="error">[error] Log all errors including handled ones</option>
+                                    <option value="warning" selected>[warning] Log all warnings and errors</option>
+                                    <option value="info">[info] Log info messages, warnings and errors</option>
+                                    <option value="verbose">[verbose] Log more info messages, warnings and errors</option>
+                                    <option value="debug">[debug] Log absolutely everything including debug messages</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+  
                     <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
                         <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Storage Management</h2>
                         <div class="space-y-4">

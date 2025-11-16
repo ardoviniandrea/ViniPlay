@@ -327,6 +327,8 @@ export const updateUIFromSettings = async () => {
     }
     
     settings.searchScope = settings.searchScope || 'all_channels_unfiltered';
+    settings.playerLogLevel = settings.playerLogLevel || 'warning';
+    settings.dvrLogLevel = settings.dvrLogLevel || 'warning';
     settings.notificationLeadTime = settings.notificationLeadTime ?? 10;
     
     settings.dvr = settings.dvr || {};
@@ -339,6 +341,8 @@ export const updateUIFromSettings = async () => {
     UIElements.timezoneOffsetSelect.value = settings.timezoneOffset;
     fetchAndDisplayPublicIp();
     UIElements.searchScopeSelect.value = settings.searchScope;
+    UIElements.playerLogLevelSelect.value = settings.playerLogLevel;
+    UIElements.dvrLogLevelSelect.value = settings.dvrLogLevel;
     UIElements.notificationLeadTimeInput.value = settings.notificationLeadTime;
     
     // Update DVR inputs
@@ -800,6 +804,8 @@ export function setupSettingsEventListeners() {
     // --- General Settings Inputs ---
     UIElements.timezoneOffsetSelect.addEventListener('change', (e) => saveSettingAndNotify(saveGlobalSetting, { timezoneOffset: parseInt(e.target.value, 10) }));
     UIElements.searchScopeSelect.addEventListener('change', (e) => saveSettingAndNotify(saveGlobalSetting, { searchScope: e.target.value }));
+    UIElements.playerLogLevelSelect.addEventListener('change', (e) => saveSettingAndNotify(saveGlobalSetting, { playerLogLevel: e.target.value }));
+    UIElements.dvrLogLevelSelect.addEventListener('change', (e) => saveSettingAndNotify(saveGlobalSetting, { dvrLogLevel: e.target.value }));
     UIElements.notificationLeadTimeInput.addEventListener('change', async (e) => {
         const value = parseInt(e.target.value, 10);
         if (isNaN(value) || value < 1) {
