@@ -58,14 +58,38 @@ async function addDefaultGpuProfiles(hardware) {
         }
     }
 
-    // Intel Profiles
-    if (hardware.intel) {
+    // Intel QSV Profiles
+    if (hardware.intel_qsv) {
         if (!streamProfiles.some(p => p.id === 'ffmpeg-intel')) {
             streamProfiles.push({ id: 'ffmpeg-intel', name: 'ffmpeg (Intel QSV)', command: '-hwaccel qsv -c:v h264_qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false });
             changesMade = true;
         }
         if (!dvrProfiles.some(p => p.id === 'dvr-mp4-intel')) {
             dvrProfiles.push({ id: 'dvr-mp4-intel', name: 'Intel QSV MP4 (H.264/AAC)', command: '-hwaccel qsv -c:v h264_qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false });
+            changesMade = true;
+        }
+    }
+
+    // Intel VAAPI Profiles
+    if (hardware.intel_vaapi) {
+        if (!streamProfiles.some(p => p.id === 'ffmpeg-vaapi')) {
+            streamProfiles.push({ id: 'ffmpeg-vaapi', name: 'ffmpeg (VA-API) Intel', command: '-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf "format=nv12|vaapi,hwupload" -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false });
+            changesMade = true;
+        }
+        if (!dvrProfiles.some(p => p.id === 'dvr-mp4-vaapi')) {
+            dvrProfiles.push({ id: 'dvr-mp4-vaapi', name: 'Intel VA-API MP4 (H.264/AAC)', command: '-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf \'format=nv12,hwupload\' -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false });
+            changesMade = true;
+        }
+    }
+
+    // Radeon/AMD Profiles
+    if (hardware.radeon_vaapi) {
+        if (!streamProfiles.some(p => p.id === 'ffmpeg-vaapi-amd')) {
+            streamProfiles.push({ id: 'ffmpeg-vaapi-amd', name: 'ffmpeg (VA-API) Radeon/AMD', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false });
+            changesMade = true;
+        }
+        if (!dvrProfiles.some(p => p.id === 'dvr-mp4-radeon-vaapi')) {
+            dvrProfiles.push({ id: 'dvr-mp4-radeon-vaapi', name: 'Radeon/AMD VA-API MP4 (H.264/AAC)', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false });
             changesMade = true;
         }
     }
@@ -106,10 +130,11 @@ function populateHardwareInfoModal(hardware) {
         `;
     }
 
-    if (hardware.intel) {
+    if (hardware.intel_qsv) {
         contentHTML += `
             <div class="mt-4 pt-4 border-t border-gray-700">
                 <h4 class="text-lg font-semibold text-white">Intel (Quick Sync Video)</h4>
+                <p class="text-xs text-gray-400 mb-2">GPU: ${hardware.intel_qsv}</p>
                 <p class="text-sm mb-2">Uses the integrated GPU on Intel processors. A great low-power option for transcoding.</p>
                 <p class="text-sm font-semibold mb-1">Example Stream Command:</p>
                 <pre class="bg-gray-900 p-2 rounded-md text-xs text-gray-300 font-mono"><code>-hwaccel qsv -c:v h264_qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -c:a aac -b:a 128k -f mpegts pipe:1</code></pre>
@@ -119,6 +144,33 @@ function populateHardwareInfoModal(hardware) {
         `;
     }
 
+    if (hardware.intel_vaapi) {
+        contentHTML += `
+            <div class="mt-4 pt-4 border-t border-gray-700">
+                <h4 class="text-lg font-semibold text-white">Intel (VA-API)</h4>
+                <p class="text-xs text-gray-400 mb-2">GPU: ${hardware.intel_vaapi}</p>
+                <p class="text-sm mb-2">Uses the integrated GPU on Intel processors. A great low-power option for transcoding.</p>
+                <p class="text-sm font-semibold mb-1">Example Stream Command:</p>
+                <pre class="bg-gray-900 p-2 rounded-md text-xs text-gray-300 font-mono"><code>-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf "format=nv12|vaapi,hwupload" -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -f mpegts pipe:1</code></pre>
+                 <p class="text-sm font-semibold mb-1 mt-2">Example Recording Command:</p>
+                <pre class="bg-gray-900 p-2 rounded-md text-xs text-gray-300 font-mono"><code>-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf \'format=nv12,hwupload\' -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"</code></pre>
+            </div>
+        `;
+    }
+
+    if (hardware.radeon_vaapi) {
+        contentHTML += `
+            <div class="mt-4 pt-4 border-t border-gray-700">
+                <h4 class="text-lg font-semibold text-white">AMD Radeon (VA-API)</h4>
+                <p class="text-xs text-gray-400 mb-2">GPU: ${hardware.radeon_vaapi}</p>
+                <p class="text-sm mb-2">Uses the integrated GPU on Radeon processors. A great low-power option for transcoding.</p>
+                <p class="text-sm font-semibold mb-1">Example Stream Command:</p>
+                <pre class="bg-gray-900 p-2 rounded-md text-xs text-gray-300 font-mono"><code>-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -qp 20 -vf scale_vaapi=format=nv12 -c:a aac -ac 2 -b:a 128k -f mpegts pipe:1</code></pre>
+                 <p class="text-sm font-semibold mb-1 mt-2">Example Recording Command:</p>
+                <pre class="bg-gray-900 p-2 rounded-md text-xs text-gray-300 font-mono"><code>-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -preset medium -vf scale_vaapi=format=nv12 -c:a aac -ac 2 -b:a 128k -movflags +faststart -f mp4 "{filePath}"</code></pre>
+            </div>
+        `;
+    }
     UIElements.hardwareInfoModalContent.innerHTML = contentHTML;
 }
 
@@ -139,18 +191,37 @@ async function handleHardwareDetection() {
             infoText = hardware.nvidia;
             console.log(`[SETTINGS] NVIDIA GPU found: ${hardware.nvidia}`);
         }
-        if (hardware.intel) {
+
+        if (hardware.intel_qsv) {
              if (infoText !== 'None') {
-                infoText += ` & ${hardware.intel}`;
+                infoText += ` & ${hardware.intel_qsv}`;
              } else {
-                infoText = hardware.intel;
+                infoText = hardware.intel_qsv;
              }
             console.log(`[SETTINGS] Intel QSV found.`);
+        }
+
+        if (hardware.intel_vaapi) {
+             if (infoText !== 'None') {
+                infoText += ` & ${hardware.intel_vaapi}`;
+             } else {
+                infoText = hardware.intel_vaapi;
+             }
+            console.log(`[SETTINGS] Intel VA-API found.`);
+        }
+
+        if (hardware.radeon_vaapi) {
+             if (infoText !== 'None') {
+                infoText += ` & ${hardware.radeon_vaapi}`;
+             } else {
+                infoText = hardware.radeon_vaapi;
+             }
+            console.log(`[SETTINGS] Radeon/AMD VA-API found.`);
         }
         
         UIElements.hardwareInfoText.textContent = infoText;
 
-        if (hardware.nvidia || hardware.intel) {
+        if (hardware.nvidia || hardware.intel_qsv || hardware.intel_vaapi || hardware.radeon_vaapi) {
             UIElements.hardwareInfoBtn.classList.remove('hidden');
             populateHardwareInfoModal(hardware);
             // This will check for missing profiles, save them, and trigger a UI refresh if needed.
@@ -192,7 +263,7 @@ const renderSourceTable = (sourceType) => {
     sources.forEach(source => {
         const pathDisplay = source.type === 'file' ? (source.path.split('/').pop() || source.path.split('\\').pop()) : source.path;
         const lastUpdated = new Date(source.lastUpdated).toLocaleString();
-        const refreshText = source.type === 'url' && source.refreshHours > 0 ? `Every ${source.refreshHours}h` : 'Disabled';
+        const refreshText = (source.type === 'url' || source.type === 'xc') && source.refreshHours > 0 ? `Every ${source.refreshHours}h` : 'Disabled';
         const tr = document.createElement('tr');
         tr.dataset.sourceId = source.id;
         tr.innerHTML = `
@@ -255,7 +326,9 @@ export const updateUIFromSettings = async () => {
         console.warn("Could not detect user's IANA timezone.", e);
     }
     
-    settings.searchScope = settings.searchScope || 'channels_only_filtered';
+    settings.searchScope = settings.searchScope || 'all_channels_unfiltered';
+    settings.playerLogLevel = settings.playerLogLevel || 'warning';
+    settings.dvrLogLevel = settings.dvrLogLevel || 'warning';
     settings.notificationLeadTime = settings.notificationLeadTime ?? 10;
     
     settings.dvr = settings.dvr || {};
@@ -268,6 +341,8 @@ export const updateUIFromSettings = async () => {
     UIElements.timezoneOffsetSelect.value = settings.timezoneOffset;
     fetchAndDisplayPublicIp();
     UIElements.searchScopeSelect.value = settings.searchScope;
+    UIElements.playerLogLevelSelect.value = settings.playerLogLevel;
+    UIElements.dvrLogLevelSelect.value = settings.dvrLogLevel;
     UIElements.notificationLeadTimeInput.value = settings.notificationLeadTime;
     
     // Update DVR inputs
@@ -729,6 +804,8 @@ export function setupSettingsEventListeners() {
     // --- General Settings Inputs ---
     UIElements.timezoneOffsetSelect.addEventListener('change', (e) => saveSettingAndNotify(saveGlobalSetting, { timezoneOffset: parseInt(e.target.value, 10) }));
     UIElements.searchScopeSelect.addEventListener('change', (e) => saveSettingAndNotify(saveGlobalSetting, { searchScope: e.target.value }));
+    UIElements.playerLogLevelSelect.addEventListener('change', (e) => saveSettingAndNotify(saveGlobalSetting, { playerLogLevel: e.target.value }));
+    UIElements.dvrLogLevelSelect.addEventListener('change', (e) => saveSettingAndNotify(saveGlobalSetting, { dvrLogLevel: e.target.value }));
     UIElements.notificationLeadTimeInput.addEventListener('change', async (e) => {
         const value = parseInt(e.target.value, 10);
         if (isNaN(value) || value < 1) {
@@ -1088,7 +1165,8 @@ export function setupSettingsEventListeners() {
         const lowerCaseSearch = searchTerm.toLowerCase();
         // Keep track of originally selected groups case-insensitively for checking
         const lowerCaseSelected = new Set(selectedGroups.map(g => g.toLowerCase()));
-        const filteredGroups = groupsForType.filter(g => g.toLowerCase().includes(lowerCaseSearch));
+        const re = new RegExp(searchTerm, 'g');
+        const filteredGroups = groupsForType.filter(g => g.match(re));
         const currentSelectedSet = new Set(selectedGroups);
 
         if (filteredGroups.length === 0) {

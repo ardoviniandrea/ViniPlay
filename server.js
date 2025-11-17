@@ -5,6 +5,7 @@
 require('dotenv').config();
 
 const express = require('express');
+const crypto = require('crypto');
 const { spawn, exec } = require('child_process');
 const http = require('http');
 const https = require('https');
@@ -35,7 +36,7 @@ const saltRounds = 10;
 // Initialize global variables at the top-level scope
 let notificationCheckInterval = null;
 const sourceRefreshTimers = new Map();
-let detectedHardware = { nvidia: null, intel_qsv: null, intel_vaapi: null }; // MODIFIED: To store specific Intel GPU info
+let detectedHardware = { nvidia: null, intel_qsv: null, intel_vaapi: null, radeon_vaapi: null }; // MODIFIED: To store specific Intel GPU info
 
 // --- ENHANCEMENT: For Server-Sent Events (SSE) ---
 // This map will store active client connections for real-time updates.
@@ -200,10 +201,18 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
                 provider_id TEXT NOT NULL,
                 episode_id INTEGER NOT NULL,
                 provider_stream_id TEXT NOT NULL, -- The stream ID for the episode from XC
+                container_extension TEXT,
                 last_seen TEXT NOT NULL,
                 FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE,
                 PRIMARY KEY (provider_id, episode_id)
-             )`, (err) => { if (err) console.error("[DB] Error creating 'provider_episode_relations' table:", err.message); });
+             )`, (err) => { 
+                if (err) {
+                    console.error("[DB] Error creating 'provider_episode_relations' table:", err.message);
+                } else {
+                    // Add new column non-destructively
+                    db.run("ALTER TABLE provider_episode_relations ADD COLUMN container_extension TEXT", () => {});
+                }
+            });
             // --- END NEW VOD TABLES ---
             
             //-- ENHANCEMENT: Modify stream history table to include more data for the admin panel.
@@ -227,6 +236,25 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
                     db.run("ALTER TABLE stream_history ADD COLUMN stream_profile_name TEXT", () => {});
                 }
             });
+            // --- DVR Job Loading and Scheduling (Moved from main execution flow) ---
+            console.log('[DVR] Loading and scheduling all pending DVR jobs from database...');
+            db.run("UPDATE dvr_jobs SET status = 'error', errorMessage = 'Server restarted during recording.' WHERE status = 'recording'", [], (err) => {
+                if (err) {
+                    console.error('[DVR] Error updating recording jobs status on startup:', err.message);
+                }
+            });
+
+            db.all("SELECT * FROM dvr_jobs WHERE status = 'scheduled'", [], (err, jobs) => {
+                if (err) {
+                    console.error('[DVR] Error fetching pending DVR jobs:', err);
+                    return;
+                }
+                jobs.forEach(job => {
+                    scheduleDvrJob(job);
+                });
+                console.log(`[DVR] Loaded and scheduled ${jobs.length} pending DVR jobs.`);
+            });
+            // --- End DVR Job Loading and Scheduling ---
         });
     }
 });
@@ -236,9 +264,85 @@ app.use(express.static(PUBLIC_DIR));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-const sessionSecret = process.env.SESSION_SECRET;
-if (!sessionSecret || sessionSecret.includes('replace_this')) {
-    console.warn('[SECURITY] Using a weak or default SESSION_SECRET.');
+const updateAndScheduleSourceRefreshes = () => {
+    console.log('[SCHEDULER] Updating and scheduling all source refreshes...');
+    const settings = getSettings();
+    const allSources = [...(settings.m3uSources || []), ...(settings.epgSources || [])];
+    const activeUrlSources = new Set();
+
+    allSources.forEach(source => {
+        if (source.type === 'url' && source.isActive && source.refreshHours > 0) {
+            activeUrlSources.add(source.id);
+            if (sourceRefreshTimers.has(source.id)) {
+                clearTimeout(sourceRefreshTimers.get(source.id));
+            }
+
+            console.log(`[SCHEDULER] Scheduling refresh for "${source.name}" (ID: ${source.id}) every ${source.refreshHours} hours.`);
+            
+            const scheduleNext = () => {
+                const timeoutId = setTimeout(async () => {
+                    console.log(`[SCHEDULER_RUN] Auto-refresh triggered for "${source.name}".`);
+                    try {
+                        const result = await processAndMergeSources();
+                        if(result.success) {
+                            fs.writeFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
+                            console.log(`[SCHEDULER_RUN] Successfully refreshed and processed sources for "${source.name}".`);
+                        }
+                    } catch (error) {
+                        console.error(`[SCHEDULER_RUN] Auto-refresh for "${source.name}" failed:`, error.message);
+                    }
+                    scheduleNext();
+                }, source.refreshHours * 3600 * 1000);
+
+                sourceRefreshTimers.set(source.id, timeoutId);
+            };
+
+            scheduleNext();
+        }
+    });
+
+    for (const [sourceId, timeoutId] of sourceRefreshTimers.entries()) {
+        if (!activeUrlSources.has(sourceId)) {
+            console.log(`[SCHEDULER] Clearing obsolete refresh timer for source ID: ${sourceId}`);
+            clearTimeout(timeoutId);
+            sourceRefreshTimers.delete(sourceId);
+        }
+    }
+    console.log(`[SCHEDULER] Finished scheduling. Active timers: ${sourceRefreshTimers.size}`);
+};
+
+function saveSettings(settings) {
+    try {
+        fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
+        console.log('[SETTINGS] Settings saved successfully.');
+        updateAndScheduleSourceRefreshes();
+    } catch (e) {
+        console.error("[SETTINGS] Error saving settings:", e);
+    }
+}
+
+// --- Session Management ---
+let sessionSecret = process.env.SESSION_SECRET;
+
+if (!sessionSecret) {
+    console.log('[SECURITY] SESSION_SECRET not found in environment. Checking settings.json...');
+    let settings = getSettings();
+    if (settings.generatedSessionSecret) {
+        console.log('[SECURITY] Found existing session secret in settings.json.');
+        sessionSecret = settings.generatedSessionSecret;
+    } else {
+        console.log('[SECURITY] No secret in settings.json. Generating a new one...');
+        sessionSecret = crypto.randomBytes(64).toString('hex');
+        settings.generatedSessionSecret = sessionSecret;
+        saveSettings(settings);
+        console.log('[SECURITY] New session secret generated and saved to settings.json.');
+    }
+} else {
+    console.log('[SECURITY] Loaded SESSION_SECRET from environment variable.');
+}
+
+if (sessionSecret.includes('replace_this')) {
+    console.warn('[SECURITY] Using a weak or default SESSION_SECRET. Please replace it.');
 }
 
 app.use(
@@ -365,6 +469,28 @@ const dbAll = (db, sql, params = []) => {
 
 
 /**
+ * NEW: Extracts GPU details from vainfo output.
+ */
+function extractVainfoGPUDetails(vainfo_stdout) {
+    const start_tag = "Driver version: ";
+    const end_tag = "vainfo: Supported profile";
+
+    let vainfo_gpu_details = vainfo_stdout.substring(
+        vainfo_stdout.indexOf(start_tag) + start_tag.length,
+        vainfo_stdout.lastIndexOf(end_tag) - 1
+    );
+    // If we can't find the relevant GPU info section, return all to debug.
+    // Likely means the output format of vainfo has been changed.
+    if (vainfo_gpu_details === "") {
+        vainfo_gpu_details = vainfo_stdout;
+    } else
+    {
+        console.log(`[HW] Detected: ${vainfo_gpu_details}`)
+    }
+    return vainfo_gpu_details;
+}
+
+/**
  * NEW: Detects available hardware for transcoding.
  */
 async function detectHardwareAcceleration() {
@@ -380,42 +506,39 @@ async function detectHardwareAcceleration() {
         }
     });
 
-    // MODIFIED: Use 'vainfo' with enhanced logging
+    // MODIFIED: Use 'vainfo' for more robust detection of AMD, Intel VA-API
+    // and QSV GPUs. vainfo gives driver detection info on stderr and full
+    // detected GPU detail on stdout.
     exec('vainfo', (err, stdout, stderr) => {
-        // Log the raw output regardless of error
-        console.log(`[HW_DEBUG] vainfo stdout:\n${stdout}`);
-        console.error(`[HW_DEBUG] vainfo stderr:\n${stderr}`);
+        if (stderr) {
+            let found = false;
+            const trimmed_stdout = stdout.trim()
 
-        if (err) {
-            console.error('[HW] Error executing vainfo:', err); // Log the actual error object
-            console.error('[HW] vainfo command failed. VA-API/QSV detection skipped.');
-            detectedHardware.intel_qsv = null;
-            detectedHardware.intel_vaapi = null;
-        } else if (stderr) {
-            // Sometimes vainfo prints errors to stderr even if it doesn't return an error code
-            console.warn(`[HW] vainfo reported errors/warnings to stderr, but executed successfully. VA-API/QSV detection might be unreliable.`);
-            // Proceed with detection but be aware it might be partial
-            if (stdout.includes('iHD_drv_video.so')) {
-                detectedHardware.intel_qsv = 'Intel Quick Sync Video';
-                console.log('[HW] Intel QSV (iHD driver) detected via VA-API (despite stderr warnings).');
+            // iHD driver is for modern Intel GPUs (Gen9+) and is preferred for QSV
+            if (stderr.includes('iHD_drv_video.so')) {
+                detectedHardware.intel_qsv = extractVainfoGPUDetails(trimmed_stdout);
+                found = true;
             }
-            if (stdout.includes('i965_drv_video.so')) {
-                detectedHardware.intel_vaapi = 'Intel VA-API (Legacy)';
-                console.log('[HW] Intel VA-API (i965 driver) detected (despite stderr warnings).');
+            // AMD Radeon detection
+            if (stderr.includes('radeonsi_drv_video.so')) {
+                detectedHardware.radeon_vaapi = extractVainfoGPUDetails(trimmed_stdout);
+                found = true;
             }
-        } else {
-            // Success case (no error, no stderr)
-            console.log('[HW] vainfo executed successfully.');
-            if (stdout.includes('iHD_drv_video.so')) {
-                detectedHardware.intel_qsv = 'Intel Quick Sync Video';
-                console.log('[HW] Intel QSV (iHD driver) detected via VA-API.');
+            // i965 driver is for older Intel GPUs (pre-Gen9)
+            if (stderr.includes('i965_drv_video.so')) {
+                detectedHardware.intel_vaapi = extractVainfoGPUDetails(trimmed_stdout);
+                found = true;
             }
-            if (stdout.includes('i965_drv_video.so')) {
-                detectedHardware.intel_vaapi = 'Intel VA-API (Legacy)';
-                console.log('[HW] Intel VA-API (i965 driver) detected.');
-            }
-             if (!detectedHardware.intel_qsv && !detectedHardware.intel_vaapi) {
-                 console.log('[HW] vainfo ran, but no known Intel drivers (iHD or i965) were found in the output.');
+
+            if (!found) {
+                // Show full vainfo output for info/debug purposes.
+                console.log("[HW] vainfo did not detect any recognized GPU");
+                if (stderr) {
+                    console.log(`[HW] vainfo init (stderr): ${stderr.trim()}`);
+                }
+                if (stdout) {
+                    console.log(`[HW] vainfo GPU info (stdout): ${stdout.trim()}`);
+                }
             }
         }
     });
@@ -525,9 +648,10 @@ function getSettings() {
             // FINAL FIX: This is the modern, more compatible command for NVIDIA streaming.
             { id: 'ffmpeg-nvidia', name: 'ffmpeg (NVIDIA NVENC)', command: '-user_agent "{userAgent}" -re -i "{streamUrl}" -c:v h264_nvenc -preset p6 -tune hq -c:a copy -f mpegts pipe:1', isDefault: false },
             { id: 'ffmpeg-nvidia-legacy', name: 'ffmpeg (NVIDIA NVENC - Legacy)', command: '-user_agent "{userAgent}" -i "{streamUrl}" -c:v h264_nvenc -preset p6 -tune hq -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false },
-            { id: 'ffmpeg-intel', name: 'ffmpeg (Intel QSV)', command: '-hwaccel qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false },
+            { id: 'ffmpeg-intel', name: 'ffmpeg (Intel QSV)', command: '-hwaccel qsv -hwaccel_output_format qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -vf scale_qsv=format=nv12 -c:a aac -ac 2 -b:a 128k -f mpegts pipe:1', isDefault: false },
             // NEW: Add this line for VA-API
-            { id: 'ffmpeg-vaapi', name: 'ffmpeg (VA-API)', command: '-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf \'format=nv12,hwupload\' -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false },
+            { id: 'ffmpeg-vaapi', name: 'ffmpeg (VA-API)', command: '-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf "format=nv12|vaapi,hwupload" -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false },
+			{ id: 'ffmpeg-vaapi-amd', name: 'ffmpeg (VA-API) Radeon/AMD', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -qp 20 -vf scale_vaapi=format=nv12 -c:a aac -ac 2 -b:a 128k -f mpegts pipe:1', isDefault: false },
             { id: 'ffmpeg-nvidia-reconnect', name: 'ffmpeg (NVIDIA reconnect)', command: '-user_agent "{userAgent}" -re -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -i "{streamUrl}" -c:v h264_nvenc -preset p6 -tune hq -c:a copy -f mpegts pipe:1', isDefault: false },
             { id: 'redirect', name: 'Redirect (No Transcoding)', command: 'redirect', isDefault: false }
         ],
@@ -548,14 +672,17 @@ function getSettings() {
                 // Legacy MP4 profiles, no longer default.
                 { id: 'dvr-mp4-default', name: 'Legacy MP4 (H.264/AAC)', command: '-user_agent "{userAgent}" -i "{streamUrl}" -c:v libx264 -preset veryfast -crf 23 -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false },
                 { id: 'dvr-mp4-nvidia', name: 'NVIDIA NVENC MP4 (H.264/AAC)', command: '-user_agent "{userAgent}" -i "{streamUrl}" -c:v h264_nvenc -preset p6 -tune hq -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false },
-                { id: 'dvr-mp4-intel', name: 'Intel QSV MP4 (H.264/AAC)', command: '-hwaccel qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false },
+                { id: 'dvr-mp4-intel', name: 'Intel QSV MP4 (H.264/AAC)', command: '-hwaccel qsv -hwaccel_output_format qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -vf scale_qsv=format=nv12 -c:a aac -ac 2 -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false },
                 // NEW: Add this line for VA-API recording
-                { id: 'dvr-mp4-vaapi', name: 'VA-API MP4 (H.264/AAC)', command: '-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf \'format=nv12,hwupload\' -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false }
+                { id: 'dvr-mp4-vaapi', name: 'VA-API MP4 (H.264/AAC)', command: '-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf \'format=nv12,hwupload\' -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false },
+				{ id: 'dvr-mp4-radeon-vaapi', name: 'Radeon/AMD VA-API MP4 (H.264/AAC)', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -preset medium -vf scale_vaapi=format=nv12 -c:a aac -ac 2 -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false }
             ]
         },
         activeUserAgentId: `default-ua-1724778434000`,
         activeStreamProfileId: 'ffmpeg-default',
-        searchScope: 'channels_only',
+        playerLogLevel: 'warning',
+        dvrLogLevel: 'warning',
+        searchScope: 'all_channels_unfiltered',
         notificationLeadTime: 10,
         sourcesLastUpdated: null
     };
@@ -638,8 +765,10 @@ async function triggerVodRefreshForProvider(provider, dbInstance, sendStatus = (
     sendStatus(`Triggering VOD refresh for ${provider.name}...`, 'info');
 
     try {
+        const settings = getSettings();
+        const activeUserAgent = settings.userAgents.find(ua => ua.id === settings.activeUserAgentId)?.value || 'VLC/3.0.20 (Linux; x86_64)';
         // Call the main processing function from vodProcessor.js
-        await refreshVodContent(dbInstance, dbGet, dbAll, dbRun, provider, sendStatus);
+        await refreshVodContent(dbInstance, dbGet, dbAll, dbRun, provider, sendStatus, activeUserAgent);
 
         console.log(`[VOD Trigger] Successfully finished VOD refresh for provider: ${provider.name}`);
 
@@ -650,16 +779,7 @@ async function triggerVodRefreshForProvider(provider, dbInstance, sendStatus = (
 }
 
 
-// ... existing helper functions (saveSettings, fetchUrlContent, parseEpgTime, processAndMergeSources, updateAndScheduleSourceRefreshes) remain the same ...
-function saveSettings(settings) {
-    try {
-        fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
-        console.log('[SETTINGS] Settings saved successfully.');
-        updateAndScheduleSourceRefreshes();
-    } catch (e) {
-        console.error("[SETTINGS] Error saving settings:", e);
-    }
-}
+// ... existing helper functions (fetchUrlContent, parseEpgTime, processAndMergeSources) remain the same ...
 
 function fetchUrlContent(url, options = {}) { // <-- MODIFIED
     return new Promise((resolve, reject) => {
@@ -805,12 +925,58 @@ async function processAndMergeSources(req) {
                     throw new Error("XC source is missing server, username, or password.");
                 }
 
-                // Use the default user agent for XC requests
-                m3uFetchOptions = { headers: { 'User-Agent': 'VLC/3.0.20 (Linux; x86_64)' } };
-                const m3uUrl = `${server}/get.php?username=${username}&password=${password}&type=m3u_plus&output=ts`;
-                console.log(`[M3U] Constructed XC URL for "${source.name}": ${m3uUrl}`);
-                sendProcessingStatus(req, ` -> Fetching content from XC server...`, 'info');
-                content = await fetchUrlContent(m3uUrl, m3uFetchOptions);
+                const activeUserAgent = settings.userAgents.find(ua => ua.id === settings.activeUserAgentId)?.value || 'VLC/3.0.20 (Linux; x86_64)';
+                m3uFetchOptions = { headers: { 'User-Agent': activeUserAgent } };
+
+                // Fetch live streams from XC API
+                const liveStreamsUrl = `${server}/player_api.php?username=${username}&password=${password}&action=get_live_streams`;
+                try {
+                    sendProcessingStatus(req, ` -> Fetching live categories from XC server...`, 'info');
+                    const liveCategoriesUrl = `${server}/player_api.php?username=${username}&password=${password}&action=get_live_categories`;
+                    console.log(`[M3U] Constructed XC Categories URL for "${source.name}": ${liveCategoriesUrl}`);
+                    const liveCategoriesResponse = await fetchUrlContent(liveCategoriesUrl, m3uFetchOptions);
+                    const liveCategories = JSON.parse(liveCategoriesResponse);
+
+                    sendProcessingStatus(req, ` -> Fetching live streams from XC server...`, 'info');
+                    console.log(`[M3U] Constructed XC Streams URL for "${source.name}": ${liveCategoriesUrl}`);
+                    const liveStreamsResponse = await fetchUrlContent(liveStreamsUrl, m3uFetchOptions);
+                    const liveStreams = JSON.parse(liveStreamsResponse);
+
+                    // Filter and convert live streams to M3U format
+                    let liveM3uContent = '';
+                    let liveStreamCount = 0;
+
+                    if (Array.isArray(liveStreams)) {
+                        for (const stream of liveStreams) {
+                            if (stream.stream_type === 'live') {
+                                liveStreamCount++;
+                                const streamUrl = `${server}/live/${username}/${password}/${stream.stream_id}.ts`;
+
+                                // Find category name from categories array
+                                const categoryName = Array.isArray(liveCategories)
+                                    ? liveCategories.find(cat => cat.category_id == stream.category_id)?.category_name || 'Live'
+                                    : 'Live';
+
+                                // Use epg_channel_id if available, otherwise use stream_id
+                                const tvgId = stream.epg_channel_id || stream.stream_id;
+
+                                liveM3uContent += `#EXTINF:-1 tvg-id="${tvgId}" tvg-name="${stream.name}" tvg-logo="${stream.stream_icon || ''}" group-title="${categoryName}",${stream.name}\n`;
+                                liveM3uContent += `${streamUrl}\n`;
+                            }
+                        }
+                    }
+
+                    if (liveStreamCount > 0) {
+                        content += '\n' + liveM3uContent;
+                        sendProcessingStatus(req, ` -> Added ${liveStreamCount} live streams to content.`, 'info');
+                    } else {
+                        sendProcessingStatus(req, ` -> No live streams found with stream_type = 'live'.`, 'info');
+                    }
+                } catch (liveError) {
+                    console.error(`[XC Live] Error fetching live streams for "${source.name}": ${liveError.message}`);
+                    sendProcessingStatus(req, ` -> Warning: Could not fetch live streams: ${liveError.message}`, 'warning');
+                }
+
                 // Save raw content to cache (XC) ---
                 try {
                     // Define cache path (ensure it's unique per source)
@@ -829,24 +995,9 @@ async function processAndMergeSources(req) {
                     // Clear any potentially stale cache path if writing failed
                     delete source.cachedRawPath;
                 }
-                sourcePathForLog = m3uUrl;
+
+                sourcePathForLog = liveStreamsUrl;
                 sendProcessingStatus(req, ` -> Successfully fetched M3U content from XC server.`, 'info');
-
-                const epgUrl = `${server}/xmltv.php?username=${username}&password=${password}`;
-                const epgSource = {
-                    id: `epg_for_${source.id}`,
-                    name: `${source.name} (EPG)`,
-                    type: 'url',
-                    path: epgUrl,
-                    isActive: true,
-                    isXcEpg: true,
-                    fetchOptions: m3uFetchOptions // Pass fetch options to EPG
-                };
-
-                if (!activeEpgSources.some(s => s.id === epgSource.id)) {
-                    activeEpgSources.push(epgSource);
-                    sendProcessingStatus(req, ` -> Automatically added EPG source for "${source.name}".`, 'info');
-                }
             }
 
             // --- NEW: Trigger VOD Refresh for all non-XC Sources ---
@@ -950,7 +1101,6 @@ async function processAndMergeSources(req) {
         console.error(`[PROCESS] Error writing LIVE M3U file: ${writeErr.message}`);
         sendProcessingStatus(req, `Error writing live channels file: ${writeErr.message}`, 'error');
     }
-    // <<<--- THE ORPHANED CATCH BLOCK WAS REMOVED FROM HERE --->>>
 
     // --- EPG Processing (now filtered) ---
     const mergedProgramData = {};
@@ -962,8 +1112,6 @@ async function processAndMergeSources(req) {
     }
 
     for (const source of activeEpgSources) {
-        if (!source.isActive && !source.isXcEpg) continue;
-
         console.log(`[EPG] Processing source: "${source.name}" (ID: ${source.id}, Type: ${source.type}, Path: ${source.path})`);
         sendProcessingStatus(req, `Processing EPG source: "${source.name}"...`, 'info');
         try {
@@ -1074,52 +1222,6 @@ async function processAndMergeSources(req) {
     return { success: true, message: 'Sources merged successfully.', updatedSettings: settings };
 } 
 
-const updateAndScheduleSourceRefreshes = () => {
-    console.log('[SCHEDULER] Updating and scheduling all source refreshes...');
-    const settings = getSettings();
-    const allSources = [...(settings.m3uSources || []), ...(settings.epgSources || [])];
-    const activeUrlSources = new Set();
-
-    allSources.forEach(source => {
-        if (source.type === 'url' && source.isActive && source.refreshHours > 0) {
-            activeUrlSources.add(source.id);
-            if (sourceRefreshTimers.has(source.id)) {
-                clearTimeout(sourceRefreshTimers.get(source.id));
-            }
-
-            console.log(`[SCHEDULER] Scheduling refresh for "${source.name}" (ID: ${source.id}) every ${source.refreshHours} hours.`);
-            
-            const scheduleNext = () => {
-                const timeoutId = setTimeout(async () => {
-                    console.log(`[SCHEDULER_RUN] Auto-refresh triggered for "${source.name}".`);
-                    try {
-                        const result = await processAndMergeSources();
-                        if(result.success) {
-                            fs.writeFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
-                            console.log(`[SCHEDULER_RUN] Successfully refreshed and processed sources for "${source.name}".`);
-                        }
-                    } catch (error) {
-                        console.error(`[SCHEDULER_RUN] Auto-refresh for "${source.name}" failed:`, error.message);
-                    }
-                    scheduleNext();
-                }, source.refreshHours * 3600 * 1000);
-
-                sourceRefreshTimers.set(source.id, timeoutId);
-            };
-
-            scheduleNext();
-        }
-    });
-
-    for (const [sourceId, timeoutId] of sourceRefreshTimers.entries()) {
-        if (!activeUrlSources.has(sourceId)) {
-            console.log(`[SCHEDULER] Clearing obsolete refresh timer for source ID: ${sourceId}`);
-            clearTimeout(timeoutId);
-            sourceRefreshTimers.delete(sourceId);
-        }
-    }
-    console.log(`[SCHEDULER] Finished scheduling. Active timers: ${sourceRefreshTimers.size}`);
-};
 // ... existing helper functions ...
 
 // --- Authentication API Endpoints ---
@@ -1261,44 +1363,24 @@ app.post('/api/sources/fetch-groups', requireAuth, async (req, res) => {
         // --- END CACHE CHECK ---
 
         // --- Fetch if cache wasn't used or refresh was forced ---
+        if (type === 'xc' && xc) {
+            const xcInfo = JSON.parse(xc);
+            if (!xcInfo.server || !xcInfo.username || !xcInfo.password) {
+                return res.status(400).json({ error: 'XC source requires server, username, and password.' });
+            }
+            console.log('[API_GROUPS] Source is XC type. Using XtreamClient to fetch all categories.');
+            const settings = getSettings();
+            const activeUserAgent = settings.userAgents.find(ua => ua.id === settings.activeUserAgentId)?.value || 'VLC/3.0.20 (Linux; x86_64)';
+            const client = new XtreamClient(xcInfo.server, xcInfo.username, xcInfo.password, activeUserAgent);
+            const allCategories = await client.getAllCategories();
+            return res.json({ success: true, groups: allCategories, usedCache: false });
+        }
+
         if (!usedCache) {
             console.log(`[API_GROUPS] ${forceRefresh ? 'Refresh forced' : 'Cache not used/found'}. Fetching from original source.`);
             if (type === 'url' && url) {
                 fetchUrl = url;
                 content = await fetchUrlContent(fetchUrl, fetchOptions);
-            } else if (type === 'xc' && xc) {
-                const xcInfo = JSON.parse(xc);
-                if (!xcInfo.server || !xcInfo.username || !xcInfo.password) {
-                    return res.status(400).json({ error: 'XC source requires server, username, and password.' });
-                }
-                fetchUrl = `${xcInfo.server}/get.php?username=${xcInfo.username}&password=${xcInfo.password}&type=m3u_plus&output=ts`;
-                fetchOptions = { headers: { 'User-Agent': 'VLC/3.0.20 (Linux; x86_64)' } };
-                content = await fetchUrlContent(fetchUrl, fetchOptions);
-
-                // --- ADDITION: Update cache if fetched fresh ---
-                if (sourceToUse) { // Only update cache if we know the source object
-                     try {
-                        const cacheFileName = `raw_${sourceToUse.id}.m3u_cache`;
-                        const cacheFilePath = path.join(RAW_CACHE_DIR, cacheFileName);
-                        fs.writeFileSync(cacheFilePath, content);
-                        console.log(`[API_GROUPS] Updated raw cache file during fetch: ${cacheFilePath}`);
-                        sourceToUse.cachedRawPath = cacheFilePath; // Update path in memory
-
-                        // IMPORTANT: Save updated settings back to file
-                        const currentSettings = getSettings(); // Re-get settings to avoid overwriting other changes
-                        const sourceList = sourceToUse.sourceType === 'm3u' ? currentSettings.m3uSources : currentSettings.epgSources; // Assuming sourceType is passed or derivable
-                        const index = sourceList.findIndex(s => s.id === sourceToUse.id);
-                        if (index !== -1) {
-                            sourceList[index].cachedRawPath = cacheFilePath;
-                            saveSettings(currentSettings); // Save the updated path
-                        }
-
-                    } catch (cacheWriteError) {
-                        console.error(`[API_GROUPS] Failed to update raw cache file for source "${sourceToUse.name}" after fresh fetch:`, cacheWriteError.message);
-                    }
-                }
-                // --- END ADDITION ---
-
             } else if (type === 'file' && url) { // Assuming url holds file path for type file
                  const filePath = sourceToUse?.path || path.join(SOURCES_DIR, path.basename(url)); // Prefer path from settings if available
                  if (fs.existsSync(filePath)) {
@@ -1313,20 +1395,33 @@ app.post('/api/sources/fetch-groups', requireAuth, async (req, res) => {
         // --- End Fetch Logic ---
 
 
-        // --- Efficiently Extract Groups (Same as before) ---
+        // --- Efficiently Extract Groups (Handles JSON for XC and Regex for M3U) ---
         const groups = new Set();
-        const groupRegex = /group-title="([^"]*)"/i;
-        const lines = content.split('\n');
-        console.log(`[API_GROUPS] Scanning ${lines.length} lines for group titles...`);
-        for (const line of lines) {
-            if (line.startsWith('#EXTINF:')) {
-                const match = line.match(groupRegex);
-                if (match && match[1]) {
-                    const groupName = match[1].trim();
-                    if (groupName) groups.add(groupName);
+        try {
+            // First, try to parse as JSON (for XC sources which return a JSON array of categories)
+            const groupJsonArray = JSON.parse(content);
+            console.log(`[API_GROUPS] Successfully parsed content as JSON. Scanning for group titles.`);
+            if (Array.isArray(groupJsonArray)) {
+                for (const category of groupJsonArray) {
+                    if (category && typeof category.category_name === 'string') {
+                        const groupName = category.category_name.trim();
+                        if (groupName) groups.add(groupName);
+                    }
+                }
+            }
+        } catch (jsonError) {
+            // If JSON parsing fails, assume it's a plain M3U file and use regex
+            console.log(`[API_GROUPS] Content is not valid JSON, attempting to parse as plain M3U.`);
+            const groupTitleRegex = /group-title=\"([^\"]+)\"/g;
+            let match;
+            while ((match = groupTitleRegex.exec(content)) !== null) {
+                const groupName = match[1].trim();
+                if (groupName) {
+                    groups.add(groupName);
                 }
             }
         }
+
         const sortedGroups = Array.from(groups).sort((a, b) => a.localeCompare(b));
         console.log(`[API_GROUPS] Found ${sortedGroups.length} unique groups.`);
         res.json({ success: true, groups: sortedGroups, usedCache: usedCache }); // Optionally tell frontend if cache was used
@@ -1735,7 +1830,7 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
 
         // 2. Check if episodes exist in DB
         const existingEpisodes = await dbAll(db, `
-            SELECT e.*, r.provider_id, r.provider_stream_id
+            SELECT e.*, r.provider_id, r.provider_stream_id, r.container_extension
             FROM episodes e
             JOIN provider_episode_relations r ON e.id = r.episode_id
             WHERE e.series_id = ?
@@ -1767,7 +1862,8 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
                 return res.status(500).json({ error: 'Failed to parse XC provider credentials.' });
             }
 
-            const client = new XtreamClient(xcInfo.server, xcInfo.username, xcInfo.password);
+            const activeUserAgent = settings.userAgents.find(ua => ua.id === settings.activeUserAgentId)?.value || 'VLC/3.0.20 (Linux; x86_64)';
+            const client = new XtreamClient(xcInfo.server, xcInfo.username, xcInfo.password, activeUserAgent);
             let seriesDetails;
             try {
                 seriesDetails = await client.getSeriesInfo(relation.external_series_id);
@@ -1782,7 +1878,7 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
             } else {
                 console.log(`[API_VOD_SERIES] Fetched ${Object.values(seriesDetails.episodes).flat().length} episodes from provider. Saving to DB...`);
                 const episodeInsertStmt = db.prepare(`INSERT OR IGNORE INTO episodes (series_id, season_num, episode_num, name, description, air_date, tmdb_id, imdb_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-                const episodeRelationInsertStmt = db.prepare(`INSERT OR IGNORE INTO provider_episode_relations (provider_id, episode_id, provider_stream_id, last_seen) VALUES (?, ?, ?, ?)`);
+                const episodeRelationInsertStmt = db.prepare(`INSERT OR IGNORE INTO provider_episode_relations (provider_id, episode_id, provider_stream_id, container_extension, last_seen) VALUES (?, ?, ?, ?, ?)`);
                 const lastSeen = new Date().toISOString();
 
                 await dbRun(db, "BEGIN TRANSACTION");
@@ -1805,7 +1901,7 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
                             }
 
                             await new Promise((resolve, reject) => {
-                                episodeRelationInsertStmt.run(relation.provider_id, episodeId, epData.id, lastSeen, function (err) {
+                                episodeRelationInsertStmt.run(relation.provider_id, episodeId, epData.id, epData.container_extension || 'mp4', lastSeen, function (err) {
                                     if (err) reject(err);
                                     else resolve(this);
                                 });
@@ -1823,7 +1919,7 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
                     episodeRelationInsertStmt.finalize();
                 }
                 episodesToReturn = await dbAll(db, `
-                    SELECT e.*, r.provider_id, r.provider_stream_id
+                    SELECT e.*, r.provider_id, r.provider_stream_id, r.container_extension
                     FROM episodes e
                     JOIN provider_episode_relations r ON e.id = r.episode_id
                     WHERE e.series_id = ?
@@ -1856,7 +1952,7 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
             const provider = providerMap.get(ep.provider_id);
             if (!provider) return;
 
-            const ext = 'mp4';
+            const ext = ep.container_extension || 'mp4';
             const epUrl = `${provider.baseUrl}/series/${provider.username}/${provider.password}/${ep.provider_stream_id}.${ext}`;
             const seasonNum = ep.season_num;
 
@@ -2010,6 +2106,56 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
             return res.status(400).json({ error: 'Existing file source requires a new file if original is missing.' });
         }
 
+        // --- NEW: XC EPG Sync Logic on Update ---
+        const wasXc = sourceToUpdate.type === 'xc';
+        const isNowXc = (xc !== undefined && xc !== null);
+
+        // Case 1: Type changed FROM XC to something else (URL or File)
+        if (wasXc && !isNowXc) {
+            const epgIdToDelete = `epg_for_${id}`;
+            const initialEpgCount = settings.epgSources.length;
+            settings.epgSources = settings.epgSources.filter(epg => epg.id !== epgIdToDelete);
+            if (settings.epgSources.length < initialEpgCount) {
+                console.log(`[SOURCES_API] Deleted managed EPG source ${epgIdToDelete} because parent source type changed from XC.`);
+            }
+        }
+
+        // Case 2: Type changed TO XC from something else, or it IS XC and is being updated
+        if (isNowXc) {
+            const epgId = `epg_for_${id}`;
+            let epgSource = settings.epgSources.find(epg => epg.id === epgId);
+
+            try {
+                const xcData = JSON.parse(xc);
+                const newEpgUrl = `${xcData.server}/xmltv.php?username=${xcData.username}&password=${xcData.password}`;
+
+                if (epgSource) { // EPG already exists, update it
+                    console.log(`[SOURCES_API] Found and updating managed EPG source ${epgId}.`);
+                    epgSource.name = `${name} (EPG)`;
+                    epgSource.path = newEpgUrl;
+                    epgSource.refreshHours = parseInt(refreshHours, 10) || 0;
+                } else { // EPG does not exist, create it
+                    console.log(`[SOURCES_API] Creating new managed EPG source ${epgId} because parent source type changed to XC.`);
+                    epgSource = {
+                        id: epgId,
+                        name: `${name} (EPG)`,
+                        type: 'url',
+                        path: newEpgUrl,
+                        isActive: true,
+                        isXcEpg: true,
+                        refreshHours: parseInt(refreshHours, 10) || 0,
+                        lastUpdated: new Date().toISOString(),
+                        status: 'Pending',
+                        statusMessage: 'Managed by XC source. Process to load data.'
+                    };
+                    settings.epgSources.push(epgSource);
+                }
+            } catch (e) {
+                console.error(`[SOURCES_API] Error processing XC data for EPG sync on update:`, e.message);
+            }
+        }
+        // --- END NEW ---
+
         // Cache cleanup on source type/path/details change during update ---
         let shouldDeleteCache = false;
         const existingCachePath = sourceToUpdate.cachedRawPath; // Store existing path before potential changes
@@ -2127,6 +2273,32 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
         }
 
         sourceList.push(newSource);
+
+        // --- NEW: Automatically add an EPG source for new XC sources ---
+        if (newSource.type === 'xc') {
+            try {
+                const xcData = JSON.parse(newSource.xc_data);
+                const epgUrl = `${xcData.server}/xmltv.php?username=${xcData.username}&password=${xcData.password}`;
+                const newEpgSource = {
+                    id: `epg_for_${newSource.id}`,
+                    name: `${newSource.name} (EPG)`,
+                    type: 'url',
+                    path: epgUrl,
+                    isActive: true, // Default to active
+                    isXcEpg: true, // Mark as a managed XC EPG
+                    refreshHours: newSource.refreshHours, // Sync refresh interval
+                    lastUpdated: new Date().toISOString(),
+                    status: 'Pending',
+                    statusMessage: 'Managed by XC source. Process to load data.'
+                };
+                settings.epgSources.push(newEpgSource);
+                console.log(`[SOURCES_API] Automatically added managed EPG source for XC source "${newSource.name}".`);
+            } catch (e) {
+                console.error(`[SOURCES_API] Failed to create automatic EPG for new XC source ${newSource.id}:`, e.message);
+            }
+        }
+        // --- END NEW ---
+
         saveSettings(settings);
         console.log(`[SOURCES_API] New source "${name}" added successfully (ID: ${newSource.id}).`);
         res.json({ success: true, message: 'Source added successfully.', settings: getSettings() });
@@ -2196,6 +2368,17 @@ app.delete('/api/sources/:sourceType/:id', requireAuth, async (req, res) => {
         console.warn(`[SOURCES_API] Source ID ${id} not found for deletion.`);
         return res.status(404).json({ error: 'Source not found.' });
     }
+
+    // --- NEW: Automatically delete the managed EPG when an XC source is deleted ---
+    if (sourceType === 'm3u' && source && source.type === 'xc') {
+        const epgIdToDelete = `epg_for_${id}`;
+        const initialEpgCount = settings.epgSources.length;
+        settings.epgSources = settings.epgSources.filter(epg => epg.id !== epgIdToDelete);
+        if (settings.epgSources.length < initialEpgCount) {
+            console.log(`[SOURCES_API] Automatically deleted managed EPG source ${epgIdToDelete} as its parent XC source was deleted.`);
+        }
+    }
+    // --- END NEW ---
 
     saveSettings(settings);
     console.log(`[SOURCES_API] Source ${id} deleted successfully from settings.`);
@@ -2554,9 +2737,7 @@ app.delete('/api/data', requireAuth, requireAdmin, (req, res) => {
 
 // MODIFIED: Stream endpoint now logs to history and has enhanced tracking.
 app.get('/stream', requireAuth, async (req, res) => {
-    const streamUrl = req.query.url;
-    const profileId = req.query.profileId;
-    const userAgentId = req.query.userAgentId;
+    const { url: streamUrl, profileId, userAgentId, vodName, vodLogo } = req.query;
     const userId = req.session.userId;
     const username = req.session.username;
     const clientIp = req.clientIp;
@@ -2608,17 +2789,31 @@ app.get('/stream', requireAuth, async (req, res) => {
         return res.status(404).send(`Error: User agent with ID "${userAgentId}" not found.`);
     }
 
-    //-- ENHANCEMENT: Find channel name and logo for logging.
-    const allChannels = parseM3U(fs.existsSync(LIVE_CHANNELS_M3U_PATH) ? fs.readFileSync(LIVE_CHANNELS_M3U_PATH, 'utf-8') : '');
-    const channel = allChannels.find(c => c.url === streamUrl);
-    const channelName = channel ? channel.displayName || channel.name : 'Direct Stream';
-    const channelId = channel ? channel.id : null;
-    const channelLogo = channel ? channel.logo : null;
+    // --- NEW: VOD-aware Activity Logging ---
+    let channelName, channelId, channelLogo;
+    if (vodName) {
+        // It's a VOD stream
+        channelName = vodName;
+        channelLogo = vodLogo || null;
+        channelId = null; // VODs don't have a channel ID in the same way live channels do
+        console.log(`[STREAM] VOD stream detected for logging: Name='${channelName}'`);
+    } else {
+        // It's a live channel stream, use existing M3U parsing logic
+        const allChannels = parseM3U(fs.existsSync(LIVE_CHANNELS_M3U_PATH) ? fs.readFileSync(LIVE_CHANNELS_M3U_PATH, 'utf-8') : '');
+        const channel = allChannels.find(c => c.url === streamUrl);
+        channelName = channel ? channel.displayName || channel.name : 'Direct Stream';
+        channelId = channel ? channel.id : null;
+        channelLogo = channel ? channel.logo : null;
+    }
     const streamProfileName = profile ? profile.name : 'Unknown Profile';
+    // --- END NEW ---
     
     console.log(`[STREAM] Using Profile='${profile.name}' (ID=${profile.id}), UserAgent='${userAgent.name}'`);
 
-    const commandTemplate = profile.command
+    // Prefix ffmpeg command with "-v level+{playerLoglevel}" here to control log spamming.
+    // Using warning loglevel limits messages to actual warnings and errors.
+    // playerLogLevel is configured via settings page pulldown.
+    const commandTemplate = `-v level+${settings.playerLogLevel} ` + profile.command
         .replace(/{streamUrl}/g, streamUrl)
         .replace(/{userAgent}|{clientUserAgent}/g, userAgent.value);
         
@@ -3275,7 +3470,9 @@ async function startRecording(job) {
     const safeFilename = `${job.id}_${job.programTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase()}${fileExtension}`;
     const fullFilePath = path.join(DVR_DIR, safeFilename);
 
-    const commandTemplate = recProfile.command
+    // Prefix ffmpeg command with "-v level+{dvrLoglevel}" here to control log spamming.
+    // dvrLogLevel is configured via a settings page pulldown.
+    const commandTemplate = `-v level+${settings.dvrLogLevel} ` + recProfile.command
         .replace(/{streamUrl}/g, streamUrlToRecord)
         .replace(/{userAgent}/g, userAgent.value)
         .replace(/{filePath}/g, fullFilePath);
@@ -3368,25 +3565,7 @@ function scheduleDvrJob(job) {
 }
 
 
-function loadAndScheduleAllDvrJobs() {
-    console.log('[DVR] Loading and scheduling all pending DVR jobs from database...');
-    db.run("UPDATE dvr_jobs SET status = 'error', errorMessage = 'Server restarted during recording.' WHERE status = 'recording'", [], (err) => {
-        if (err) {
-            console.error('[DVR] Error updating recording jobs status on startup:', err.message);
-        } else {
-            console.log("[DVR] Updated status of previous 'recording' jobs to 'error'.");
-        }
-        
-        db.all("SELECT * FROM dvr_jobs WHERE status = 'scheduled'", [], (err, jobs) => {
-            if (err) {
-                console.error('[DVR] Error fetching pending DVR jobs:', err);
-                return;
-            }
-            console.log(`[DVR] Found ${jobs.length} jobs to schedule.`);
-            jobs.forEach(scheduleDvrJob);
-        });
-    });
-}
+
 // ... existing functions ...
 
 async function checkForConflicts(newJob, userId) {
@@ -3939,8 +4118,7 @@ detectHardwareAcceleration().then(() => {
         schedule.scheduleJob('0 2 * * *', autoDeleteOldRecordings);
         console.log('[DVR_STORAGE] Scheduled daily cleanup of old recordings.');
         
-        // **NEW: Load and schedule DVR jobs on startup**
-        loadAndScheduleAllDvrJobs();
+
     });
 });
 

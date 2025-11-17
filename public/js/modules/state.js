@@ -71,6 +71,10 @@ export const UIElements = {
     // --- **FIX: Add the new element for notification settings** ---
     notificationSettings: document.getElementById('notification-settings-container'),
 
+    // --- NEW: Header Elements for Scroll Logic ---
+    mainHeader: document.getElementById('main-header'),
+    unifiedGuideHeader: document.getElementById('unified-guide-header'),
+
     // --- NEW: VOD Page Elements ---
     tabVod: null,
     mobileNavVod: null,

@@ -146,6 +146,7 @@ export const stopAndCleanupPlayer = async () => { // MODIFIED: Made function asy
 
 /**
  * Updates the stream info overlay with the latest stats from mpegts.js.
+ * mpegts.js reports speed in KB/s so divide by 1024 for MB/s.
  */
 function updateStreamInfo() {
     if (!appState.player || !appState.player.statisticsInfo) return;
@@ -154,14 +155,21 @@ function updateStreamInfo() {
     const video = UIElements.videoElement;
 
     const resolution = (video.videoWidth && video.videoHeight) ? `${video.videoWidth}x${video.videoHeight}` : 'N/A';
-    const speed = `${(stats.speed / 1024).toFixed(2)} KB/s`;
-    const fps = (stats.decodedFrames > 0 && typeof stats.fps === 'number') ? stats.fps.toFixed(2) : '0.00';
+    const speed = `${(stats.speed / 1024).toFixed(2)} MB/s`;
+    const dropped = (stats.droppedFrames >= 0 && typeof stats.droppedFrames === 'number') ? stats.droppedFrames : 'N/A'
     const buffer = video.buffered.length > 0 ? `${(video.buffered.end(0) - video.currentTime).toFixed(2)}s` : '0.00s';
+    const mediaInfo = appState.player.mediaInfo;
+    const fps = mediaInfo.fps;
+    const videoCodec = mediaInfo.videoCodec;
+    const audioCodec = mediaInfo.audioCodec;
 
     UIElements.streamInfoResolution.textContent = `Resolution: ${resolution}`;
     UIElements.streamInfoBandwidth.textContent = `Bandwidth: ${speed}`;
     UIElements.streamInfoFps.textContent = `FPS: ${fps}`;
+    UIElements.streamInfoDropped.textContent = `Dropped: ${dropped}`;
     UIElements.streamInfoBuffer.textContent = `Buffer: ${buffer}`;
+    UIElements.streamInfoVideo.textContent = `V Codec: ${videoCodec}`;
+    UIElements.streamInfoAudio.textContent = `A Codec: ${audioCodec}`;
 }
 
 
@@ -308,7 +316,7 @@ export const playChannel = (url, name, channelId) => {
  * @param {string} url - The direct URL to the VOD file (e.g., .mp4, .mkv).
  * @param {string} title - The title of the VOD to display.
  */
-export const playVOD = async (url, title) => {
+export const playVOD = async (url, title, logo = '') => {
     const useDirectPlay = guideState.settings.vodDirectPlayEnabled === true;
     console.log(`[VOD_PLAYER] Attempting to play VOD: "${title}" | Direct Play: ${useDirectPlay}`);
 
@@ -381,7 +389,7 @@ export const playVOD = async (url, title) => {
     // VODs always go through the /stream endpoint now, unless the profile is 'redirect'
     const streamUrlToPlay = profile.command === 'redirect'
         ? url // If redirect, still use mpegts.js but with the direct URL
-        : `/stream?url=${encodeURIComponent(url)}&profileId=${profileId}&userAgentId=${userAgentId}`;
+        : `/stream?url=${encodeURIComponent(url)}&profileId=${profileId}&userAgentId=${userAgentId}&vodName=${encodeURIComponent(title)}&vodLogo=${encodeURIComponent(logo)}`;
 
     console.log(`[VOD_PLAYER] Final mpegts.js stream URL: ${streamUrlToPlay}`);
     logToPlayerConsole(`Final stream URL: ${streamUrlToPlay}`);

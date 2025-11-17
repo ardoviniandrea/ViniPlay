@@ -7,7 +7,7 @@ const XtreamClient = require('./xtreamClient');
  * @param {object} provider - The provider object (id, server_url, username, password).
  * @param {function} sendStatus - Function to send status updates to the client.
  */
-async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus = () => {}) {
+async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus = () => {}, userAgent) {
     console.log(`[VOD Processor] Starting VOD refresh for: ${provider.name}`);
     const scanStartTime = new Date().toISOString();
     
@@ -29,7 +29,7 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
         return; // Stop processing this provider if credentials are bad
     }
 
-    const client = new XtreamClient(server_url, username, password);
+    const client = new XtreamClient(server_url, username, password, userAgent);
     const providerId = provider.id;
 
     // --- Schema Migration ---

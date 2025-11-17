@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VINI PLAY</title>
-    <link rel="icon" type="image/png" href="https://i.imgur.com/rwa8SjI.png">
+    <link rel="icon" type="image/png" href="/viniplay.png">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/mpegts.js/dist/mpegts.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/fuse.js/dist/fuse.min.js"></script>
@@ -220,18 +220,18 @@
         }
 
         #main-header, #unified-guide-header {
-            transition: transform 0.3s ease-out, opacity 0.3s ease-out, height 0.3s ease-out, padding 0.3s ease-out;
+            transition: transform 0.3s ease-out, opacity 0.3s ease-out, max-height 0.3s ease-out, padding 0.3s ease-out, margin 0.3s ease-out, border-width 0.3s ease-out; /* Add padding, margin, border-width to transition */
             transform: translateY(0);
             opacity: 1;
-            height: auto;
+            max-height: 200px; /* Set a generous max-height for non-collapsed state */
             overflow: hidden;
             flex-shrink: 0;
             box-shadow: none;
-            padding-top: initial;
-            padding-bottom: initial;
-            z-index: 35; 
+            padding-top: initial; /* Ensure padding is managed */
+            padding-bottom: initial; /* Ensure padding is managed */
+            z-index: 35;
         }
-        
+
         #main-header { padding: 1rem; z-index: 40; }
         #unified-guide-header { padding: 0.5rem 1rem; }
 
@@ -239,15 +239,12 @@
         #app-container.header-collapsed #unified-guide-header {
             transform: translateY(-100%);
             opacity: 0;
-            height: 0 !important;
-            padding-top: 0 !important;
-            padding-bottom: 0 !important;
-            margin-top: 0 !important;
-            margin-bottom: 0 !important;
-            border-width: 0 !important;
+            max-height: 0 !important; /* Force max-height to 0 */
+            padding: 0 !important; /* Force padding to 0 */
+            margin: 0 !important; /* Force margin to 0 */
+            border-width: 0 !important; /* Force border to 0 */
             pointer-events: none;
         }
-        
         #page-guide {
             transition: padding-top 0.3s ease-out;
         }
@@ -511,7 +508,8 @@
             @apply flex items-center justify-center px-3 h-8 leading-tight text-gray-400 bg-gray-800 border border-gray-700 hover:bg-gray-700 hover:text-white;
         }
         .pagination-btn.active {
-            @apply z-10 text-blue-500 border-blue-600 bg-gray-700;
+            @apply z-10 text-white font-bold border-blue-600 bg-blue-600;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.5); /* blue-500 with 50% opacity */
         }
         .pagination-btn:first-child { @apply rounded-l-lg; }
         .pagination-btn:last-child { @apply rounded-r-lg; }
@@ -705,7 +703,7 @@
     <!-- Auth Container -->
     <div id="auth-container" class="fixed inset-0 bg-gray-900 z-[100] flex items-center justify-center p-4">
         <div class="w-full max-w-sm mx-auto">
-             <img src="https://i.imgur.com/rwa8SjI.png" alt="VINI PLAY Logo" class="h-16 w-16 mx-auto mb-4">
+             <img src="/viniplay.png" alt="VINI PLAY Logo" class="h-16 w-16 mx-auto mb-4">
             <form id="login-form" class="hidden bg-gray-800 p-8 rounded-xl shadow-lg space-y-6">
                 <h2 class="text-2xl font-bold text-center text-white">Welcome Back</h2>
                 <div id="login-error" class="hidden bg-red-900/50 border border-red-700/50 text-red-300 px-4 py-2 rounded-md text-sm"></div>
@@ -750,7 +748,7 @@
                 <button id="mobile-menu-toggle" class="lg:hidden text-gray-300 hover:text-white p-2 rounded-md transition-colors">
                     <span data-icon="menu"></span>
                 </button>
-                <img src="https://i.imgur.com/rwa8SjI.png" alt="VINI PLAY Logo" class="h-8 w-8">
+                <img src="/viniplay.png" alt="VINI PLAY Logo" class="h-8 w-8">
                 <h1 class="text-xl sm:text-2xl font-bold">VINI PLAY</h1>
             </div>
             <div class="flex items-center gap-4">
@@ -785,9 +783,9 @@
                         <select id="group-filter" class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500"></select>
                         <select id="source-filter" class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500"></select>
                         <input type="search" id="search-input" placeholder="Search..." class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500 sm:w-48">
-                        <div id="search-results-container" class="hidden absolute top-full right-0 w-full sm:w-96 max-h-80 overflow-y-auto bg-gray-800 border border-gray-600 rounded-md mt-1 z-[51] custom-scrollbar shadow-lg"></div>
                     </div>
                 </div>
+                <div id="search-results-container" class="hidden absolute top-[100px] right-0 w-full sm:w-96 max-h-80 overflow-y-auto bg-gray-800 border border-gray-600 rounded-md mt-1 z-[55] custom-scrollbar shadow-lg"></div>
 
                 <div id="guide-container" class="flex-grow bg-gray-900 overflow-auto relative custom-scrollbar">
                     <div id="guide-placeholder" class="absolute inset-0 flex items-center justify-center z-40">
@@ -1280,7 +1278,7 @@
                         
                         <!-- MODIFIED: Hardware Info Display Moved Here -->
                         <div id="hardware-info-display" class="mb-6 bg-gray-900/50 rounded-md p-3 text-sm flex items-center justify-between">
-                            <p class="text-gray-400"><strong>Detected Hardware:</strong> <span id="hardware-info-text" class="font-mono text-gray-300">Detecting...</span></p>
+                            <p class="text-gray-400"><strong>Detected Hardware/Drivers:</strong> <span id="hardware-info-text" class="font-mono text-gray-300">Detecting...</span></p>
                             <button type="button" id="hardware-info-btn" class="hidden text-gray-400 hover:text-white p-1 rounded-full hover:bg-gray-700" title="Learn more about hardware acceleration">
                                 <span data-icon="info"></span>
                             </button>
@@ -1336,7 +1334,37 @@
                             </div>
                         </div>
                     </div>
-                    
+ 
+                    <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
+                        <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">FFmpeg Logging Settings</h2>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-8">
+                            <div>
+                                <label for="player-log-level-select" class="block text-sm font-medium text-gray-400 mb-2">Player FFmpeg Logging Level</label>
+                                <p class="text-xs text-gray-500 mb-2">Tell player what ffmpeg messages should be logged. Typically not changed unless debugging.</p>
+                                <select id="player-log-level-select" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500 mb-2">
+                                    <option value="error">[error] Log all errors including handled ones</option>
+                                    <option value="warning" selected>[warning] Log all warnings and errors</option>
+                                    <option value="info">[info] Log info messages, warnings and errors</option>
+                                    <option value="verbose">[verbose] Log more info messages, warnings and errors</option>
+                                    <option value="debug">[debug] Log absolutely everything including debug messages</option>
+
+                                </select>
+                            </div>
+                            <div>
+                                <label for="dvr-log-level-select" class="block text-sm font-medium text-gray-400 mb-2">DVR FFmpeg Logging Level</label>
+                                <p class="text-xs text-gray-500 mb-2">Tell DVR what ffmpeg messages should be logged. Typically not changed  unless debugging.</p>
+                                <select id="dvr-log-level-select" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500 mb-2">
+                                    <option value="error">[error] Log all errors including handled ones</option>
+                                    <option value="warning" selected>[warning] Log all warnings and errors</option>
+                                    <option value="info">[info] Log info messages, warnings and errors</option>
+                                    <option value="verbose">[verbose] Log more info messages, warnings and errors</option>
+                                    <option value="debug">[debug] Log absolutely everything including debug messages</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+  
                     <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
                         <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Storage Management</h2>
                         <div class="space-y-4">
@@ -1363,9 +1391,9 @@
                                  <label for="search-scope-select" class="block text-sm font-medium text-gray-400 mb-1">Guide Search Scope</label>
                                   <p class="text-xs text-gray-500 mb-2">Control what the search bar in the TV Guide looks for.</p>
                                  <select id="search-scope-select" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
-                                    <option value="channels_only_filtered" selected>Search Channels Only (in filtered group)</option>
+                                    <option value="channels_only_filtered">Search Channels Only (in filtered group)</option>
                                     <option value="channels_programs_filtered">Search Channels & Programs (in filtered group)</option>
-                                    <option value="all_channels_unfiltered">Search All Channels (ignore group filter)</option>
+                                    <option value="all_channels_unfiltered" selected>Search All Channels (ignore group filter)</option>
                                     <option value="all_channels_programs_unfiltered">Search All Channels & Programs (ignore group filter)</option>
                                 </select>
                              </div>
@@ -1486,7 +1514,10 @@
                     <p id="stream-info-resolution"></p>
                     <p id="stream-info-bandwidth"></p>
                     <p id="stream-info-fps"></p>
+                    <p id="stream-info-dropped"></p>
                     <p id="stream-info-buffer"></p>
+                    <p id="stream-info-video"></p>
+                    <p id="stream-info-audio"></p>
                 </div>
                 <div id="cast-status" class="hidden absolute inset-0 flex-col items-center justify-center bg-black text-white p-4">
                     <span data-icon="cast" class="w-16 h-16 mb-4"></span>
@@ -1511,6 +1542,7 @@
     
             <div id="program-details-header" class="pb-3 border-b border-gray-700 mb-3 flex-shrink-0">
                 <div class="pr-20">
+                    <h2 id="details-channel" class="text-2xl font-bold text-white"></h2>
                     <h3 id="details-title" class="text-xl font-bold text-white"></h3>
                     <p id="details-time" class="text-sm text-gray-400"></p>
                 </div>
@@ -1631,7 +1663,7 @@
                             </div>
                         </div>
                         <div id="source-editor-refresh-container">
-                            <label for="source-editor-refresh-interval" class="block text-sm font-medium text-gray-400">Refresh Interval (URL only)</label>
+                            <label for="source-editor-refresh-interval" class="block text-sm font-medium text-gray-400">Refresh Interval</label>
                             <select id="source-editor-refresh-interval" class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
                                 <option value="0">Disabled</option>
                                 <option value="1">Every 1 Hour</option>
