@@ -686,7 +686,7 @@ export function handleSearchAndFilter(isFirstLoad = false) {
         // Perform the program search if the scope allows it.
         let programResults = [];
         if (searchScope.includes('programs') && appState.fusePrograms) {
-            programResults = appState.fusePrograms.search(searchTerm); //programResults = appState.fusePrograms.search(searchTerm).slice(0, 20);
+            programResults = appState.fusePrograms.search(searchTerm); //programResults = appState.fusePrograms.search(searchTerm); // appState.fusePrograms.search(searchTerm).slice(0, 20);
         }
 
         // BUG FIX: Include channels from both channel search AND program search
@@ -700,7 +700,7 @@ export function handleSearchAndFilter(isFirstLoad = false) {
         channelsForGuide = channelSearchPool.filter(ch => allRelevantChannelIds.has(ch.id));
         
         // Render the search results dropdown.
-        renderSearchResults(channelResults.slice(0, 10), programResults);
+        renderSearchResults(channelResults, programResults); //renderSearchResults(channelResults.slice(0, 10), programResults);
 
     } else {
         // If there is no search term, the guide simply displays the base filtered channels.
