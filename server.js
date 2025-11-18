@@ -38,6 +38,9 @@ let notificationCheckInterval = null;
 const sourceRefreshTimers = new Map();
 let detectedHardware = { nvidia: null, intel_qsv: null, intel_vaapi: null, radeon_vaapi: null }; // MODIFIED: To store specific Intel GPU info
 
+// Used to validate settings.
+const validFFmpegLogLevels = ["debug", "verbose", "info", "warning", "error"];
+
 // --- ENHANCEMENT: For Server-Sent Events (SSE) ---
 // This map will store active client connections for real-time updates.
 const sseClients = new Map();
@@ -696,8 +699,11 @@ function getSettings() {
         let settings = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf-8'));
         
         // --- SETTINGS MIGRATION LOGIC ---
+        // This is the correct place to handle/validate newly added settings during startup.
+        // Otherwise users will potentially have errors when migrating to new viniplay
+        // versions that expect new settings.
         let needsSave = false;
-        
+
         defaultSettings.streamProfiles.forEach(defaultProfile => {
             const existingProfile = settings.streamProfiles.find(p => p.id === defaultProfile.id);
             if (!existingProfile) {
@@ -736,9 +742,51 @@ function getSettings() {
             });
         }
         
-        if (needsSave) {
-            console.log('[SETTINGS_MIGRATE] Saving updated settings file after migration.');
-            fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
+        if (!settings.playerLogLevel) {
+            // There is no playerLogLevel setting.  Add it with default setting.
+            console.log(`[SETTINGS_MIGRATE] Initializing missing player Log Level setting to ${defaultSettings.playerLogLevel}.`);
+            settings.playerLogLevel = defaultSettings.playerLogLevel;
+            needsSave = true;
+        } else if (!validFFmpegLogLevels.includes(settings.playerLogLevel) ) {
+            // There is a playerLogLevel setting but the value is not recognized.  Set to default.
+            console.log(`[SETTINGS_MIGRATE_ERROR] player Log Level setting: ${settings.playerLogLevel} is invalid, set to default: ${defaultSettings.playerLogLevel}.`);
+            settings.playerLogLevel = defaultSettings.playerLogLevel;
+            needsSave = true;
+        }
+
+        if (!settings.dvrLogLevel) {
+            // There is no dvrLogLevel setting.  Add it with default setting.
+            console.log(`[SETTINGS_MIGRATE] Initializing missing dvr Log Level setting to ${defaultSettings.dvrLogLevel}.`);
+            settings.dvrLogLevel = defaultSettings.dvrLogLevel;
+            needsSave = true;
+        } else if (!validFFmpegLogLevels.includes(settings.dvrLogLevel) ) {
+            // There is a dvrLogLevel setting but the value is not recognized.  Set to default.
+            console.log(`[SETTINGS_MIGRATE_ERROR] dvr Log Level setting: ${settings.dvrLogLevel} is invalid, set to default: ${defaultSettings.dvrLogLevel}.`);
+            settings.dvrLogLevel = defaultSettings.dvrLogLevel;
+            needsSave = true;
+        }
+
+        // Check that all expected settings are present and set and if not,
+        // generate log to highlight missing setting(s) migration code. 
+        if (!settings || typeof settings !== 'object') {
+            console.log('[SETTINGS_MIGRATE_ERROR] Settings are not valid.');
+        } else {
+            let allSettingsValid = true;
+            for (const key of Object.keys(defaultSettings)) {
+                if (!(key in settings) || settings[key] === undefined) {
+                    console.log(`[SETTINGS_MIGRATE_ERROR] Expected setting ${key} is missing. server.js:getSettings() needs updating.`);
+                    allSettingsValid = false;
+                }
+            }
+            if (allSettingsValid) {
+                console.log('[SETTINGS_MIGRATE] Settings are all valid.');
+                if (needsSave) {
+                    console.log('[SETTINGS_MIGRATE] Saving updated settings file after migration.');
+                    fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
+                }
+            } else {
+                console.log('[SETTINGS_MIGRATE_ERROR] Settings are not all valid.');
+            }
         }
 
         return settings;
