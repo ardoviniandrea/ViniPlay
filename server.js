@@ -18,6 +18,7 @@ const bcrypt = require('bcrypt');
 const sqlite3 = require('sqlite3').verbose();
 const SQLiteStore = require('connect-sqlite3')(session);
 const xmlJS = require('xml-js');
+const zlib = require('zlib');
 const webpush = require('web-push');
 const schedule = require('node-schedule');
 const disk = require('diskusage');
@@ -829,7 +830,7 @@ async function triggerVodRefreshForProvider(provider, dbInstance, sendStatus = (
 
 // ... existing helper functions (fetchUrlContent, parseEpgTime, processAndMergeSources) remain the same ...
 
-function fetchUrlContent(url, options = {}) { // <-- MODIFIED
+function fetchUrlContent(url, options = {}, asBuffer = false) { // <-- MODIFIED
     return new Promise((resolve, reject) => {
         const protocol = url.startsWith('https') ? https : http;
         const TIMEOUT_DURATION = 60000;
@@ -838,20 +839,31 @@ function fetchUrlContent(url, options = {}) { // <-- MODIFIED
         const request = protocol.get(url, { timeout: TIMEOUT_DURATION, ...options }, (res) => { // <-- MODIFIED
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 console.log(`[FETCH] Redirecting to: ${res.headers.location}`);
-                request.abort(); 
-                return fetchUrlContent(new URL(res.headers.location, url).href, options).then(resolve, reject); // <-- MODIFIED
+                request.abort();
+                // Pass the asBuffer flag through redirects
+                return fetchUrlContent(new URL(res.headers.location, url).href, options, asBuffer).then(resolve, reject);
             }
             if (res.statusCode !== 200) {
                 console.error(`[FETCH] Failed to fetch ${url}: Status Code ${res.statusCode}`);
                 return reject(new Error(`Failed to fetch: Status Code ${res.statusCode}`));
             }
-            let data = '';
-            res.setEncoding('utf8');
-            res.on('data', (chunk) => { data += chunk; });
-            res.on('end', () => {
-                console.log(`[FETCH] Successfully fetched content from: ${url}`);
-                resolve(data);
-            });
+
+            if (asBuffer) {
+                const chunks = [];
+                res.on('data', (chunk) => chunks.push(chunk));
+                res.on('end', () => {
+                    console.log(`[FETCH] Successfully fetched content as buffer from: ${url}`);
+                    resolve(Buffer.concat(chunks));
+                });
+            } else {
+                let data = '';
+                res.setEncoding('utf8');
+                res.on('data', (chunk) => { data += chunk; });
+                res.on('end', () => {
+                    console.log(`[FETCH] Successfully fetched content from: ${url}`);
+                    resolve(data);
+                });
+            }
         });
 
         request.on('timeout', () => {
@@ -1178,8 +1190,17 @@ async function processAndMergeSources(req) {
                 }
             } else if (source.type === 'url') {
                 sendProcessingStatus(req, ` -> Fetching content from URL...`, 'info');
-                xmlString = await fetchUrlContent(source.path, source.fetchOptions || {});
-                sendProcessingStatus(req, ` -> Successfully fetched EPG content.`, 'info');
+
+                // Use a different function to fetch raw buffer for compressed files
+                if (source.path.endsWith('.gz')) {
+                    const buffer = await fetchUrlContent(source.path, source.fetchOptions || {}, true); // Fetch as buffer
+                    xmlString = zlib.gunzipSync(buffer).toString('utf-8');
+                    sendProcessingStatus(req, ` -> Successfully fetched and decompressed EPG content.`, 'info');
+                } else {
+                    xmlString = await fetchUrlContent(source.path, source.fetchOptions || {});
+                    sendProcessingStatus(req, ` -> Successfully fetched EPG content.`, 'info');
+                }
+                
                 try {
                     fs.writeFileSync(epgFilePath, xmlString);
                     console.log(`[EPG] Downloaded EPG for "${source.name}" saved to ${epgFilePath}.`);
