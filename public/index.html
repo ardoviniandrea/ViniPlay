@@ -1504,8 +1504,26 @@
                     <button id="pip-btn" class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700" title="Picture-in-Picture">
                         <span data-icon="pip"></span>
                     </button>
+                    <button id="audio-track-btn" class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700 hidden" title="Audio Tracks">
+                        <span data-icon="audio"></span>
+                    </button>
+                    <button id="subtitle-track-btn" class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700 hidden" title="Subtitles">
+                        <span data-icon="subtitles"></span>
+                    </button>
                     <button id="close-modal" class="text-gray-400 hover:text-white text-2xl leading-none font-bold">&times;</button>
                 </div>
+            </div>
+                
+            <!-- Audio Track Menu -->
+            <div id="audio-track-menu" class="absolute bottom-16 right-4 bg-gray-900 rounded-lg shadow-xl border border-gray-700 min-w-[200px] max-h-[300px] overflow-y-auto z-50 hidden">
+                <div class="px-4 py-3 border-b border-gray-700 font-semibold text-white">Audio Tracks</div>
+                <div id="audio-track-list" class="py-2"></div>
+            </div>
+            
+            <!-- Subtitle Track Menu -->
+            <div id="subtitle-track-menu" class="absolute bottom-16 right-4 bg-gray-900 rounded-lg shadow-xl border border-gray-700 min-w-[200px] max-h-[300px] overflow-y-auto z-50 hidden">
+                <div class="px-4 py-3 border-b border-gray-700 font-semibold text-white">Subtitles</div>
+                <div id="subtitle-track-list" class="py-2"></div>
             </div>
             <div id="video-content" class="flex-grow p-1 bg-black relative">
                 <video id="videoElement" controls autoplay class="w-full h-full"></video>
