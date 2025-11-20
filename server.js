@@ -498,6 +498,13 @@ function extractVainfoGPUDetails(vainfo_stdout) {
  * NEW: Detects available hardware for transcoding.
  */
 async function detectHardwareAcceleration() {
+
+    // When a new unhandled GPU is found, add the driver name to the appropriate
+    // array of gpu drivers for detection.
+    const vaapi_radeon_gpu_drivers = ["r600_drv_video.so", "radeonsi_drv_video.so"];
+    const intel_qsv_gpu_drivers = ["iHD_drv_video.so"];
+    const intel_vaapi_gpu_drivers = ["i965_drv_video.so"];
+  
     console.log('[HW] Detecting hardware acceleration capabilities...');
     // Detect NVIDIA GPU
     exec('nvidia-smi --query-gpu=gpu_name --format=csv,noheader', (err, stdout, stderr) => {
@@ -518,18 +525,18 @@ async function detectHardwareAcceleration() {
             let found = false;
             const trimmed_stdout = stdout.trim()
 
-            // iHD driver is for modern Intel GPUs (Gen9+) and is preferred for QSV
-            if (stderr.includes('iHD_drv_video.so')) {
+            // Intel qsv driver is for modern Intel GPUs (Gen9+) and is preferred for QSV
+            if (intel_qsv_gpu_drivers.some(substring=>stderr.includes(substring))) {
                 detectedHardware.intel_qsv = extractVainfoGPUDetails(trimmed_stdout);
                 found = true;
             }
             // AMD Radeon detection
-            if (stderr.includes('radeonsi_drv_video.so')) {
+            if (vaapi_radeon_gpu_drivers.some(substring=>stderr.includes(substring))) {
                 detectedHardware.radeon_vaapi = extractVainfoGPUDetails(trimmed_stdout);
                 found = true;
             }
-            // i965 driver is for older Intel GPUs (pre-Gen9)
-            if (stderr.includes('i965_drv_video.so')) {
+            // Intel vaapi driver is for older Intel GPUs (pre-Gen9)
+            if (intel_vaapi_gpu_drivers.some(substring=>stderr.includes(substring))) {
                 detectedHardware.intel_vaapi = extractVainfoGPUDetails(trimmed_stdout);
                 found = true;
             }
