@@ -94,7 +94,7 @@ export const stopAndCleanupPlayer = async () => { // MODIFIED: Made function asy
         stopRedirectStream(currentRedirectHistoryId);
         currentRedirectHistoryId = null;
     }
-    
+
     // NEW: Clear any scheduled retry attempt
     if (retryTimeout) {
         clearTimeout(retryTimeout);
@@ -116,7 +116,7 @@ export const stopAndCleanupPlayer = async () => { // MODIFIED: Made function asy
         clearInterval(streamInfoInterval);
         streamInfoInterval = null;
     }
-    
+
     if (UIElements.streamInfoOverlay) {
         UIElements.streamInfoOverlay.classList.add('hidden');
     }
@@ -184,7 +184,7 @@ export const playChannel = (url, name, channelId) => {
     if (!retryTimeout) {
         retryCount = 0;
     }
-    
+
     // Store current channel info for potential retries
     currentChannelInfo = { url, name, channelId };
 
@@ -220,11 +220,11 @@ export const playChannel = (url, name, channelId) => {
     }
     // --- End Activity Logging ---
 
-    
+
     if (!profile) {
         return showNotification("Stream profile not found.", true);
     }
-    
+
     const streamUrlToPlay = profile.command === 'redirect' ? url : `/stream?url=${encodeURIComponent(url)}&profileId=${profileId}&userAgentId=${userAgentId}`;
     const channel = guideState.channels.find(c => c.id === channelId);
     const logo = channel ? channel.logo : '';
@@ -237,11 +237,11 @@ export const playChannel = (url, name, channelId) => {
     }
 
     // --- Local Playback Logic ---
-    currentLocalStreamUrl = url; 
+    currentLocalStreamUrl = url;
     console.log(`[PLAYER] Playing channel "${name}" locally. Tracking URL for cleanup: ${currentLocalStreamUrl}`);
-    
+
     setLocalPlayerState(streamUrlToPlay, name, logo);
-    
+
     if (appState.player) {
         appState.player.destroy();
         appState.player = null;
@@ -270,15 +270,15 @@ export const playChannel = (url, name, channelId) => {
             // We only want to auto-retry on unrecoverable network/media errors.
             if (errorType === 'NetworkError' || errorType === 'MediaError') {
                 // To prevent a retry loop if the user has manually closed the player
-                if (appState.player) { 
+                if (appState.player) {
                     handleStreamError();
                 }
             } else {
-                 showNotification(`Player Error: ${errorDetail}`, true);
-                 stopAndCleanupPlayer();
+                showNotification(`Player Error: ${errorDetail}`, true);
+                stopAndCleanupPlayer();
             }
         });
-        
+
         // When playback starts successfully, reset the retry counter.
         appState.player.on(mpegts.Events.MEDIA_INFO, () => {
             console.log('[PLAYER] Media info received, playback started successfully.');
@@ -288,14 +288,14 @@ export const playChannel = (url, name, channelId) => {
                 retryTimeout = null;
             }
         });
-        
+
         openModal(UIElements.videoModal);
         UIElements.videoTitle.textContent = name;
         appState.player.attachMediaElement(UIElements.videoElement);
         appState.player.load();
-        
+
         UIElements.videoElement.volume = parseFloat(localStorage.getItem('iptvPlayerVolume') || 0.5);
-        
+
         appState.player.play().catch((err) => {
             console.error("MPEGTS Player play() caught an error:", err);
             // This initial play error is often critical, so we start the retry process.
@@ -344,8 +344,8 @@ export const playVOD = async (url, title, logo = '') => {
             // Clear live stream tracking state
             setLocalPlayerState(null, null, null);
             currentLocalStreamUrl = null;
-             // Start Redirect logging if needed (though less common for native playback issues)
-             startRedirectStream(url, null, title, null)
+            // Start Redirect logging if needed (though less common for native playback issues)
+            startRedirectStream(url, null, title, null)
                 .then(historyId => {
                     if (historyId) {
                         currentRedirectHistoryId = historyId; // Track for stopping
@@ -481,6 +481,118 @@ export const playVOD = async (url, title, logo = '') => {
 };
 
 /**
+ * Detects and populates available audio tracks in the menu.
+ */
+function updateAudioTrackList() {
+    const video = UIElements.videoElement;
+    const audioTracks = video.audioTracks;
+    const listEl = document.getElementById('audio-track-list');
+    const btnEl = document.getElementById('audio-track-btn');
+
+    console.log('[AUDIO_TRACKS] Checking for audio tracks...');
+    console.log('[AUDIO_TRACKS] audioTracks object:', audioTracks);
+    console.log('[AUDIO_TRACKS] Number of tracks:', audioTracks ? audioTracks.length : 0);
+
+    if (!audioTracks || audioTracks.length <= 1) {
+        // Hide button if no multiple tracks
+        console.log('[AUDIO_TRACKS] Not enough tracks, hiding button');
+        btnEl?.classList.add('hidden');
+        return;
+    }
+
+    console.log('[AUDIO_TRACKS] Multiple tracks found! Showing button and populating menu');
+    btnEl?.classList.remove('hidden');
+    if (!listEl) return;
+
+    listEl.innerHTML = '';
+
+    for (let i = 0; i < audioTracks.length; i++) {
+        const track = audioTracks[i];
+        console.log(`[AUDIO_TRACKS] Track ${i}:`, { label: track.label, language: track.language, enabled: track.enabled });
+        const item = document.createElement('div');
+        item.className = `px-4 py-2 cursor-pointer hover:bg-gray-700 transition-colors ${track.enabled ? 'bg-blue-600 font-semibold' : ''}`;
+        item.textContent = track.label || track.language || `Track ${i + 1}`;
+        item.onclick = () => selectAudioTrack(i);
+        listEl.appendChild(item);
+    }
+}
+
+/**
+ * Selects an audio track by index.
+ */
+function selectAudioTrack(index) {
+    const audioTracks = UIElements.videoElement.audioTracks;
+    if (!audioTracks) return;
+
+    for (let i = 0; i < audioTracks.length; i++) {
+        audioTracks[i].enabled = (i === index);
+    }
+    updateAudioTrackList();
+    document.getElementById('audio-track-menu')?.classList.add('hidden');
+    showNotification(`Audio track switched`, false, 1500);
+}
+
+/**
+ * Detects and populates available subtitle tracks in the menu.
+ */
+function updateSubtitleTrackList() {
+    const video = UIElements.videoElement;
+    const textTracks = video.textTracks;
+    const listEl = document.getElementById('subtitle-track-list');
+    const btnEl = document.getElementById('subtitle-track-btn');
+
+    console.log('[SUBTITLES] Checking for subtitle tracks...');
+    console.log('[SUBTITLES] textTracks object:', textTracks);
+    console.log('[SUBTITLES] Number of tracks:', textTracks ? textTracks.length : 0);
+
+    if (!textTracks || textTracks.length === 0) {
+        console.log('[SUBTITLES] No subtitle tracks found, hiding button');
+        btnEl?.classList.add('hidden');
+        return;
+    }
+
+    console.log('[SUBTITLES] Subtitle tracks found! Showing button and populating menu');
+    btnEl?.classList.remove('hidden');
+    if (!listEl) return;
+
+    listEl.innerHTML = '';
+
+    // Add "Off" option
+    const offItem = document.createElement('div');
+    const anyShowing = Array.from(textTracks).some(t => t.mode === 'showing');
+    offItem.className = `px-4 py-2 cursor-pointer hover:bg-gray-700 transition-colors ${!anyShowing ? 'bg-blue-600 font-semibold' : ''}`;
+    offItem.textContent = 'Off';
+    offItem.onclick = () => selectSubtitleTrack(-1);
+    listEl.appendChild(offItem);
+
+    // Add each track
+    for (let i = 0; i < textTracks.length; i++) {
+        const track = textTracks[i];
+        console.log(`[SUBTITLES] Track ${i}:`, { label: track.label, language: track.language, kind: track.kind, mode: track.mode });
+        const item = document.createElement('div');
+        item.className = `px-4 py-2 cursor-pointer hover:bg-gray-700 transition-colors ${track.mode === 'showing' ? 'bg-blue-600 font-semibold' : ''}`;
+        item.textContent = track.label || track.language || `Subtitle ${i + 1}`;
+        item.onclick = () => selectSubtitleTrack(i);
+        listEl.appendChild(item);
+    }
+}
+
+/**
+ * Selects a subtitle track by index (-1 for off).
+ */
+function selectSubtitleTrack(index) {
+    const textTracks = UIElements.videoElement.textTracks;
+    if (!textTracks) return;
+
+    for (let i = 0; i < textTracks.length; i++) {
+        textTracks[i].mode = (i === index) ? 'showing' : 'hidden';
+    }
+    updateSubtitleTrackList();
+    document.getElementById('subtitle-track-menu')?.classList.add('hidden');
+    showNotification(index === -1 ? 'Subtitles off' : 'Subtitle track switched', false, 1500);
+}
+
+/**
  * Sets up event listeners for the video player.
  */
 export function setupPlayerEventListeners() {
@@ -510,7 +622,7 @@ export function setupPlayerEventListeners() {
                 const castContext = cast.framework.CastContext.getInstance();
                 castContext.requestSession().catch((error) => {
                     console.error('Error requesting cast session:', error);
-                    if (error !== "cancel") { 
+                    if (error !== "cancel") {
                         showNotification('Could not initiate Cast session. See console for details.', true);
                     }
                 });
@@ -531,8 +643,53 @@ export function setupPlayerEventListeners() {
             stopAndCleanupPlayer();
         }
     });
-    
+
     UIElements.videoElement.addEventListener('volumechange', () => {
         localStorage.setItem('iptvPlayerVolume', UIElements.videoElement.volume);
+    });
+
+    // Audio track button
+    const audioTrackBtn = document.getElementById('audio-track-btn');
+    if (audioTrackBtn) {
+        audioTrackBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const menu = document.getElementById('audio-track-menu');
+            menu?.classList.toggle('hidden');
+            document.getElementById('subtitle-track-menu')?.classList.add('hidden');
+        });
+    }
+
+    // Subtitle track button
+    const subtitleTrackBtn = document.getElementById('subtitle-track-btn');
+    if (subtitleTrackBtn) {
+        subtitleTrackBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const menu = document.getElementById('subtitle-track-menu');
+            menu?.classList.toggle('hidden');
+            document.getElementById('audio-track-menu')?.classList.add('hidden');
+        });
+    }
+
+    // Close menus when clicking outside
+    document.addEventListener('click', () => {
+        document.getElementById('audio-track-menu')?.classList.add('hidden');
+        document.getElementById('subtitle-track-menu')?.classList.add('hidden');
+    });
+
+    // Update track lists when stream loads
+    UIElements.videoElement.addEventListener('loadedmetadata', () => {
+        console.log('[PLAYER] Media metadata loaded, checking for audio/subtitle tracks...');
+        // Small delay to ensure tracks are fully loaded
+        setTimeout(() => {
+            updateAudioTrackList();
+            updateSubtitleTrackList();
+        }, 500);
+    });
+
+    // Also check when tracks change
+    UIElements.videoElement.addEventListener('addtrack', () => {
+        console.log('[PLAYER] Track added, updating lists...');
+        updateAudioTrackList();
+        updateSubtitleTrackList();
     });
 }
