@@ -46,6 +46,10 @@ const validFFmpegLogLevels = ["debug", "verbose", "info", "warning", "error"];
 // This map will store active client connections for real-time updates.
 const sseClients = new Map();
 
+// --- CAST: Token-based authentication ---
+// Stores short-lived tokens for Chromecast authentication
+const activeCastTokens = new Map(); // token -> { userId, streamUrl, expiresAt }
+
 // --- NEW: DVR State ---
 const activeDvrJobs = new Map(); // Stores active node-schedule jobs
 const runningFFmpegProcesses = new Map(); // Stores PIDs of running ffmpeg recordings
@@ -116,7 +120,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
                 if (err) {
                     console.error("[DB] Error creating 'users' table:", err.message);
                 } else {
-                    db.run("ALTER TABLE users ADD COLUMN canUseDvr INTEGER DEFAULT 0", () => {});
+                    db.run("ALTER TABLE users ADD COLUMN canUseDvr INTEGER DEFAULT 0", () => { });
                 }
             });
             db.run(`CREATE TABLE IF NOT EXISTS user_settings (user_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, PRIMARY KEY (user_id, key))`);
@@ -141,8 +145,8 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 				created_at TEXT DEFAULT CURRENT_TIMESTAMP,
 				updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 			)`, (err) => { if (err) console.error("[DB] Error creating 'movies' table:", err.message); });
-			
-			db.run(`CREATE TABLE IF NOT EXISTS series (
+
+            db.run(`CREATE TABLE IF NOT EXISTS series (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				name TEXT NOT NULL,
 				year INTEGER,
@@ -155,7 +159,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 				created_at TEXT DEFAULT CURRENT_TIMESTAMP,
 				updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 			)`, (err) => { if (err) console.error("[DB] Error creating 'series' table:", err.message); });
-            
+
             db.run(`CREATE TABLE IF NOT EXISTS episodes (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				series_id INTEGER NOT NULL,
@@ -170,7 +174,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 				updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
 				FOREIGN KEY (series_id) REFERENCES series(id) ON DELETE CASCADE
 			)`, (err) => { if (err) console.error("[DB] Error creating 'episodes' table:", err.message); });
-            
+
             db.run(`CREATE TABLE IF NOT EXISTS vod_categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 category_id TEXT UNIQUE NOT NULL,
@@ -178,7 +182,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )`, (err) => { if (err) console.error("[DB] Error creating 'vod_categories' table:", err.message); });
-            
+
             // --- NEW: VOD Relation Tables (Linking Providers to Content) ---
             // Note: Assuming 'provider_id' refers to the ID of the M3U source entry in settings
             // We'll store the source ID (e.g., 'src-12345678') as TEXT for flexibility
@@ -191,7 +195,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
                 FOREIGN KEY (movie_id) REFERENCES movies(id) ON DELETE CASCADE,
                 PRIMARY KEY (provider_id, stream_id)
             )`, (err) => { if (err) console.error("[DB] Error creating 'provider_movie_relations' table:", err.message); });
-            
+
             db.run(`CREATE TABLE IF NOT EXISTS provider_series_relations (
                 provider_id TEXT NOT NULL,
                 series_id INTEGER NOT NULL,
@@ -200,8 +204,8 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
                 FOREIGN KEY (series_id) REFERENCES series(id) ON DELETE CASCADE,
                 PRIMARY KEY (provider_id, external_series_id)
             )`, (err) => { if (err) console.error("[DB] Error creating 'provider_series_relations' table:", err.message); });
-            
-             db.run(`CREATE TABLE IF NOT EXISTS provider_episode_relations (
+
+            db.run(`CREATE TABLE IF NOT EXISTS provider_episode_relations (
                 provider_id TEXT NOT NULL,
                 episode_id INTEGER NOT NULL,
                 provider_stream_id TEXT NOT NULL, -- The stream ID for the episode from XC
@@ -209,16 +213,16 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
                 last_seen TEXT NOT NULL,
                 FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE,
                 PRIMARY KEY (provider_id, episode_id)
-             )`, (err) => { 
+             )`, (err) => {
                 if (err) {
                     console.error("[DB] Error creating 'provider_episode_relations' table:", err.message);
                 } else {
                     // Add new column non-destructively
-                    db.run("ALTER TABLE provider_episode_relations ADD COLUMN container_extension TEXT", () => {});
+                    db.run("ALTER TABLE provider_episode_relations ADD COLUMN container_extension TEXT", () => { });
                 }
             });
             // --- END NEW VOD TABLES ---
-            
+
             //-- ENHANCEMENT: Modify stream history table to include more data for the admin panel.
             db.run(`CREATE TABLE IF NOT EXISTS stream_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -236,8 +240,8 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
             )`, (err) => {
                 if (!err) {
                     // Add new columns non-destructively if the table already exists
-                    db.run("ALTER TABLE stream_history ADD COLUMN channel_logo TEXT", () => {});
-                    db.run("ALTER TABLE stream_history ADD COLUMN stream_profile_name TEXT", () => {});
+                    db.run("ALTER TABLE stream_history ADD COLUMN channel_logo TEXT", () => { });
+                    db.run("ALTER TABLE stream_history ADD COLUMN stream_profile_name TEXT", () => { });
                 }
             });
             // --- DVR Job Loading and Scheduling (Moved from main execution flow) ---
@@ -282,13 +286,13 @@ const updateAndScheduleSourceRefreshes = () => {
             }
 
             console.log(`[SCHEDULER] Scheduling refresh for "${source.name}" (ID: ${source.id}) every ${source.refreshHours} hours.`);
-            
+
             const scheduleNext = () => {
                 const timeoutId = setTimeout(async () => {
                     console.log(`[SCHEDULER_RUN] Auto-refresh triggered for "${source.name}".`);
                     try {
                         const result = await processAndMergeSources();
-                        if(result.success) {
+                        if (result.success) {
                             fs.writeFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
                             console.log(`[SCHEDULER_RUN] Successfully refreshed and processed sources for "${source.name}".`);
                         }
@@ -350,13 +354,13 @@ if (sessionSecret.includes('replace_this')) {
 }
 
 app.use(
-  session({
-    store: new SQLiteStore({ db: 'viniplay.db', dir: DATA_DIR, table: 'sessions' }),
-    secret: sessionSecret,
-    resave: false,
-    saveUninitialized: false,
-    cookie: { maxAge: 30 * 24 * 60 * 60 * 1000, httpOnly: true, secure: process.env.NODE_ENV === 'production' },
-  })
+    session({
+        store: new SQLiteStore({ db: 'viniplay.db', dir: DATA_DIR, table: 'sessions' }),
+        secret: sessionSecret,
+        resave: false,
+        saveUninitialized: false,
+        cookie: { maxAge: 30 * 24 * 60 * 60 * 1000, httpOnly: true, secure: process.env.NODE_ENV === 'production' },
+    })
 );
 
 app.use((req, res, next) => {
@@ -376,7 +380,7 @@ const requireAuth = (req, res, next) => {
     if (!req.session || !req.session.userId) {
         return res.status(401).json({ error: 'Authentication required.' });
     }
-    
+
     db.get("SELECT id FROM users WHERE id = ?", [req.session.userId], (err, user) => {
         if (err) {
             console.error('[AUTH_MIDDLEWARE] DB error checking user existence:', err);
@@ -487,8 +491,7 @@ function extractVainfoGPUDetails(vainfo_stdout) {
     // Likely means the output format of vainfo has been changed.
     if (vainfo_gpu_details === "") {
         vainfo_gpu_details = vainfo_stdout;
-    } else
-    {
+    } else {
         console.log(`[HW] Detected: ${vainfo_gpu_details}`)
     }
     return vainfo_gpu_details;
@@ -553,7 +556,7 @@ async function detectHardwareAcceleration() {
 function cleanupInactiveStreams() {
     const now = Date.now();
     console.log(`[JANITOR] Running cleanup for inactive streams. Current active processes: ${activeStreamProcesses.size}`);
-    
+
     activeStreamProcesses.forEach((streamInfo, streamKey) => {
         if (streamInfo.references <= 0 && (now - streamInfo.lastAccess > STREAM_INACTIVITY_TIMEOUT)) {
             console.log(`[JANITOR] Found stale stream process for key: ${streamKey}. Terminating PID: ${streamInfo.process.pid}.`);
@@ -565,7 +568,7 @@ function cleanupInactiveStreams() {
                     db.run("UPDATE stream_history SET end_time = ?, duration_seconds = ?, status = 'stopped' WHERE id = ? AND status = 'playing'",
                         [endTime, duration, streamInfo.historyId]);
                 }
-                streamInfo.process.kill('SIGKILL'); 
+                streamInfo.process.kill('SIGKILL');
                 activeStreamProcesses.delete(streamKey);
                 //-- ENHANCEMENT: Notify admins that a stream has ended.
                 broadcastAdminUpdate();
@@ -605,7 +608,7 @@ function broadcastAdminUpdate() {
 
     const redirectLive = Array.from(activeRedirectStreams.values()).map(info => ({
         // Use historyId for redirect streamKey to ensure it's unique per session
-        streamKey: `${info.userId}::${info.historyId}`, 
+        streamKey: `${info.userId}::${info.historyId}`,
         userId: info.userId,
         username: info.username,
         channelName: info.channelName,
@@ -648,16 +651,14 @@ function getSettings() {
         epgSources: [],
         userAgents: [{ id: `default-ua-1724778434000`, name: 'ViniPlay Default', value: 'VLC/3.0.20 (Linux; x86_64)', isDefault: true }],
         streamProfiles: [
+            { id: 'redirect', name: 'Redirect (No Transcoding)', command: 'redirect', isDefault: false },
             { id: 'ffmpeg-default', name: 'ffmpeg (Built in)', command: '-user_agent "{userAgent}" -i "{streamUrl}" -c:v libx264 -preset veryfast -crf 23 -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: true },
-            // FINAL FIX: This is the modern, more compatible command for NVIDIA streaming.
             { id: 'ffmpeg-nvidia', name: 'ffmpeg (NVIDIA NVENC)', command: '-user_agent "{userAgent}" -re -i "{streamUrl}" -c:v h264_nvenc -preset p6 -tune hq -c:a copy -f mpegts pipe:1', isDefault: false },
-            { id: 'ffmpeg-nvidia-legacy', name: 'ffmpeg (NVIDIA NVENC - Legacy)', command: '-user_agent "{userAgent}" -i "{streamUrl}" -c:v h264_nvenc -preset p6 -tune hq -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false },
-            { id: 'ffmpeg-intel', name: 'ffmpeg (Intel QSV)', command: '-hwaccel qsv -hwaccel_output_format qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -vf scale_qsv=format=nv12 -c:a aac -ac 2 -b:a 128k -f mpegts pipe:1', isDefault: false },
-            // NEW: Add this line for VA-API
-            { id: 'ffmpeg-vaapi', name: 'ffmpeg (VA-API)', command: '-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf "format=nv12|vaapi,hwupload" -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false },
-			{ id: 'ffmpeg-vaapi-amd', name: 'ffmpeg (VA-API) Radeon/AMD', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -qp 20 -vf scale_vaapi=format=nv12 -c:a aac -ac 2 -b:a 128k -f mpegts pipe:1', isDefault: false },
             { id: 'ffmpeg-nvidia-reconnect', name: 'ffmpeg (NVIDIA reconnect)', command: '-user_agent "{userAgent}" -re -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -i "{streamUrl}" -c:v h264_nvenc -preset p6 -tune hq -c:a copy -f mpegts pipe:1', isDefault: false },
-            { id: 'redirect', name: 'Redirect (No Transcoding)', command: 'redirect', isDefault: false }
+            { id: 'ffmpeg-intel', name: 'ffmpeg (Intel QSV)', command: '-hwaccel qsv -c:v h264_qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false },
+            { id: 'ffmpeg-vaapi', name: 'ffmpeg (VA-API) Intel', command: '-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf "format=nv12|vaapi,hwupload" -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false },
+            { id: 'ffmpeg-vaapi-amd', name: 'ffmpeg (VA-API) Radeon/AMD', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false },
+            { id: 'ffmpeg-cast', name: 'Cast (MP4 Fragmented)', command: '-user_agent "{userAgent}" -i "{streamUrl}" -c:v libx264 -preset veryfast -crf 23 -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1', isDefault: false }
         ],
         dvr: {
             preBufferMinutes: 1,
@@ -668,7 +669,7 @@ function getSettings() {
             recordingProfiles: [
                 // The primary default for timeshifting, uses almost no CPU.
                 { id: 'dvr-ts-default', name: 'Default TS (Stream Copy, Timeshiftable)', command: '-user_agent "{userAgent}" -i "{streamUrl}" -c copy -f mpegts "{filePath}"', isDefault: true },
-                
+
                 // The new GPU-accelerated option for timeshifting.
                 { id: 'dvr-ts-nvidia', name: 'NVIDIA NVENC TS (Timeshiftable)', command: '-user_agent "{userAgent}" -i "{streamUrl}" -c:v h264_nvenc -preset p6 -tune hq -c:a copy -f mpegts "{filePath}"', isDefault: false },
                 { id: 'dvr-ts-nvidia-reconnect', name: 'NVIDIA NVENC TS reconnect', command: '-user_agent "{userAgent}" -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -i "{streamUrl}" -c:v h264_nvenc -preset p6 -tune hq -c:a copy -f mpegts "{filePath}"', isDefault: false },
@@ -679,7 +680,7 @@ function getSettings() {
                 { id: 'dvr-mp4-intel', name: 'Intel QSV MP4 (H.264/AAC)', command: '-hwaccel qsv -hwaccel_output_format qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -vf scale_qsv=format=nv12 -c:a aac -ac 2 -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false },
                 // NEW: Add this line for VA-API recording
                 { id: 'dvr-mp4-vaapi', name: 'VA-API MP4 (H.264/AAC)', command: '-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf \'format=nv12,hwupload\' -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false },
-				{ id: 'dvr-mp4-radeon-vaapi', name: 'Radeon/AMD VA-API MP4 (H.264/AAC)', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -preset medium -vf scale_vaapi=format=nv12 -c:a aac -ac 2 -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false }
+                { id: 'dvr-mp4-radeon-vaapi', name: 'Radeon/AMD VA-API MP4 (H.264/AAC)', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -preset medium -vf scale_vaapi=format=nv12 -c:a aac -ac 2 -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false }
             ]
         },
         activeUserAgentId: `default-ua-1724778434000`,
@@ -698,7 +699,7 @@ function getSettings() {
     }
     try {
         let settings = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf-8'));
-        
+
         // --- SETTINGS MIGRATION LOGIC ---
         // This is the correct place to handle/validate newly added settings during startup.
         // Otherwise users will potentially have errors when migrating to new viniplay
@@ -712,15 +713,15 @@ function getSettings() {
                 settings.streamProfiles.push(defaultProfile);
                 needsSave = true;
             } else if (existingProfile.isDefault) {
-                 // FINAL FIX: Forcibly update the command of default profiles to ensure users get the latest fixes.
-                 if (existingProfile.command !== defaultProfile.command) {
+                // FINAL FIX: Forcibly update the command of default profiles to ensure users get the latest fixes.
+                if (existingProfile.command !== defaultProfile.command) {
                     console.log(`[SETTINGS_MIGRATE] Updating outdated default stream profile command for: ${defaultProfile.name}`);
                     existingProfile.command = defaultProfile.command;
                     needsSave = true;
                 }
             }
         });
-        
+
         if (!settings.dvr) {
             console.log(`[SETTINGS_MIGRATE] Initializing DVR settings block.`);
             settings.dvr = defaultSettings.dvr;
@@ -742,13 +743,13 @@ function getSettings() {
                 }
             });
         }
-        
+
         if (!settings.playerLogLevel) {
             // There is no playerLogLevel setting.  Add it with default setting.
             console.log(`[SETTINGS_MIGRATE] Initializing missing player Log Level setting to ${defaultSettings.playerLogLevel}.`);
             settings.playerLogLevel = defaultSettings.playerLogLevel;
             needsSave = true;
-        } else if (!validFFmpegLogLevels.includes(settings.playerLogLevel) ) {
+        } else if (!validFFmpegLogLevels.includes(settings.playerLogLevel)) {
             // There is a playerLogLevel setting but the value is not recognized.  Set to default.
             console.log(`[SETTINGS_MIGRATE_ERROR] player Log Level setting: ${settings.playerLogLevel} is invalid, set to default: ${defaultSettings.playerLogLevel}.`);
             settings.playerLogLevel = defaultSettings.playerLogLevel;
@@ -760,7 +761,7 @@ function getSettings() {
             console.log(`[SETTINGS_MIGRATE] Initializing missing dvr Log Level setting to ${defaultSettings.dvrLogLevel}.`);
             settings.dvrLogLevel = defaultSettings.dvrLogLevel;
             needsSave = true;
-        } else if (!validFFmpegLogLevels.includes(settings.dvrLogLevel) ) {
+        } else if (!validFFmpegLogLevels.includes(settings.dvrLogLevel)) {
             // There is a dvrLogLevel setting but the value is not recognized.  Set to default.
             console.log(`[SETTINGS_MIGRATE_ERROR] dvr Log Level setting: ${settings.dvrLogLevel} is invalid, set to default: ${defaultSettings.dvrLogLevel}.`);
             settings.dvrLogLevel = defaultSettings.dvrLogLevel;
@@ -804,7 +805,7 @@ function getSettings() {
  * @param {sqlite3.Database} dbInstance - The active database connection.
  * @param {function} sendStatus - Function to send status updates.
  */
-async function triggerVodRefreshForProvider(provider, dbInstance, sendStatus = () => {}) {
+async function triggerVodRefreshForProvider(provider, dbInstance, sendStatus = () => { }) {
     if (!provider || provider.type !== 'xc' || !provider.xc_data) {
         console.error(`[VOD Trigger] Invalid provider object passed for VOD refresh. ID: ${provider?.id}`);
         return;
@@ -834,7 +835,7 @@ function fetchUrlContent(url, options = {}, asBuffer = false) { // <-- MODIFIED
     return new Promise((resolve, reject) => {
         const protocol = url.startsWith('https') ? https : http;
         const TIMEOUT_DURATION = 60000;
-        console.log(`[FETCH] Attempting to fetch URL content: ${url} (Timeout: ${TIMEOUT_DURATION/1000}s)`);
+        console.log(`[FETCH] Attempting to fetch URL content: ${url} (Timeout: ${TIMEOUT_DURATION / 1000}s)`);
 
         const request = protocol.get(url, { timeout: TIMEOUT_DURATION, ...options }, (res) => { // <-- MODIFIED
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
@@ -888,8 +889,8 @@ const parseEpgTime = (timeStr, offsetHours = 0) => {
         console.warn(`[EPG_PARSE] Invalid time format encountered: ${timeStr}`);
         return new Date();
     }
-    
-    const [ , year, month, day, hours, minutes, seconds, , sign, tzHours, tzMinutes] = match;
+
+    const [, year, month, day, hours, minutes, seconds, , sign, tzHours, tzMinutes] = match;
     let date;
     if (sign && tzHours && tzMinutes) {
         const epgOffsetMinutes = (parseInt(tzHours) * 60 + parseInt(tzMinutes)) * (sign === '+' ? 1 : -1);
@@ -1200,7 +1201,7 @@ async function processAndMergeSources(req) {
                     xmlString = await fetchUrlContent(source.path, source.fetchOptions || {});
                     sendProcessingStatus(req, ` -> Successfully fetched EPG content.`, 'info');
                 }
-                
+
                 try {
                     fs.writeFileSync(epgFilePath, xmlString);
                     console.log(`[EPG] Downloaded EPG for "${source.name}" saved to ${epgFilePath}.`);
@@ -1225,7 +1226,7 @@ async function processAndMergeSources(req) {
                 if (!originalChannelId) continue;
                 programCount++;
 
-                for(const m3uSource of m3uSourceProviders) {
+                for (const m3uSource of m3uSourceProviders) {
                     const uniqueChannelId = `${m3uSource.id}_${originalChannelId}`;
 
                     // --- NEW: EPG FILTERING ---
@@ -1253,9 +1254,9 @@ async function processAndMergeSources(req) {
                 }
             }
             if (!source.isXcEpg) {
-                 source.status = 'Success';
-                 source.statusMessage = `Processed ${programCount} programs, added ${epgAddedCount} to live guide.`;
-                 console.log(`[EPG] Source "${source.name}" processed successfully from ${source.path}.`);
+                source.status = 'Success';
+                source.statusMessage = `Processed ${programCount} programs, added ${epgAddedCount} to live guide.`;
+                console.log(`[EPG] Source "${source.name}" processed successfully from ${source.path}.`);
             }
             sendProcessingStatus(req, ` -> Processed ${programCount} programs, added ${epgAddedCount} to live guide from "${source.name}".`, 'info');
 
@@ -1263,14 +1264,14 @@ async function processAndMergeSources(req) {
             const errorMsg = `Failed to process source "${source.name}" from ${source.path}: ${error.message}`;
             console.error(`[EPG] ${errorMsg}`);
             sendProcessingStatus(req, `Error: ${errorMsg}`, 'error');
-             if (!source.isXcEpg) {
-                 source.status = 'Error';
-                 source.statusMessage = `Processing failed: ${error.message.substring(0, 100)}...`;
-             }
+            if (!source.isXcEpg) {
+                source.status = 'Error';
+                source.statusMessage = `Processing failed: ${error.message.substring(0, 100)}...`;
+            }
         }
-         if (!source.isXcEpg) {
+        if (!source.isXcEpg) {
             source.lastUpdated = new Date().toISOString();
-         }
+        }
     }
     for (const channelId in mergedProgramData) {
         mergedProgramData[channelId].sort((a, b) => new Date(a.start) - new Date(b.start));
@@ -1289,7 +1290,7 @@ async function processAndMergeSources(req) {
     sendProcessingStatus(req, 'All sources processed successfully!', 'final_success');
 
     return { success: true, message: 'Sources merged successfully.', updatedSettings: settings };
-} 
+}
 
 // ... existing helper functions ...
 
@@ -1318,7 +1319,7 @@ app.post('/api/auth/setup-admin', (req, res) => {
             console.warn('[AUTH_API] Setup attempted but users already exist. Denying setup.');
             return res.status(403).json({ error: "Setup has already been completed." });
         }
-        
+
         const { username, password } = req.body;
         if (!username || !password) {
             console.warn('[AUTH_API] Admin setup failed: Username and/or password missing.');
@@ -1330,7 +1331,7 @@ app.post('/api/auth/setup-admin', (req, res) => {
                 console.error('[AUTH_API] Error hashing password during admin setup:', err);
                 return res.status(500).json({ error: 'Error hashing password.' });
             }
-            db.run("INSERT INTO users (username, password, isAdmin, canUseDvr) VALUES (?, ?, 1, 1)", [username, hash], function(err) {
+            db.run("INSERT INTO users (username, password, isAdmin, canUseDvr) VALUES (?, ?, 1, 1)", [username, hash], function (err) {
                 if (err) {
                     console.error('[AUTH_API] Error inserting admin user:', err.message);
                     return res.status(500).json({ error: err.message });
@@ -1358,7 +1359,7 @@ app.post('/api/auth/login', (req, res) => {
             console.warn(`[AUTH_API] Login failed for username "${username}": User not found.`);
             return res.status(401).json({ error: "Invalid username or password." });
         }
-        
+
         bcrypt.compare(password, user.password, (err, result) => {
             if (err) {
                 console.error('[AUTH_API] Error comparing password hash:', err);
@@ -1451,12 +1452,12 @@ app.post('/api/sources/fetch-groups', requireAuth, async (req, res) => {
                 fetchUrl = url;
                 content = await fetchUrlContent(fetchUrl, fetchOptions);
             } else if (type === 'file' && url) { // Assuming url holds file path for type file
-                 const filePath = sourceToUse?.path || path.join(SOURCES_DIR, path.basename(url)); // Prefer path from settings if available
-                 if (fs.existsSync(filePath)) {
+                const filePath = sourceToUse?.path || path.join(SOURCES_DIR, path.basename(url)); // Prefer path from settings if available
+                if (fs.existsSync(filePath)) {
                     content = fs.readFileSync(filePath, 'utf-8');
-                 } else {
-                     return res.status(400).json({ error: 'File source path not found or invalid.' });
-                 }
+                } else {
+                    return res.status(400).json({ error: 'File source path not found or invalid.' });
+                }
             } else {
                 return res.status(400).json({ error: 'Valid source details (URL, XC, or File path) are required.' });
             }
@@ -1531,7 +1532,7 @@ app.post('/api/users', requireAdmin, (req, res) => {
         console.warn('[USER_API] Add user failed: Username and/or password missing.');
         return res.status(400).json({ error: "Username and password are required." });
     }
-    
+
     bcrypt.hash(password, saltRounds, (err, hash) => {
         if (err) {
             console.error('[USER_API] Error hashing password for new user:', err);
@@ -1581,31 +1582,31 @@ app.put('/api/users/:id', requireAdmin, (req, res) => {
                     console.error(`[USER_API] Error updating user ${id} without password change:`, err.message);
                     return res.status(500).json({ error: err.message });
                 }
-                 if (req.session.userId == id) {
+                if (req.session.userId == id) {
                     req.session.username = username;
                     req.session.isAdmin = isAdmin;
                     req.session.canUseDvr = canUseDvr;
                     console.log(`[USER_API] Current user's session (ID: ${id}) updated.`);
-                 }
+                }
                 console.log(`[USER_API] User ${id} updated successfully (without password change).`);
                 res.json({ success: true });
             });
         }
     };
-    
+
     if (req.session.userId == id && !isAdmin) {
         console.log(`[USER_API] Attempting to demote current admin user ${id}. Checking if last admin.`);
-         db.get("SELECT COUNT(*) as count FROM users WHERE isAdmin = 1", [], (err, row) => {
+        db.get("SELECT COUNT(*) as count FROM users WHERE isAdmin = 1", [], (err, row) => {
             if (err) {
                 console.error('[USER_API] Error checking admin count for demotion:', err.message);
                 return res.status(500).json({ error: err.message });
             }
             if (row.count <= 1) {
                 console.warn(`[USER_API] Cannot demote user ${id}: They are the last administrator.`);
-                return res.status(403).json({error: "Cannot remove the last administrator."});
+                return res.status(403).json({ error: "Cannot remove the last administrator." });
             }
             updateUser();
-         });
+        });
     } else {
         updateUser();
     }
@@ -1640,8 +1641,8 @@ app.delete('/api/users/:id', requireAdmin, (req, res) => {
 
     // --- NEW: Force logout via SSE ---
     sendSseEvent(idToDelete, 'force-logout', { reason: 'Your account has been deleted by an administrator.' });
-    
-    db.run("DELETE FROM users WHERE id = ?", idToDelete, function(err) {
+
+    db.run("DELETE FROM users WHERE id = ?", idToDelete, function (err) {
         if (err) {
             console.error(`[USER_API] Error deleting user ${idToDelete}:`, err.message);
             return res.status(500).json({ error: err.message });
@@ -1669,7 +1670,7 @@ app.get('/api/config', requireAuth, (req, res) => {
         } else {
             console.log(`[API] No merged M3U file found at ${LIVE_CHANNELS_M3U_PATH}.`);
         }
-        
+
         // UPDATED path
         if (fs.existsSync(LIVE_EPG_JSON_PATH)) {
             try {
@@ -1706,7 +1707,7 @@ app.get('/api/config', requireAuth, (req, res) => {
             console.log(`[API] No VOD Series file found at ${VOD_SERIES_JSON_PATH}.`);
         }
         // --- END NEW VOD ---
-        
+
         db.all(`SELECT key, value FROM user_settings WHERE user_id = ?`, [req.session.userId], (err, rows) => {
             if (err) {
                 console.error("[API] Error fetching user settings:", err);
@@ -1722,7 +1723,7 @@ app.get('/api/config', requireAuth, (req, res) => {
                         console.warn(`[API] User setting key "${row.key}" could not be parsed as JSON. Storing as raw string.`);
                     }
                 });
-                
+
                 config.settings = { ...config.settings, ...userSettings };
                 console.log(`[API] Merged user settings for user ID: ${req.session.userId}`);
             }
@@ -1761,7 +1762,7 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
             console.log('[API_VOD] No active XC providers found. Returning empty library.');
             return res.json({ movies: [], series: [] });
         }
-        
+
         const providerIdPlaceholders = activeProviderIds.map(() => '?').join(',');
 
         // 2. Fetch all movies from active providers
@@ -1773,7 +1774,7 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
             ORDER BY m.name
         `;
         const movies = await dbAll(db, movieQuery, activeProviderIds);
-        
+
         const processedMovies = movies.map(m => {
             const provider = providerMap.get(m.provider_id);
             if (!provider) return null; // Skip if provider is not active
@@ -1790,7 +1791,7 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
                 imdb_id: m.imdb_id,
                 url: url, // The all-important URL
                 type: 'movie',
-                group: m.category_name 
+                group: m.category_name
             };
         }).filter(Boolean); // Filter out null entries
         console.log(`[API_VOD] Fetched ${processedMovies.length} movies from DB.`);
@@ -1866,7 +1867,7 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
             delete series.seasons;
         });
         console.log(`[API_VOD] Processed series headers. Episodes will be lazy-loaded.`);
-        
+
         // 5. Respond
         const categories = await dbAll(db, "SELECT category_name FROM vod_categories ORDER BY category_name");
         const categoryNames = categories.map(cat => cat.category_name);
@@ -1996,7 +1997,7 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
                 `, [numericSeriesId]);
             }
         } else {
-             console.log(`[API_VOD_SERIES] Found ${existingEpisodes.length} episodes in DB for Series ID ${numericSeriesId}.`);
+            console.log(`[API_VOD_SERIES] Found ${existingEpisodes.length} episodes in DB for Series ID ${numericSeriesId}.`);
         }
 
         // 4. Build the response structure
@@ -2088,7 +2089,7 @@ const upload = multer({
 app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, res) => {
     // ADD selectedGroups to the destructured body
     const { sourceType, name, url, isActive, id, refreshHours, xc, selectedGroups } = req.body;
-    
+
     console.log(`[SOURCES_API] ${id ? 'Updating' : 'Adding'} source. Type: ${sourceType}, Name: ${name}`);
 
     if (!sourceType || !name) {
@@ -2114,7 +2115,7 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
         sourceToUpdate.isActive = isActive === 'true';
         sourceToUpdate.refreshHours = parseInt(refreshHours, 10) || 0;
         sourceToUpdate.lastUpdated = new Date().toISOString();
-        
+
         // ADDED: Save selectedGroups
         try {
             sourceToUpdate.selectedGroups = JSON.parse(selectedGroups || '[]');
@@ -2157,7 +2158,7 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
             delete sourceToUpdate.xc_data;
         } else if (xc) {
             console.log(`[SOURCES_API] XC credentials provided for source ${id}.`);
-             if (sourceToUpdate.type === 'file' && fs.existsSync(sourceToUpdate.path)) {
+            if (sourceToUpdate.type === 'file' && fs.existsSync(sourceToUpdate.path)) {
                 try {
                     fs.unlinkSync(sourceToUpdate.path);
                 } catch (e) { console.error("[SOURCES_API] Could not delete old source file (on type change):", e); }
@@ -2167,7 +2168,7 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
             try {
                 const xcData = JSON.parse(xc);
                 sourceToUpdate.path = xcData.server || 'Xtream Codes Source';
-            } catch(e) {
+            } catch (e) {
                 sourceToUpdate.path = 'Xtream Codes Source';
             }
         } else if (sourceToUpdate.type === 'file' && !req.file && (!sourceToUpdate.path || !fs.existsSync(sourceToUpdate.path))) {
@@ -2249,23 +2250,23 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
         }
         // Condition 2: If it HAD a cache file, the NEW type is 'url', AND the URL changed
         else if (existingCachePath && newSourceType === 'url' && sourceToUpdate.path !== url) {
-             console.log(`[SOURCES_API_CACHE_CLEANUP] Source ${id} URL changed. Flagging cache for deletion.`);
-             shouldDeleteCache = true;
+            console.log(`[SOURCES_API_CACHE_CLEANUP] Source ${id} URL changed. Flagging cache for deletion.`);
+            shouldDeleteCache = true;
         }
         // Condition 3: If it HAD a cache file, the NEW type is 'xc', AND the XC details changed
         else if (existingCachePath && newSourceType === 'xc' && sourceToUpdate.xc_data !== xc) {
-             console.log(`[SOURCES_API_CACHE_CLEANUP] Source ${id} XC details changed. Flagging cache for deletion.`);
-             shouldDeleteCache = true;
+            console.log(`[SOURCES_API_CACHE_CLEANUP] Source ${id} XC details changed. Flagging cache for deletion.`);
+            shouldDeleteCache = true;
         }
 
         // Perform deletion if flagged
         if (shouldDeleteCache && fs.existsSync(existingCachePath)) {
-             try {
+            try {
                 fs.unlinkSync(existingCachePath);
                 console.log(`[SOURCES_API_CACHE_CLEANUP] Deleted stale cached raw file during update: ${existingCachePath}`);
-             } catch (e) { console.error("[SOURCES_API_CACHE_CLEANUP] Could not delete stale cached raw file during update:", e); }
-             // Remove the path property from the source object being saved
-             delete sourceToUpdate.cachedRawPath;
+            } catch (e) { console.error("[SOURCES_API_CACHE_CLEANUP] Could not delete stale cached raw file during update:", e); }
+            // Remove the path property from the source object being saved
+            delete sourceToUpdate.cachedRawPath;
         }
 
         saveSettings(settings);
@@ -2274,7 +2275,7 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
 
     } else { // Add new source
         let newSource;
-        
+
         // Parse selectedGroups for new sources
         let parsedSelectedGroups = [];
         try {
@@ -2282,28 +2283,28 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
         } catch (e) {
             console.warn(`[SOURCES_API] Could not parse selectedGroups for new source, saving as empty array.`);
         }
-        
+
         if (xc) { // It's an XC source
-             let xcData = {};
-             try {
-                 xcData = JSON.parse(xc);
-             } catch (e) {
-                 console.error("Failed to parse XC JSON data:", e);
-                 return res.status(400).json({ error: 'Invalid XC data format.' });
-             }
-             newSource = {
-                 id: `src-${Date.now()}`,
-                 name,
-                 type: 'xc',
-                 path: xcData.server || 'Xtream Codes Source',
-                 xc_data: xc,
-                 isActive: isActive === 'true',
-                 refreshHours: parseInt(refreshHours, 10) || 0,
-                 lastUpdated: new Date().toISOString(),
-                 status: 'Pending',
-                 statusMessage: 'Source added. Process to load data.',
-                 selectedGroups: parsedSelectedGroups // ADDED
-             };
+            let xcData = {};
+            try {
+                xcData = JSON.parse(xc);
+            } catch (e) {
+                console.error("Failed to parse XC JSON data:", e);
+                return res.status(400).json({ error: 'Invalid XC data format.' });
+            }
+            newSource = {
+                id: `src-${Date.now()}`,
+                name,
+                type: 'xc',
+                path: xcData.server || 'Xtream Codes Source',
+                xc_data: xc,
+                isActive: isActive === 'true',
+                refreshHours: parseInt(refreshHours, 10) || 0,
+                lastUpdated: new Date().toISOString(),
+                status: 'Pending',
+                statusMessage: 'Source added. Process to load data.',
+                selectedGroups: parsedSelectedGroups // ADDED
+            };
         } else { // It's a URL or File source
             newSource = {
                 id: `src-${Date.now()}`,
@@ -2318,7 +2319,7 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
                 selectedGroups: parsedSelectedGroups // ADDED
             };
         }
-        
+
         if (newSource.type === 'url' && !newSource.path) {
             console.warn('[SOURCES_API] New URL source failed: URL is required.');
             return res.status(400).json({ error: 'URL is required for URL-type source.' });
@@ -2379,7 +2380,7 @@ app.put('/api/sources/:sourceType/:id', requireAuth, (req, res) => {
     const { sourceType, id } = req.params;
     const { name, path: newPath, isActive } = req.body;
     console.log(`[SOURCES_API] Partial update source ID: ${id}, Type: ${sourceType}, isActive: ${isActive}`);
-    
+
     const settings = getSettings();
     const sourceList = sourceType === 'm3u' ? settings.m3uSources : settings.epgSources;
     const sourceIndex = sourceList.findIndex(s => s.id === id);
@@ -2405,11 +2406,11 @@ app.put('/api/sources/:sourceType/:id', requireAuth, (req, res) => {
 app.delete('/api/sources/:sourceType/:id', requireAuth, async (req, res) => {
     const { sourceType, id } = req.params;
     console.log(`[SOURCES_API] Deleting source ID: ${id}, Type: ${sourceType}`);
-    
+
     const settings = getSettings();
     let sourceList = sourceType === 'm3u' ? settings.m3uSources : settings.epgSources;
     const source = sourceList.find(s => s.id === id);
-    
+
     if (source && source.type === 'file' && fs.existsSync(source.path)) {
         try {
             fs.unlinkSync(source.path);
@@ -2427,7 +2428,7 @@ app.delete('/api/sources/:sourceType/:id', requireAuth, async (req, res) => {
             console.error(`[SOURCES_API] Could not delete cached raw file: ${source.cachedRawPath}`, e);
         }
     }
-    
+
     const initialLength = sourceList.length;
     const newList = sourceList.filter(s => s.id !== id);
     if (sourceType === 'm3u') settings.m3uSources = newList;
@@ -2460,12 +2461,12 @@ app.delete('/api/sources/:sourceType/:id', requireAuth, async (req, res) => {
             await dbRun(db, `DELETE FROM provider_movie_relations WHERE provider_id = ?`, [id]);
             await dbRun(db, `DELETE FROM provider_series_relations WHERE provider_id = ?`, [id]);
             await dbRun(db, `DELETE FROM provider_episode_relations WHERE provider_id = ?`, [id]);
-            
+
             // Cleanup orphans
             await dbRun(db, `DELETE FROM movies WHERE id NOT IN (SELECT DISTINCT movie_id FROM provider_movie_relations)`);
             await dbRun(db, `DELETE FROM series WHERE id NOT IN (SELECT DISTINCT series_id FROM provider_series_relations)`);
             await dbRun(db, `DELETE FROM episodes WHERE id NOT IN (SELECT DISTINCT episode_id FROM provider_episode_relations)`);
-            
+
             await dbRun(db, "COMMIT");
             console.log(`[SOURCES_API] Successfully cleaned up VOD data for provider: ${id}`);
         } catch (dbErr) {
@@ -2486,7 +2487,7 @@ app.post('/api/process-sources', requireAuth, async (req, res) => {
         if (result.success) {
             fs.writeFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
             console.log('[API] Source processing completed and settings saved (manual trigger).');
-            res.json({ success: true, message: 'Sources merged successfully.'});
+            res.json({ success: true, message: 'Sources merged successfully.' });
         } else {
             res.status(500).json({ error: result.message || 'Failed to process sources.' });
         }
@@ -2503,7 +2504,7 @@ app.post('/api/save/settings', requireAuth, async (req, res) => {
     console.log('[API] Received request to /api/save/settings.');
     try {
         let currentSettings = getSettings();
-        
+
         const oldTimezone = currentSettings.timezoneOffset;
 
         const updatedSettings = { ...currentSettings };
@@ -2516,13 +2517,13 @@ app.post('/api/save/settings', requireAuth, async (req, res) => {
         }
 
         saveSettings(updatedSettings);
-        
+
         if (updatedSettings.timezoneOffset !== oldTimezone) {
             console.log("[API] Timezone setting changed, re-processing sources.");
             const result = await processAndMergeSources();
-             if (result.success) {
+            if (result.success) {
                 fs.writeFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
-             }
+            }
         }
 
         res.json({ success: true, message: 'Settings saved.', settings: getSettings() });
@@ -2540,7 +2541,7 @@ app.post('/api/user/settings', requireAuth, (req, res) => {
     if (!key) {
         return res.status(400).json({ error: 'A setting key is required.' });
     }
-    
+
     const valueJson = JSON.stringify(value);
 
     const saveAndRespond = () => {
@@ -2552,7 +2553,7 @@ app.post('/api/user/settings', requireAuth, (req, res) => {
             }
             const userSettings = {};
             rows.forEach(row => {
-                try { userSettings[row.key] = JSON.parse(row.value); } 
+                try { userSettings[row.key] = JSON.parse(row.value); }
                 catch (e) { userSettings[row.key] = row.value; }
             });
 
@@ -2602,7 +2603,7 @@ app.post('/api/notifications/subscribe', requireAuth, (req, res) => {
         `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)
          ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id, p256dh=excluded.p256dh, auth=excluded.auth`,
         [userId, endpoint, p256dh, auth],
-        function(err) {
+        function (err) {
             if (err) {
                 console.error(`[PUSH_API] Error saving push subscription for user ${userId}:`, err);
                 return res.status(500).json({ error: 'Could not save subscription.' });
@@ -2621,7 +2622,7 @@ app.post('/api/notifications/unsubscribe', requireAuth, (req, res) => {
         return res.status(400).json({ error: 'Endpoint is required to unsubscribe.' });
     }
 
-    db.run("DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?", [endpoint, req.session.userId], function(err) {
+    db.run("DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?", [endpoint, req.session.userId], function (err) {
         if (err) {
             console.error(`[PUSH_API] Error deleting push subscription for user ${req.session.userId}, endpoint ${endpoint}:`, err);
             return res.status(500).json({ error: 'Could not unsubscribe.' });
@@ -2643,7 +2644,7 @@ app.post('/api/notifications', requireAuth, (req, res) => {
         console.error(`[PUSH_API_ERROR] Add notification failed for user ${userId} due to missing data.`, { body: req.body });
         return res.status(400).json({ error: 'Invalid notification data. All required fields must be provided.' });
     }
-    
+
     console.log(`[PUSH_API] Adding notification for user ${userId}. Program: "${programTitle}", Channel: "${channelName}", Scheduled Time: ${scheduledTime}`);
 
     db.run(`INSERT INTO notifications (user_id, channelId, channelName, channelLogo, programTitle, programDesc, programStart, programStop, notificationTime, programId, status)
@@ -2656,7 +2657,7 @@ app.post('/api/notifications', requireAuth, (req, res) => {
             }
             const notificationId = this.lastID;
             console.log(`[PUSH_API] Notification added successfully for program "${programTitle}" (DB ID: ${notificationId}) for user ${userId}.`);
-            
+
             db.all("SELECT id FROM push_subscriptions WHERE user_id = ?", [userId], (subErr, subs) => {
                 if (subErr) {
                     console.error(`[PUSH_API_ERROR] Could not fetch subscriptions for user ${userId} to create deliveries.`, subErr);
@@ -2719,11 +2720,11 @@ app.delete('/api/notifications/past', requireAuth, (req, res) => {
     const userId = req.session.userId;
     const now = new Date().toISOString();
     console.log(`[PUSH_API] Clearing all past notifications for user ${userId}.`);
-    
+
     // This query deletes notifications whose scheduled trigger time is in the past.
     db.run(`DELETE FROM notifications WHERE user_id = ? AND notificationTime <= ?`,
         [userId, now],
-        function(err) {
+        function (err) {
             if (err) {
                 console.error(`[PUSH_API] Error deleting past notifications for user ${userId}:`, err.message);
                 return res.status(500).json({ error: 'Could not clear past notifications.' });
@@ -2750,7 +2751,7 @@ app.delete('/api/notifications/:id', requireAuth, (req, res) => {
             }
             console.log(`[PUSH_API] Notification ${id} deleted successfully for user ${req.session.userId}.`);
             res.json({ success: true });
-    });
+        });
 });
 
 app.delete('/api/data', requireAuth, requireAdmin, (req, res) => {
@@ -2763,11 +2764,11 @@ app.delete('/api/data', requireAuth, requireAdmin, (req, res) => {
         for (const job of activeDvrJobs.values()) job.cancel();
         activeDvrJobs.clear();
         for (const { process: ffmpegProcess } of activeStreamProcesses.values()) {
-             try { ffmpegProcess.kill('SIGKILL'); } catch (e) {}
+            try { ffmpegProcess.kill('SIGKILL'); } catch (e) { }
         }
         activeStreamProcesses.clear();
         for (const pid of runningFFmpegProcesses.values()) {
-            try { process.kill(pid, 'SIGKILL'); } catch (e) {}
+            try { process.kill(pid, 'SIGKILL'); } catch (e) { }
         }
         runningFFmpegProcesses.clear();
 
@@ -2776,14 +2777,14 @@ app.delete('/api/data', requireAuth, requireAdmin, (req, res) => {
         filesToDelete.forEach(file => {
             if (fs.existsSync(file)) fs.unlinkSync(file);
         });
-        
+
         [SOURCES_DIR, DVR_DIR].forEach(dir => {
-            if(fs.existsSync(dir)) {
+            if (fs.existsSync(dir)) {
                 fs.rmSync(dir, { recursive: true, force: true });
                 fs.mkdirSync(dir, { recursive: true });
             }
         });
-        
+
         console.log('[API_RESET] Wiping all database tables...');
         const tables = ['stream_history', 'dvr_recordings', 'dvr_jobs', 'notification_deliveries', 'notifications', 'push_subscriptions', 'multiview_layouts', 'user_settings', 'users', 'sessions'];
         db.serialize(() => {
@@ -2803,25 +2804,93 @@ app.delete('/api/data', requireAuth, requireAdmin, (req, res) => {
     }
 });
 
+// Middleware to allow local network access OR authenticated access OR cast token
+// This enables Chromecast devices to access streams using temporary tokens
+function allowLocalOrAuth(req, res, next) {
+    // Check if authenticated via session
+    if (req.session && req.session.userId) {
+        return next();
+    }
 
-// MODIFIED: Stream endpoint now logs to history and has enhanced tracking.
-app.get('/stream', requireAuth, async (req, res) => {
+    // Check for Cast token (priority for Chromecast)
+    const { castToken } = req.query;
+    if (castToken) {
+        const tokenData = activeCastTokens.get(castToken);
+
+        if (!tokenData) {
+            console.warn(`[STREAM_AUTH] Invalid cast token: ${castToken.substring(0, 8)}...`);
+            return res.status(401).send('Invalid cast token');
+        }
+
+        if (tokenData.expiresAt < Date.now()) {
+            console.warn(`[STREAM_AUTH] Expired cast token: ${castToken.substring(0, 8)}...`);
+            activeCastTokens.delete(castToken);
+            return res.status(401).send('Expired cast token');
+        }
+
+        console.log(`[STREAM_AUTH] ✓ Valid cast token for user ${tokenData.userId}`);
+
+        // Set session from token
+        req.session = req.session || {};
+        req.session.userId = tokenData.userId;
+        req.session.username = 'Cast User';
+
+        // One-time use: delete token after successful auth
+        activeCastTokens.delete(castToken);
+
+        return next();
+    }
+
+    // Get the real client IP (first IP in X-Forwarded-For chain, before Cloudflare)
+    let clientIp = req.clientIp || req.ip;
+
+    // X-Forwarded-For can be a comma-separated list: "client, proxy1, proxy2"
+    // We want the FIRST IP (the real client)
+    if (clientIp && clientIp.includes(',')) {
+        clientIp = clientIp.split(',')[0].trim();
+    }
+
+    console.log(`[STREAM_AUTH] Checking IP: ${clientIp} (original: ${req.clientIp || req.ip})`);
+
+    // Check if request is from local network (fallback for direct local access)
+    const isLocal = clientIp.startsWith('192.168.') ||
+        clientIp.startsWith('10.') ||
+        clientIp.startsWith('172.16.') ||
+        clientIp === '127.0.0.1' ||
+        clientIp === '::1' ||
+        clientIp === '::ffff:127.0.0.1';
+
+    if (isLocal) {
+        console.log(`[STREAM_AUTH] ✓ Allowing unauthenticated access from local network: ${clientIp}`);
+        // Set a dummy session for logging purposes
+        req.session = req.session || {};
+        req.session.userId = 1; // Default to admin user for local access
+        req.session.username = 'Local Network';
+        return next();
+    }
+
+    console.warn(`[STREAM_AUTH] ✗ Unauthorized access attempt from: ${clientIp}`);
+    res.status(401).send('Authentication required');
+}
+
+// MODIFIED: Stream endpoint now allows local network access for Chromecast
+app.get('/stream', allowLocalOrAuth, async (req, res) => {
     const { url: streamUrl, profileId, userAgentId, vodName, vodLogo } = req.query;
     const userId = req.session.userId;
     const username = req.session.username;
     const clientIp = req.clientIp;
-    
-    // A unique key for this user and this stream URL
-    const streamKey = `${userId}::${streamUrl}`;
+
+    // Include profileId in stream key so Cast (MP4) and browser (MPEG-TS) don't share the same process
+    const streamKey = `${userId}::${streamUrl}::${profileId}`;
 
     const activeStreamInfo = activeStreamProcesses.get(streamKey);
-    
+
     if (activeStreamInfo) {
         activeStreamInfo.references++;
         activeStreamInfo.lastAccess = Date.now();
         console.log(`[STREAM] Existing stream requested. Key: ${streamKey}. New ref count: ${activeStreamInfo.references}.`);
         activeStreamInfo.process.stdout.pipe(res);
-        
+
         req.on('close', () => {
             console.log(`[STREAM] Client closed connection for existing stream ${streamKey}. Decrementing ref count.`);
             activeStreamInfo.references--;
@@ -2843,7 +2912,7 @@ app.get('/stream', requireAuth, async (req, res) => {
         console.error(`[STREAM] Stream profile with ID "${profileId}" not found in settings.`);
         return res.status(404).send(`Error: Stream profile with ID "${profileId}" not found.`);
     }
-    
+
     // NEW: Determine if this is a transcoding or direct stream
     const isTranscoded = profile.command !== 'redirect';
 
@@ -2851,7 +2920,7 @@ app.get('/stream', requireAuth, async (req, res) => {
         console.log(`[STREAM] Redirecting to stream URL: ${streamUrl}`);
         return res.redirect(302, streamUrl);
     }
-    
+
     const userAgent = (settings.userAgents || []).find(ua => ua.id === userAgentId);
     if (!userAgent) {
         console.error(`[STREAM] User agent with ID "${userAgentId}" not found in settings.`);
@@ -2876,7 +2945,7 @@ app.get('/stream', requireAuth, async (req, res) => {
     }
     const streamProfileName = profile ? profile.name : 'Unknown Profile';
     // --- END NEW ---
-    
+
     console.log(`[STREAM] Using Profile='${profile.name}' (ID=${profile.id}), UserAgent='${userAgent.name}'`);
 
     // Prefix ffmpeg command with "-v level+{playerLoglevel}" here to control log spamming.
@@ -2885,7 +2954,7 @@ app.get('/stream', requireAuth, async (req, res) => {
     const commandTemplate = `-v level+${settings.playerLogLevel} ` + profile.command
         .replace(/{streamUrl}/g, streamUrl)
         .replace(/{userAgent}|{clientUserAgent}/g, userAgent.value);
-        
+
     const args = (commandTemplate.match(/(?:[^\s"]+|"[^"]*")+/g) || []).map(arg => arg.replace(/^"|"$/g, ''));
 
     console.log(`[STREAM] FFmpeg command args: ffmpeg ${args.join(' ')}`);
@@ -2896,13 +2965,13 @@ app.get('/stream', requireAuth, async (req, res) => {
     db.run(
         `INSERT INTO stream_history (user_id, username, channel_id, channel_name, start_time, status, client_ip, channel_logo, stream_profile_name) VALUES (?, ?, ?, ?, ?, 'playing', ?, ?, ?)`,
         [userId, username, channelId, channelName, startTime, clientIp, channelLogo, streamProfileName],
-        function(err) {
+        function (err) {
             if (err) {
                 console.error('[STREAM_HISTORY] Error logging stream start:', err.message);
             } else {
                 const historyId = this.lastID;
                 console.log(`[STREAM_HISTORY] Logged stream start with history ID: ${historyId}`);
-                
+
                 // Now that we have the history ID, store it with the process
                 const newStreamInfo = {
                     process: ffmpeg,
@@ -2927,12 +2996,18 @@ app.get('/stream', requireAuth, async (req, res) => {
             }
         }
     );
-    
-    res.setHeader('Content-Type', 'video/mp2t');
+
+    // Set appropriate Content-Type based on output format
+    if (profile.command.includes('-f mp4')) {
+        res.setHeader('Content-Type', 'video/mp4');
+        console.log(`[STREAM] Setting Content-Type: video/mp4`);
+    } else {
+        res.setHeader('Content-Type', 'video/mp2t');
+    }
     ffmpeg.stdout.pipe(res);
-    
+
     ffmpeg.stderr.on('data', (data) => console.error(`[FFMPEG_ERROR] Stream: ${streamKey} - ${data.toString().trim()}`));
-    
+
     const cleanupOnExit = () => {
         const info = activeStreamProcesses.get(streamKey);
         if (info && info.historyId) {
@@ -2957,14 +3032,14 @@ app.get('/stream', requireAuth, async (req, res) => {
         cleanupOnExit();
         if (!res.headersSent) res.status(500).send('Failed to start streaming service. Check server logs.');
     });
-    
+
     req.on('close', () => {
         const info = activeStreamProcesses.get(streamKey);
         if (info) {
-             console.log(`[STREAM] Client closed connection for new stream ${streamKey}. Decrementing ref count.`);
-             info.references--;
-             info.lastAccess = Date.now();
-             if (info.references <= 0) {
+            console.log(`[STREAM] Client closed connection for new stream ${streamKey}. Decrementing ref count.`);
+            info.references--;
+            info.lastAccess = Date.now();
+            if (info.references <= 0) {
                 console.log(`[STREAM] Last client disconnected. Ref count is 0. Process for PID: ${info.process.pid} will be cleaned up by the janitor.`);
             }
         } else {
@@ -2973,9 +3048,55 @@ app.get('/stream', requireAuth, async (req, res) => {
     });
 });
 
+// ============================================================
+// CAST: Generate authentication token for Chromecast
+// ============================================================
+app.post('/api/cast/generate-token', requireAuth, (req, res) => {
+    try {
+        const { streamUrl } = req.body;
+        const userId = req.session.userId;
+
+        if (!streamUrl) {
+            return res.status(400).json({ error: 'streamUrl is required' });
+        }
+
+        // Generate secure random token
+        const token = crypto.randomBytes(32).toString('hex');
+        const expiresAt = Date.now() + (5 * 60 * 1000); // 5 minutes
+
+        // Store token
+        activeCastTokens.set(token, {
+            userId,
+            streamUrl,
+            expiresAt,
+            createdAt: Date.now()
+        });
+
+        // Auto-cleanup after expiry
+        setTimeout(() => {
+            activeCastTokens.delete(token);
+            console.log(`[CAST_TOKEN] Token expired and removed: ${token.substring(0, 8)}...`);
+        }, 5 * 60 * 1000);
+
+        console.log(`[CAST_TOKEN] Generated token for user ${userId}, expires in 5 minutes`);
+
+        res.json({ token });
+    } catch (error) {
+        console.error('[CAST_TOKEN] Error generating token:', error);
+        res.status(500).json({ error: 'Failed to generate cast token' });
+    }
+});
+
+// ============================================================
+// STREAM STOP: Manually stop a stream
+// ============================================================
 app.post('/api/stream/stop', requireAuth, (req, res) => {
-    const { url: streamUrl } = req.body;
-    const streamKey = `${req.session.userId}::${streamUrl}`;
+    const { url: streamUrl, profileId } = req.body;
+
+    // Build stream key with profileId if provided (for Cast streams)
+    const streamKey = profileId
+        ? `${req.session.userId}::${streamUrl}::${profileId}`
+        : `${req.session.userId}::${streamUrl}`;
 
     if (!streamUrl) {
         return res.status(400).json({ error: "Stream URL is required to stop the stream." });
@@ -2994,8 +3115,7 @@ app.post('/api/stream/stop', requireAuth, (req, res) => {
             }
             activeStreamInfo.process.kill('SIGKILL');
             activeStreamProcesses.delete(streamKey);
-            //-- ENHANCEMENT: Notify admins that a stream has ended.
-            broadcastAdminUpdate();
+            broadcastAdminActivityUpdate();
             console.log(`[STREAM_STOP_API] Successfully terminated process for key: ${streamKey}`);
         } catch (e) {
             console.warn(`[STREAM_STOP_API] Could not kill process for key: ${streamKey}. It might have already exited. Error: ${e.message}`);
@@ -3017,14 +3137,14 @@ app.post('/api/activity/start-redirect', requireAuth, (req, res) => {
     db.run(
         `INSERT INTO stream_history (user_id, username, channel_id, channel_name, start_time, status, client_ip, channel_logo, stream_profile_name) VALUES (?, ?, ?, ?, ?, 'playing', ?, ?, ?)`,
         [userId, username, channelId, channelName, startTime, clientIp, channelLogo, 'Redirect'],
-        function(err) {
+        function (err) {
             if (err) {
                 console.error('[REDIRECT_LOG] Error logging redirect stream start:', err.message);
                 return res.status(500).json({ error: 'Could not log stream start.' });
             }
             const historyId = this.lastID;
             console.log(`[REDIRECT_LOG] Logged redirect stream start for user ${username} with history ID: ${historyId}`);
-            
+
             // --- NEW: Add to live tracking ---
             const streamKey = `${userId}::${historyId}`;
             activeRedirectStreams.set(streamKey, {
@@ -3109,7 +3229,7 @@ app.get('/api/admin/activity', requireAuth, requireAdmin, async (req, res) => {
         clientIp: info.clientIp,
         isTranscoded: false,
     }));
-    
+
     const liveActivity = [...transcodedLive, ...redirectLive];
 
     // 2. Get Paginated and Filtered History
@@ -3163,7 +3283,7 @@ app.get('/api/admin/activity', requireAuth, requireAdmin, async (req, res) => {
                 else resolve(rows);
             });
         });
-        
+
         const history = {
             items: historyItems,
             totalItems: totalItems,
@@ -3286,7 +3406,7 @@ app.get('/api/admin/analytics', requireAuth, requireAdmin, async (req, res) => {
             GROUP BY channel_name
             ORDER BY total_duration DESC
             LIMIT 5`;
-        
+
         const topUsersQuery = `
             SELECT username, SUM(duration_seconds) as total_duration
             FROM stream_history
@@ -3294,11 +3414,11 @@ app.get('/api/admin/analytics', requireAuth, requireAdmin, async (req, res) => {
             GROUP BY username
             ORDER BY total_duration DESC
             LIMIT 5`;
-            
+
         const topChannels = await new Promise((resolve, reject) => {
             db.all(topChannelsQuery, [], (err, rows) => err ? reject(err) : resolve(rows));
         });
-        
+
         const topUsers = await new Promise((resolve, reject) => {
             db.all(topUsersQuery, [], (err, rows) => err ? reject(err) : resolve(rows));
         });
@@ -3369,7 +3489,7 @@ app.post('/api/multiview/layouts', requireAuth, (req, res) => {
 app.delete('/api/multiview/layouts/:id', requireAuth, (req, res) => {
     const { id } = req.params;
     console.log(`[LAYOUT_API] Deleting layout ID: ${id} for user ${req.session.userId}.`);
-    db.run("DELETE FROM multiview_layouts WHERE id = ? AND user_id = ?", [id, req.session.userId], function(err) {
+    db.run("DELETE FROM multiview_layouts WHERE id = ? AND user_id = ?", [id, req.session.userId], function (err) {
         if (err) {
             console.error(`[LAYOUT_API] Error deleting layout ${id}:`, err.message);
             return res.status(500).json({ error: 'Could not delete layout.' });
@@ -3388,7 +3508,7 @@ async function checkAndSendNotifications() {
     console.log('[PUSH_CHECKER] Running scheduled notification check for all devices.');
     const now = new Date();
     const nowIso = now.toISOString();
-    
+
     const timeoutCutoff = new Date(now.getTime() - (24 * 60 * 60 * 1000)).toISOString();
 
     try {
@@ -3398,7 +3518,7 @@ async function checkAndSendNotifications() {
             WHERE status = 'pending' AND notification_id IN (
                 SELECT id FROM notifications WHERE notificationTime < ?
             )
-        `, [nowIso, timeoutCutoff], function(err) {
+        `, [nowIso, timeoutCutoff], function (err) {
             if (err) {
                 console.error('[PUSH_CHECKER_CLEANUP] Error expiring old notifications:', err.message);
             } else if (this.changes > 0) {
@@ -3435,7 +3555,7 @@ async function checkAndSendNotifications() {
 
         for (const delivery of dueDeliveries) {
             console.log(`[PUSH_CHECKER] Processing delivery ID ${delivery.delivery_id} for program "${delivery.programTitle}" to subscription ${delivery.subscription_id}.`);
-            
+
             const payload = JSON.stringify({
                 type: 'program_reminder',
                 data: {
@@ -3451,7 +3571,7 @@ async function checkAndSendNotifications() {
                 endpoint: delivery.endpoint,
                 keys: { p256dh: delivery.p256dh, auth: delivery.auth }
             };
-            
+
             const pushOptions = {
                 TTL: 86400 // 24 hours in seconds
             };
@@ -3463,10 +3583,10 @@ async function checkAndSendNotifications() {
                 })
                 .catch(error => {
                     console.error(`[PUSH_CHECKER] Error sending notification for delivery ID ${delivery.delivery_id}:`, error.statusCode, error.body || error.message);
-                    
+
                     if (error.statusCode === 410 || error.statusCode === 404) {
                         console.log(`[PUSH_CHECKER] Subscription ${delivery.subscription_id} is invalid (410/404). Deleting subscription and failing deliveries.`);
-                        
+
                         sendSseEvent(delivery.user_id, 'subscription-invalidated', {
                             endpoint: delivery.endpoint,
                             reason: `Push service returned status ${error.statusCode}.`
@@ -3493,7 +3613,7 @@ function stopRecording(jobId) {
             process.kill(pid, 'SIGINT');
         } catch (e) {
             console.error(`[DVR] Error sending SIGINT to ffmpeg process for job ${jobId}: ${e.message}. Trying SIGKILL.`);
-            try { process.kill(pid, 'SIGKILL'); } catch (e2) {}
+            try { process.kill(pid, 'SIGKILL'); } catch (e2) { }
         }
     } else {
         console.warn(`[DVR] Cannot stop job ${jobId}: No running ffmpeg process found.`);
@@ -3513,7 +3633,7 @@ async function startRecording(job) {
         db.run("UPDATE dvr_jobs SET status = 'error', ffmpeg_pid = NULL, errorMessage = ? WHERE id = ?", [errorMsg, job.id]);
         return;
     }
-    
+
     // MODIFIED: Simplified logic. Directly use the profile ID from the job.
     const recProfile = (settings.dvr.recordingProfiles || []).find(p => p.id === job.profileId);
     if (!recProfile) {
@@ -3545,7 +3665,7 @@ async function startRecording(job) {
         .replace(/{streamUrl}/g, streamUrlToRecord)
         .replace(/{userAgent}/g, userAgent.value)
         .replace(/{filePath}/g, fullFilePath);
-        
+
     const args = (commandTemplate.match(/(?:[^\s"]+|"[^"]*")+/g) || []).map(arg => arg.replace(/^"|"$/g, ''));
 
     console.log(`[DVR] Spawning ffmpeg for job ${job.id} with command: ffmpeg ${args.join(' ')}`);
@@ -3553,7 +3673,7 @@ async function startRecording(job) {
     runningFFmpegProcesses.set(job.id, ffmpeg.pid);
 
     db.run("UPDATE dvr_jobs SET status = 'recording', ffmpeg_pid = ?, filePath = ? WHERE id = ?", [ffmpeg.pid, fullFilePath, job.id]);
-    
+
     let ffmpegErrorOutput = '';
     ffmpeg.stderr.on('data', (data) => {
         const line = data.toString().trim();
@@ -3568,7 +3688,7 @@ async function startRecording(job) {
         console.log(`[DVR] Recording process for job ${job.id} ("${job.programTitle}") ${logMessage}.`);
 
         fs.stat(fullFilePath, (statErr, stats) => {
-            if ((code === 0 || wasStoppedIntentionally) && !statErr && stats && stats.size > 1024) { 
+            if ((code === 0 || wasStoppedIntentionally) && !statErr && stats && stats.size > 1024) {
                 const durationSeconds = (new Date(job.endTime) - new Date(job.startTime)) / 1000;
                 db.run(`INSERT INTO dvr_recordings (job_id, user_id, channelName, programTitle, startTime, durationSeconds, fileSizeBytes, filePath) 
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -3586,7 +3706,7 @@ async function startRecording(job) {
                 const finalErrorMessage = `Recording failed. FFmpeg exit code: ${code}. ${statErr ? 'File stat error: ' + statErr.message : ''}. FFmpeg output: ${ffmpegErrorOutput.slice(-1000)}`;
                 console.error(`[DVR] Recording for job ${job.id} failed. ${finalErrorMessage}`);
                 db.run("UPDATE dvr_jobs SET status = 'error', ffmpeg_pid = NULL, errorMessage = ? WHERE id = ?", [finalErrorMessage, job.id]);
-                if (!statErr && stats.size <= 1024) { 
+                if (!statErr && stats.size <= 1024) {
                     fs.unlink(fullFilePath, (unlinkErr) => {
                         if (unlinkErr) console.error(`[DVR] Could not delete failed recording file: ${fullFilePath}`, unlinkErr);
                     });
@@ -3641,13 +3761,13 @@ async function checkForConflicts(newJob, userId) {
     return new Promise((resolve, reject) => {
         const settings = getSettings();
         const maxConcurrent = settings.dvr?.maxConcurrentRecordings || 1;
-        
+
         db.all("SELECT * FROM dvr_jobs WHERE user_id = ? AND status = 'scheduled'", [userId], (err, scheduledJobs) => {
             if (err) return reject(err);
 
             const newStart = new Date(newJob.startTime).getTime();
             const newEnd = new Date(newJob.endTime).getTime();
-            
+
             const conflictingJobs = scheduledJobs.filter(existingJob => {
                 const existingStart = new Date(existingJob.startTime).getTime();
                 const existingEnd = new Date(existingJob.endTime).getTime();
@@ -3666,13 +3786,13 @@ async function checkForConflicts(newJob, userId) {
 async function autoDeleteOldRecordings() {
     console.log('[DVR_STORAGE] Running daily check for old recordings to delete.');
     db.all("SELECT id FROM users", [], (err, users) => {
-        if(err) return console.error('[DVR_STORAGE] Could not fetch users for auto-delete check:', err);
+        if (err) return console.error('[DVR_STORAGE] Could not fetch users for auto-delete check:', err);
 
         users.forEach(user => {
             db.get("SELECT value FROM user_settings WHERE user_id = ? AND key = 'dvr'", [user.id], (err, row) => {
                 const settings = getSettings();
                 const userDvrSettings = row ? { ...settings.dvr, ...JSON.parse(row.value) } : settings.dvr;
-                
+
                 const deleteDays = userDvrSettings.autoDeleteDays;
                 if (!deleteDays || deleteDays <= 0) {
                     return;
@@ -3680,13 +3800,13 @@ async function autoDeleteOldRecordings() {
 
                 const cutoffDate = new Date();
                 cutoffDate.setDate(cutoffDate.getDate() - deleteDays);
-                
+
                 db.all("SELECT id, filePath FROM dvr_recordings WHERE user_id = ? AND startTime < ?", [user.id, cutoffDate.toISOString()], (err, recordingsToDelete) => {
-                    if(err) return console.error(`[DVR_STORAGE] Error fetching old recordings for user ${user.id}:`, err);
-                    if(recordingsToDelete.length > 0) {
+                    if (err) return console.error(`[DVR_STORAGE] Error fetching old recordings for user ${user.id}:`, err);
+                    if (recordingsToDelete.length > 0) {
                         console.log(`[DVR_STORAGE] Found ${recordingsToDelete.length} old recording(s) to delete for user ${user.id}.`);
                     }
-                    
+
                     recordingsToDelete.forEach(rec => {
                         if (fs.existsSync(rec.filePath)) {
                             fs.unlink(rec.filePath, (unlinkErr) => {
@@ -3763,7 +3883,7 @@ app.post('/api/dvr/schedule', requireAuth, requireDvrAccess, async (req, res) =>
         preBufferMinutes: dvrSettings.preBufferMinutes || 0,
         postBufferMinutes: dvrSettings.postBufferMinutes || 0
     };
-    
+
     const conflictingJobs = await checkForConflicts(newJob, req.session.userId);
     if (conflictingJobs.length > 0) {
         return res.status(409).json({ error: 'Recording conflict detected.', newJob, conflictingJobs });
@@ -3772,7 +3892,7 @@ app.post('/api/dvr/schedule', requireAuth, requireDvrAccess, async (req, res) =>
     db.run(`INSERT INTO dvr_jobs (user_id, channelId, channelName, programTitle, startTime, endTime, status, profileId, userAgentId, preBufferMinutes, postBufferMinutes)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [newJob.user_id, newJob.channelId, newJob.channelName, newJob.programTitle, newJob.startTime, newJob.endTime, newJob.status, newJob.profileId, newJob.userAgentId, newJob.preBufferMinutes, newJob.postBufferMinutes],
-        function(err) {
+        function (err) {
             if (err) {
                 console.error('[DVR_API] Error scheduling new recording:', err);
                 return res.status(500).json({ error: 'Could not schedule recording.' });
@@ -3802,7 +3922,7 @@ app.post('/api/dvr/schedule/manual', requireAuth, requireDvrAccess, async (req, 
         preBufferMinutes: 0,
         postBufferMinutes: 0
     };
-    
+
     const conflictingJobs = await checkForConflicts(newJob, req.session.userId);
     if (conflictingJobs.length > 0) {
         return res.status(409).json({ error: 'Recording conflict detected.', newJob, conflictingJobs });
@@ -3811,7 +3931,7 @@ app.post('/api/dvr/schedule/manual', requireAuth, requireDvrAccess, async (req, 
     db.run(`INSERT INTO dvr_jobs (user_id, channelId, channelName, programTitle, startTime, endTime, status, profileId, userAgentId, preBufferMinutes, postBufferMinutes)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [newJob.user_id, newJob.channelId, newJob.channelName, newJob.programTitle, newJob.startTime, newJob.endTime, newJob.status, newJob.profileId, newJob.userAgentId, newJob.preBufferMinutes, newJob.postBufferMinutes],
-        function(err) {
+        function (err) {
             if (err) return res.status(500).json({ error: 'Could not schedule recording.' });
             const jobWithId = { ...newJob, id: this.lastID };
             scheduleDvrJob(jobWithId);
@@ -3835,7 +3955,7 @@ app.get('/api/dvr/jobs', requireAuth, (req, res) => {
         db.all(query, [req.session.userId], (err, rows) => {
             if (err) return res.status(500).json({ error: 'Failed to retrieve your recording jobs.' });
             // Add a username to be consistent with admin view
-            const jobsWithUser = rows.map(r => ({...r, username: req.session.username}));
+            const jobsWithUser = rows.map(r => ({ ...r, username: req.session.username }));
             res.json(jobsWithUser);
         });
     } else {
@@ -3850,7 +3970,7 @@ app.get('/api/dvr/recordings', requireAuth, (req, res) => {
     const query = "SELECT r.*, u.username FROM dvr_recordings r JOIN users u ON r.user_id = u.id ORDER BY r.startTime DESC";
     db.all(query, [], (err, rows) => {
         if (err) return res.status(500).json({ error: 'Failed to retrieve recordings.' });
-        const recordingsWithFilename = rows.map(r => ({...r, filename: path.basename(r.filePath)}));
+        const recordingsWithFilename = rows.map(r => ({ ...r, filename: path.basename(r.filePath) }));
         res.json(recordingsWithFilename);
     });
 });
@@ -3897,7 +4017,7 @@ app.delete('/api/dvr/jobs/all', requireAuth, requireDvrAccess, (req, res) => {
             }
         });
 
-        db.run("DELETE FROM dvr_jobs WHERE user_id = ?", [userId], function(err) {
+        db.run("DELETE FROM dvr_jobs WHERE user_id = ?", [userId], function (err) {
             if (err) {
                 return res.status(500).json({ error: 'Could not clear jobs from database.' });
             }
@@ -3914,7 +4034,7 @@ app.delete('/api/dvr/recordings/all', requireAuth, requireDvrAccess, (req, res) 
         if (err) {
             return res.status(500).json({ error: 'Could not fetch recordings to delete.' });
         }
-        
+
         recordings.forEach(rec => {
             if (fs.existsSync(rec.filePath)) {
                 fs.unlink(rec.filePath, (unlinkErr) => {
@@ -3923,7 +4043,7 @@ app.delete('/api/dvr/recordings/all', requireAuth, requireDvrAccess, (req, res) 
             }
         });
 
-        db.run("DELETE FROM dvr_recordings WHERE user_id = ?", [userId], function(err) {
+        db.run("DELETE FROM dvr_recordings WHERE user_id = ?", [userId], function (err) {
             if (err) {
                 return res.status(500).json({ error: 'Could not clear recordings from database.' });
             }
@@ -3944,9 +4064,9 @@ app.delete('/api/dvr/jobs/:id', requireAuth, requireDvrAccess, (req, res) => {
     const query = req.session.isAdmin ? "UPDATE dvr_jobs SET status = 'cancelled' WHERE id = ?" : "UPDATE dvr_jobs SET status = 'cancelled' WHERE id = ? AND user_id = ?";
     const params = req.session.isAdmin ? [jobId] : [jobId, req.session.userId];
 
-    db.run(query, params, function(err) {
+    db.run(query, params, function (err) {
         if (err) return res.status(500).json({ error: 'Could not cancel job.' });
-        if(this.changes === 0) return res.status(404).json({ error: 'Job not found or not authorized to cancel.' });
+        if (this.changes === 0) return res.status(404).json({ error: 'Job not found or not authorized to cancel.' });
         console.log(`[DVR_API] Cancelled job ${jobId}.`);
         res.json({ success: true });
     });
@@ -3982,10 +4102,10 @@ app.post('/api/dvr/jobs/:id/stop', requireAuth, requireDvrAccess, (req, res) => 
     // MODIFIED: Admin can stop any job, user can only stop their own.
     const query = req.session.isAdmin ? "UPDATE dvr_jobs SET status = 'completed' WHERE id = ?" : "UPDATE dvr_jobs SET status = 'completed' WHERE id = ? AND user_id = ?";
     const params = req.session.isAdmin ? [jobId] : [jobId, req.session.userId];
-    
-    db.run(query, params, function(err){
+
+    db.run(query, params, function (err) {
         if (err) return res.status(500).json({ error: 'Could not update job status after stop.' });
-        if(this.changes === 0) return res.status(404).json({ error: 'Job not found or not authorized to stop.' });
+        if (this.changes === 0) return res.status(404).json({ error: 'Job not found or not authorized to stop.' });
         res.json({ success: true });
     });
 });
@@ -3996,22 +4116,22 @@ app.put('/api/dvr/jobs/:id', requireAuth, requireDvrAccess, (req, res) => {
     if (!startTime || !endTime) {
         return res.status(400).json({ error: 'Both startTime and endTime are required.' });
     }
-    
+
     // MODIFIED: Admin can edit any job, user can only edit their own.
     const getQuery = req.session.isAdmin ? "SELECT * from dvr_jobs WHERE id = ?" : "SELECT * from dvr_jobs WHERE id = ? AND user_id = ?";
     const getParams = req.session.isAdmin ? [id] : [id, req.session.userId];
 
     db.get(getQuery, getParams, (err, job) => {
-        if (err) return res.status(500).json({ error: 'DB error fetching job.'});
+        if (err) return res.status(500).json({ error: 'DB error fetching job.' });
         if (!job) return res.status(404).json({ error: 'Job not found or unauthorized.' });
         if (job.status !== 'scheduled') return res.status(400).json({ error: 'Only scheduled jobs can be modified.' });
-        
-        db.run("UPDATE dvr_jobs SET startTime = ?, endTime = ? WHERE id = ?", [startTime, endTime, id], function(err) {
+
+        db.run("UPDATE dvr_jobs SET startTime = ?, endTime = ? WHERE id = ?", [startTime, endTime, id], function (err) {
             if (err) return res.status(500).json({ error: 'Could not update job.' });
-            
+
             const updatedJob = { ...job, startTime, endTime };
             scheduleDvrJob(updatedJob);
-            
+
             console.log(`[DVR_API] Updated and rescheduled job ${id}.`);
             res.json({ success: true, job: updatedJob });
         });
@@ -4026,11 +4146,11 @@ app.delete('/api/dvr/jobs/:id/history', requireAuth, requireDvrAccess, (req, res
 
     db.get(query, params, (err, job) => {
         if (err || !job) {
-             return res.status(404).json({ error: 'Job not found or unauthorized.' });
+            return res.status(404).json({ error: 'Job not found or unauthorized.' });
         }
         if (['error', 'cancelled', 'completed'].includes(job.status)) {
-            db.run("DELETE FROM dvr_jobs WHERE id = ?", [id], function(err) {
-                if(err) return res.status(500).json({ error: 'Could not delete job history.' });
+            db.run("DELETE FROM dvr_jobs WHERE id = ?", [id], function (err) {
+                if (err) return res.status(500).json({ error: 'Could not delete job history.' });
                 console.log(`[DVR_API] Deleted job history for job ${id}.`);
                 res.json({ success: true });
             });
@@ -4043,16 +4163,16 @@ app.delete('/api/dvr/jobs/:id/history', requireAuth, requireDvrAccess, (req, res
 app.get('/api/events', requireAuth, (req, res) => {
     const userId = req.session.userId;
     const clientId = Date.now();
-    
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
-    
+
     if (!sseClients.has(userId)) {
         sseClients.set(userId, []);
     }
-    
+
     const clients = sseClients.get(userId);
     //-- ENHANCEMENT: Store isAdmin status with the client for easy broadcasting.
     clients.push({ id: clientId, res, isAdmin: req.session.isAdmin });
@@ -4157,7 +4277,7 @@ app.post('/api/settings/import', requireAdmin, settingsUpload.single('settingsFi
 // --- Main Route Handling ---
 app.get('*', (req, res) => {
     const filePath = path.join(PUBLIC_DIR, req.path);
-    if(fs.existsSync(filePath) && fs.lstatSync(filePath).isFile()){
+    if (fs.existsSync(filePath) && fs.lstatSync(filePath).isFile()) {
         return res.sendFile(filePath);
     }
     res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
@@ -4173,20 +4293,20 @@ detectHardwareAcceleration().then(() => {
 
         processAndMergeSources().then((result) => {
             console.log('[INIT] Initial source processing complete.');
-            if(result.success) fs.writeFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
+            if (result.success) fs.writeFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
             updateAndScheduleSourceRefreshes();
         }).catch(error => console.error('[INIT] Initial source processing failed:', error.message));
 
         if (notificationCheckInterval) clearInterval(notificationCheckInterval);
         notificationCheckInterval = setInterval(checkAndSendNotifications, 60000);
         console.log('[Push] Notification checker started.');
-        
+
         setInterval(cleanupInactiveStreams, 60000);
         console.log('[JANITOR] Inactive stream cleanup process started.');
 
         schedule.scheduleJob('0 2 * * *', autoDeleteOldRecordings);
         console.log('[DVR_STORAGE] Scheduled daily cleanup of old recordings.');
-        
+
 
     });
 });
