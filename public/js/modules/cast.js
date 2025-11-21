@@ -15,12 +15,36 @@ export const castState = {
     player: null,
     playerController: null,
     currentMedia: null,
+    currentCastStreamUrl: null, // Track the current Cast stream URL for cleanup
     localPlayerState: {
         streamUrl: null,
         name: null,
         logo: null
     }
 };
+
+/**
+ * Stops a Cast stream on the server by sending a stop request.
+ * @param {string} streamUrl - The stream URL to stop.
+ */
+async function stopCastStream(streamUrl) {
+    try {
+        console.log(`[CAST] Sending stop request for Cast stream: ${streamUrl}`);
+        const response = await fetch('/api/stream/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: streamUrl, profileId: 'ffmpeg-cast' })
+        });
+
+        if (response.ok) {
+            console.log('[CAST] Cast stream stopped successfully on server.');
+        } else {
+            console.warn('[CAST] Failed to stop Cast stream on server:', response.status);
+        }
+    } catch (error) {
+        console.error('[CAST] Error stopping Cast stream:', error);
+    }
+}
 
 /**
  * Stores the details of the currently playing local media.
@@ -52,7 +76,7 @@ function initializeCastApi() {
         cast.framework.CastContextEventType.SESSION_STATE_CHANGED,
         handleSessionStateChange
     );
-    
+
     castState.player = new cast.framework.RemotePlayer();
     castState.playerController = new cast.framework.RemotePlayerController(castState.player);
     castState.playerController.addEventListener(
@@ -81,26 +105,38 @@ window['__onGCastApiAvailable'] = (isAvailable) => {
 
 
 /**
- * Handles changes in the Cast session state (e.g., connecting, disconnecting).
- * @param {cast.framework.SessionStateEventData} event - The event data.
+ * Handles changes in the Cast session state.
+ * @param {chrome.cast.SessionStateEventData} event - The session state event.
  */
 function handleSessionStateChange(event) {
     console.log(`[CAST] Session state changed: ${event.sessionState}`);
     const castContext = cast.framework.CastContext.getInstance();
-    
+    castState.session = castContext.getCurrentSession(); // Update session reference
+
     switch (event.sessionState) {
         case cast.framework.SessionState.SESSION_STARTED:
         case cast.framework.SessionState.SESSION_RESUMED:
-            castState.session = castContext.getCurrentSession();
             castState.isCasting = true;
             showNotification(`Casting to ${castState.session.getCastDevice().friendlyName}`, false, 4000);
-            
-            if (castState.localPlayerState.streamUrl) {
+
+            // Auto-cast if local player is active and not already casting
+            if (castState.localPlayerState.streamUrl && !castState.currentMedia) {
                 console.log('[CAST] Automatically casting local content after session start.');
-                loadMedia(castState.localPlayerState.streamUrl, castState.localPlayerState.name, castState.localPlayerState.logo);
+                const { streamUrl, name, logo } = castState.localPlayerState;
+                // CRITICAL FIX: Convert relative URLs to absolute for Chromecast
+                const absoluteUrl = streamUrl.startsWith('http')
+                    ? streamUrl
+                    : `${window.location.origin}${streamUrl}`;
+                loadMedia(absoluteUrl, name, logo);
             }
             break;
         case cast.framework.SessionState.SESSION_ENDED:
+            console.log('[CAST] Session ended, stopping Cast stream on server.');
+            // Stop the Cast stream on the server
+            if (castState.currentCastStreamUrl) {
+                stopCastStream(castState.currentCastStreamUrl);
+                castState.currentCastStreamUrl = null;
+            }
             castState.session = null;
             castState.isCasting = false;
             castState.currentMedia = null;
@@ -108,11 +144,11 @@ function handleSessionStateChange(event) {
             updatePlayerUI();
             break;
         case cast.framework.SessionState.NO_SESSION:
-             castState.session = null;
-             castState.isCasting = false;
-             castState.currentMedia = null;
-             updatePlayerUI();
-             break;
+            castState.session = null;
+            castState.isCasting = false;
+            castState.currentMedia = null;
+            updatePlayerUI();
+            break;
     }
 }
 
@@ -135,10 +171,10 @@ function updatePlayerUI() {
         videoElement.classList.add('hidden');
         castStatusDiv.classList.remove('hidden');
         castStatusDiv.classList.add('flex');
-        
+
         UIElements.castStatusText.textContent = `Casting to ${castState.session.getCastDevice().friendlyName}`;
         UIElements.castStatusChannel.textContent = castState.player.mediaInfo ? castState.player.mediaInfo.metadata.title : 'No media loaded.';
-        
+
         // Add class to our custom button to indicate connected state
         if (castBtn) castBtn.classList.add('cast-connected');
 
@@ -159,15 +195,58 @@ function updatePlayerUI() {
  * @param {string} name - The name of the channel.
  * @param {string} logo - The URL of the channel's logo.
  */
-export function loadMedia(url, name, logo) {
+export async function loadMedia(url, name, logo) {
     if (!castState.session) {
         showNotification('Not connected to a Cast device.', true);
         return;
     }
 
     console.log(`[CAST] Loading media: "${name}" from URL: ${url}`);
-    
-    const mediaInfo = new chrome.cast.media.MediaInfo(url, 'video/mp2t');
+
+    // ONLY modify URL to use cast profile if NOT already using it
+    // This ensures we switch to MP4 for Chromecast
+    let castUrl = url;
+    if (!url.includes('profileId=ffmpeg-cast')) {
+        if (url.includes('profileId=')) {
+            // Replace existing profileId with cast profile
+            castUrl = url.replace(/profileId=[^&]+/, 'profileId=ffmpeg-cast');
+            console.log(`[CAST] Replaced profile with ffmpeg-cast`);
+        } else {
+            // Add cast profile
+            const separator = url.includes('?') ? '&' : '?';
+            castUrl = `${url}${separator}profileId=ffmpeg-cast`;
+            console.log(`[CAST] Added ffmpeg-cast profile`);
+        }
+    }
+
+    // Generate and append cast authentication token
+    try {
+        console.log('[CAST] Requesting authentication token...');
+        const response = await fetch('/api/cast/generate-token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ streamUrl: url })
+        });
+
+        if (!response.ok) {
+            throw new Error(`Token generation failed: ${response.status}`);
+        }
+
+        const { token } = await response.json();
+        const separator = castUrl.includes('?') ? '&' : '?';
+        castUrl = `${castUrl}${separator}castToken=${token}`;
+
+        console.log('[CAST] Authentication token added to URL');
+    } catch (error) {
+        console.error('[CAST] Failed to generate cast token:', error);
+        showNotification('Failed to generate cast authentication token', true);
+        return;
+    }
+
+    console.log(`[CAST] Cast URL ready for Chromecast`);
+
+    // Use video/mp4 instead of video/mp2t for Chromecast compatibility
+    const mediaInfo = new chrome.cast.media.MediaInfo(castUrl, 'video/mp4');
     mediaInfo.streamType = chrome.cast.media.StreamType.LIVE;
     mediaInfo.metadata = new chrome.cast.media.TvShowMediaMetadata();
     mediaInfo.metadata.title = name;
@@ -181,6 +260,7 @@ export function loadMedia(url, name, logo) {
         () => {
             console.log('[CAST] Media loaded successfully.');
             castState.currentMedia = castState.session.getMediaSession();
+            castState.currentCastStreamUrl = url; // Track for cleanup
             updatePlayerUI();
         },
         (errorCode) => {
@@ -194,7 +274,7 @@ export function loadMedia(url, name, logo) {
  * Ends the entire Cast session, disconnecting from the device.
  */
 export function endCastSession() {
-     if (castState.session) {
+    if (castState.session) {
         castState.session.endSession(true); // true to stop any playing media
-     }
+    }
 }
