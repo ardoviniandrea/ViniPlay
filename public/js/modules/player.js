@@ -231,7 +231,11 @@ export const playChannel = (url, name, channelId) => {
 
     if (castState.isCasting) {
         console.log(`[PLAYER] Already casting. Loading new channel "${name}" to remote device.`);
-        loadMedia(streamUrlToPlay, name, logo);
+        // CRITICAL FIX: Chromecast needs absolute URLs, not relative
+        const absoluteStreamUrl = streamUrlToPlay.startsWith('http')
+            ? streamUrlToPlay
+            : `${window.location.origin}${streamUrlToPlay}`;
+        loadMedia(absoluteStreamUrl, name, logo);
         openModal(UIElements.videoModal);
         return;
     }
