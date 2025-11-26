@@ -7,13 +7,14 @@
 import { appState, guideState, UIElements } from './state.js';
 import { apiFetch, saveGlobalSetting, saveUserSetting } from './api.js';
 // MODIFIED: Import isProcessingRunning for the button logic
-import { showNotification, openModal, closeModal, showConfirm, setButtonLoadingState, showProcessingModal, isProcessingRunning } from './ui.js'; 
+import { showNotification, openModal, closeModal, showConfirm, setButtonLoadingState, showProcessingModal, isProcessingRunning } from './ui.js';
 import { handleGuideLoad } from './guide.js';
 import { navigate } from './ui.js';
 import { ICONS } from './icons.js';
 
 let currentSourceTypeForEditor = 'url';
 let hardwareChecked = false; // Flag to prevent re-checking hardware on every UI update
+let detectedHardwareInfo = null; // Store detected hardware info
 
 /**
  * Fetches the server's public IP and displays it.
@@ -45,6 +46,7 @@ async function addDefaultGpuProfiles(hardware) {
 
     const streamProfiles = settings.streamProfiles || [];
     const dvrProfiles = settings.dvr?.recordingProfiles || [];
+    const castProfiles = settings.castProfiles || [];
 
     // NVIDIA Profiles
     if (hardware.nvidia) {
@@ -54,6 +56,10 @@ async function addDefaultGpuProfiles(hardware) {
         }
         if (!dvrProfiles.some(p => p.id === 'dvr-mp4-nvidia')) {
             dvrProfiles.push({ id: 'dvr-mp4-nvidia', name: 'NVIDIA NVENC MP4 (H.264/AAC)', command: '-user_agent "{userAgent}" -i "{streamUrl}" -c:v h264_nvenc -preset p6 -tune hq -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: true });
+            changesMade = true;
+        }
+        if (!castProfiles.some(p => p.id === 'cast-nvidia')) {
+            castProfiles.push({ id: 'cast-nvidia', name: 'Cast (NVIDIA NVENC)', command: '-user_agent "{userAgent}" -i "{streamUrl}" -c:v h264_nvenc -preset p6 -tune hq -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1', isDefault: false });
             changesMade = true;
         }
     }
@@ -68,6 +74,10 @@ async function addDefaultGpuProfiles(hardware) {
             dvrProfiles.push({ id: 'dvr-mp4-intel', name: 'Intel QSV MP4 (H.264/AAC)', command: '-hwaccel qsv -c:v h264_qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false });
             changesMade = true;
         }
+        if (!castProfiles.some(p => p.id === 'cast-intel')) {
+            castProfiles.push({ id: 'cast-intel', name: 'Cast (Intel QSV)', command: '-hwaccel qsv -c:v h264_qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1', isDefault: false });
+            changesMade = true;
+        }
     }
 
     // Intel VAAPI Profiles
@@ -78,6 +88,10 @@ async function addDefaultGpuProfiles(hardware) {
         }
         if (!dvrProfiles.some(p => p.id === 'dvr-mp4-vaapi')) {
             dvrProfiles.push({ id: 'dvr-mp4-vaapi', name: 'Intel VA-API MP4 (H.264/AAC)', command: '-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf \'format=nv12,hwupload\' -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false });
+            changesMade = true;
+        }
+        if (!castProfiles.some(p => p.id === 'cast-vaapi')) {
+            castProfiles.push({ id: 'cast-vaapi', name: 'Cast (VA-API Intel)', command: '-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf "format=nv12|vaapi,hwupload" -c:v h264_vaapi -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1', isDefault: false });
             changesMade = true;
         }
     }
@@ -92,13 +106,18 @@ async function addDefaultGpuProfiles(hardware) {
             dvrProfiles.push({ id: 'dvr-mp4-radeon-vaapi', name: 'Radeon/AMD VA-API MP4 (H.264/AAC)', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false });
             changesMade = true;
         }
+        if (!castProfiles.some(p => p.id === 'cast-vaapi-amd')) {
+            castProfiles.push({ id: 'cast-vaapi-amd', name: 'Cast (VA-API Radeon/AMD)', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1', isDefault: false });
+            changesMade = true;
+        }
     }
 
     if (changesMade) {
         console.log('[SETTINGS] New GPU profiles detected. Saving to settings...');
         settingsToSave.streamProfiles = streamProfiles;
         settingsToSave.dvr = { ...settings.dvr, recordingProfiles: dvrProfiles };
-        
+        settingsToSave.castProfiles = castProfiles;
+
         const updatedSettings = await saveGlobalSetting(settingsToSave);
         if (updatedSettings) {
             guideState.settings = updatedSettings;
@@ -179,12 +198,13 @@ function populateHardwareInfoModal(hardware) {
  * Fetches detected hardware from the backend and updates the UI.
  */
 async function handleHardwareDetection() {
-    if (hardwareChecked) return;
+    if (hardwareChecked) return detectedHardwareInfo;
     console.log('[SETTINGS] Fetching hardware acceleration info...');
     const res = await apiFetch('/api/hardware');
     if (res && res.ok) {
         hardwareChecked = true; // Mark as checked to prevent re-running
         const hardware = await res.json();
+        detectedHardwareInfo = hardware;
         let infoText = 'None';
 
         if (hardware.nvidia) {
@@ -193,32 +213,32 @@ async function handleHardwareDetection() {
         }
 
         if (hardware.intel_qsv) {
-             if (infoText !== 'None') {
+            if (infoText !== 'None') {
                 infoText += ` & ${hardware.intel_qsv}`;
-             } else {
+            } else {
                 infoText = hardware.intel_qsv;
-             }
+            }
             console.log(`[SETTINGS] Intel QSV found.`);
         }
 
         if (hardware.intel_vaapi) {
-             if (infoText !== 'None') {
+            if (infoText !== 'None') {
                 infoText += ` & ${hardware.intel_vaapi}`;
-             } else {
+            } else {
                 infoText = hardware.intel_vaapi;
-             }
+            }
             console.log(`[SETTINGS] Intel VA-API found.`);
         }
 
         if (hardware.radeon_vaapi) {
-             if (infoText !== 'None') {
+            if (infoText !== 'None') {
                 infoText += ` & ${hardware.radeon_vaapi}`;
-             } else {
+            } else {
                 infoText = hardware.radeon_vaapi;
-             }
+            }
             console.log(`[SETTINGS] Radeon/AMD VA-API found.`);
         }
-        
+
         UIElements.hardwareInfoText.textContent = infoText;
 
         if (hardware.nvidia || hardware.intel_qsv || hardware.intel_vaapi || hardware.radeon_vaapi) {
@@ -227,9 +247,11 @@ async function handleHardwareDetection() {
             // This will check for missing profiles, save them, and trigger a UI refresh if needed.
             await addDefaultGpuProfiles(hardware);
         }
+        return hardware;
     } else {
         UIElements.hardwareInfoText.textContent = 'Could not detect hardware.';
         console.error('[SETTINGS] Failed to load hardware info from backend.');
+        return null;
     }
 }
 
@@ -302,7 +324,7 @@ export const updateUIFromSettings = async () => {
     const settings = guideState.settings;
 
     // Run hardware detection which may add new profiles to the state
-    await handleHardwareDetection();
+    const hardware = await handleHardwareDetection();
 
     // One-time timezone auto-detection and setting.
     const timezoneSetFlag = localStorage.getItem('vini_timezone_auto_set');
@@ -315,7 +337,7 @@ export const updateUIFromSettings = async () => {
     } else {
         settings.timezoneOffset = settings.timezoneOffset ?? Math.round(-(new Date().getTimezoneOffset() / 60));
     }
-    
+
     try {
         const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
         if (userTimezone && UIElements.detectedTimezoneInfo) {
@@ -325,12 +347,12 @@ export const updateUIFromSettings = async () => {
     } catch (e) {
         console.warn("Could not detect user's IANA timezone.", e);
     }
-    
+
     settings.searchScope = settings.searchScope || 'all_channels_unfiltered';
     settings.playerLogLevel = settings.playerLogLevel || 'warning';
     settings.dvrLogLevel = settings.dvrLogLevel || 'warning';
     settings.notificationLeadTime = settings.notificationLeadTime ?? 10;
-    
+
     settings.dvr = settings.dvr || {};
     settings.dvr.preBufferMinutes = settings.dvr.preBufferMinutes ?? 1;
     settings.dvr.postBufferMinutes = settings.dvr.postBufferMinutes ?? 2;
@@ -344,12 +366,21 @@ export const updateUIFromSettings = async () => {
     UIElements.playerLogLevelSelect.value = settings.playerLogLevel;
     UIElements.dvrLogLevelSelect.value = settings.dvrLogLevel;
     UIElements.notificationLeadTimeInput.value = settings.notificationLeadTime;
-    
+
     // Update DVR inputs
     if (UIElements.dvrPreBufferInput) UIElements.dvrPreBufferInput.value = settings.dvr.preBufferMinutes;
     if (UIElements.dvrPostBufferInput) UIElements.dvrPostBufferInput.value = settings.dvr.postBufferMinutes;
     if (UIElements.dvrMaxStreamsInput) UIElements.dvrMaxStreamsInput.value = settings.dvr.maxConcurrentRecordings;
     if (UIElements.dvrStorageDeleteDays) UIElements.dvrStorageDeleteDays.value = settings.dvr.autoDeleteDays;
+
+    // Update Log Management inputs
+    settings.logs = settings.logs || { maxFiles: 5, maxFileSizeBytes: 5 * 1024 * 1024, autoDeleteDays: 7 };
+    if (UIElements.logMaxFilesInput) UIElements.logMaxFilesInput.value = settings.logs.maxFiles;
+    if (UIElements.logMaxSizeInput) UIElements.logMaxSizeInput.value = Math.round(settings.logs.maxFileSizeBytes / (1024 * 1024));
+    if (UIElements.logAutoDeleteDaysInput) UIElements.logAutoDeleteDaysInput.value = settings.logs.autoDeleteDays;
+
+    // Fetch and display log info
+    refreshLogInfo();
 
     // Render tables
     renderSourceTable('m3u');
@@ -370,8 +401,91 @@ export const updateUIFromSettings = async () => {
     };
 
     populateSelect('userAgentSelect', settings.userAgents || [], settings.activeUserAgentId);
-    populateSelect('streamProfileSelect', settings.streamProfiles || [], settings.activeStreamProfileId);
-    populateSelect('dvrRecordingProfileSelect', settings.dvr?.recordingProfiles || [], settings.dvr?.activeRecordingProfileId);
+
+    // Filter stream profiles based on detected hardware
+    const allProfiles = settings.streamProfiles || [];
+    const filteredProfiles = allProfiles.filter(p => {
+        // Always show default/basic profiles (but NOT ffmpeg-cast, which is for Chromecast only)
+        if (['redirect', 'ffmpeg-default'].includes(p.id)) return true;
+
+        // Show NVIDIA profiles only if NVIDIA GPU detected
+        if (p.id.includes('nvidia') && hardware?.nvidia) return true;
+
+        // Show Intel QSV profiles only if Intel QSV detected
+        if (p.id === 'ffmpeg-intel' && hardware?.intel_qsv) return true;
+
+        // Show Intel VAAPI profiles only if Intel VAAPI detected
+        if (p.id === 'ffmpeg-vaapi' && hardware?.intel_vaapi) return true;
+
+        // Show AMD/Radeon VAAPI profiles only if Radeon VAAPI detected
+        if (p.id === 'ffmpeg-vaapi-amd' && hardware?.radeon_vaapi) return true;
+
+        // Hide others by default if they look like hardware profiles but hardware not found
+        // If user added a custom profile that doesn't match these IDs, show it?
+        // Let's assume custom profiles don't use these reserved IDs, so we show them.
+        // But for safety, if it's one of the known hardware IDs and we didn't match above, hide it.
+        const knownHardwareIds = ['ffmpeg-nvidia', 'ffmpeg-nvidia-reconnect', 'ffmpeg-intel', 'ffmpeg-vaapi', 'ffmpeg-vaapi-amd'];
+        if (knownHardwareIds.includes(p.id)) return false;
+
+        return true; // Show custom profiles
+    });
+
+    populateSelect('streamProfileSelect', filteredProfiles, settings.activeStreamProfileId);
+    populateSelect('streamProfileSelect', filteredProfiles, settings.activeStreamProfileId);
+
+    // Filter DVR profiles based on detected hardware
+    const allDvrProfiles = settings.dvr?.recordingProfiles || [];
+    const filteredDvrProfiles = allDvrProfiles.filter(p => {
+        // Always show default/basic profiles
+        if (['dvr-ts-default', 'dvr-mp4-default'].includes(p.id)) return true;
+
+        // Show NVIDIA profiles only if NVIDIA GPU detected
+        if (p.id.includes('nvidia') && hardware?.nvidia) return true;
+
+        // Show Intel QSV profiles only if Intel QSV detected
+        if (p.id === 'dvr-mp4-intel' && hardware?.intel_qsv) return true;
+
+        // Show Intel VAAPI profiles only if Intel VAAPI detected
+        if (p.id === 'dvr-mp4-vaapi' && hardware?.intel_vaapi) return true;
+
+        // Show AMD/Radeon VAAPI profiles only if Radeon VAAPI detected
+        if (p.id === 'dvr-mp4-radeon-vaapi' && hardware?.radeon_vaapi) return true;
+
+        // Hide others by default if they look like hardware profiles but hardware not found
+        const knownHardwareIds = ['dvr-ts-nvidia', 'dvr-ts-nvidia-reconnect', 'dvr-mp4-nvidia', 'dvr-mp4-intel', 'dvr-mp4-vaapi', 'dvr-mp4-radeon-vaapi'];
+        if (knownHardwareIds.includes(p.id)) return false;
+
+        return true; // Show custom profiles
+    });
+
+    populateSelect('dvrRecordingProfileSelect', filteredDvrProfiles, settings.dvr?.activeRecordingProfileId);
+
+    // Filter Cast profiles based on detected hardware
+    const allCastProfiles = settings.castProfiles || [];
+    const filteredCastProfiles = allCastProfiles.filter(p => {
+        // Always show default cast profile
+        if (p.id === 'cast-default') return true;
+
+        // Show NVIDIA cast profiles only if NVIDIA GPU detected
+        if (p.id === 'cast-nvidia' && hardware?.nvidia) return true;
+
+        // Show Intel QSV cast profiles only if Intel QSV detected
+        if (p.id === 'cast-intel' && hardware?.intel_qsv) return true;
+
+        // Show Intel VAAPI cast profiles only if Intel VAAPI detected
+        if (p.id === 'cast-vaapi' && hardware?.intel_vaapi) return true;
+
+        // Show AMD/Radeon VAAPI cast profiles only if Radeon VAAPI detected
+        if (p.id === 'cast-vaapi-amd' && hardware?.radeon_vaapi) return true;
+
+        // Hide others by default if they look like hardware profiles but hardware not found
+        const knownHardwareIds = ['cast-nvidia', 'cast-intel', 'cast-vaapi', 'cast-vaapi-amd'];
+        if (knownHardwareIds.includes(p.id)) return false;
+
+        return true; // Show custom profiles
+    });
+
+    populateSelect('castProfileSelect', filteredCastProfiles, settings.activeCastProfileId);
 
     // Update button states based on selection
     const selectedProfile = (settings.streamProfiles || []).find(p => p.id === UIElements.streamProfileSelect.value);
@@ -385,6 +499,10 @@ export const updateUIFromSettings = async () => {
     const selectedRecordingProfile = (settings.dvr?.recordingProfiles || []).find(p => p.id === UIElements.dvrRecordingProfileSelect.value);
     UIElements.editDvrProfileBtn.disabled = !selectedRecordingProfile;
     UIElements.deleteDvrProfileBtn.disabled = !selectedRecordingProfile || selectedRecordingProfile?.isDefault;
+
+    const selectedCastProfile = (settings.castProfiles || []).find(p => p.id === UIElements.castProfileSelect.value);
+    UIElements.editCastProfileBtn.disabled = !selectedCastProfile;
+    UIElements.deleteCastProfileBtn.disabled = !selectedCastProfile || selectedCastProfile?.isDefault;
 
     // FIX: Only refresh the user list if the current user is an admin.
     // This prevents errors for non-admin users during the initial app load.
@@ -455,7 +573,7 @@ const openSourceEditor = (sourceType, source = null) => {
 
     // Default to 'url' tab unless source dictates otherwise
     let activeTab = 'url';
-    
+
     // Determine the initial tab based on the source type
     if (source) {
         if (source.type === 'file') {
@@ -466,7 +584,7 @@ const openSourceEditor = (sourceType, source = null) => {
             activeTab = 'url';
         }
     }
-    
+
     // Set the global state for which tab is active
     currentSourceTypeForEditor = activeTab;
 
@@ -512,13 +630,13 @@ const openSourceEditor = (sourceType, source = null) => {
             btnSpan.textContent = count > 0 ? `${count} Groups Selected` : 'Select Groups';
         }
     }
-    
+
     // Hide refresh interval for file-based sources
     UIElements.sourceEditorRefreshContainer.classList.toggle('hidden', activeTab === 'file');
     UIElements.sourceEditorFileInfo.classList.add('hidden'); // Hide file info by default
     document.getElementById('source-editor-filter-groups-container').classList.toggle('hidden', activeTab === 'file');
 
-    
+
 
     // Populate the form fields based on the source data
     if (source) {
@@ -570,10 +688,14 @@ const openEditorModal = (type, item = null) => {
         title = item ? 'Edit Stream Profile' : 'Create New Stream Profile';
         valueLabel = 'FFmpeg Command';
         helpText = 'For ffmpeg commands, use {userAgent} and {streamUrl} as placeholders.';
-    } else { // recordingProfile
+    } else if (type === 'recordingProfile') {
         title = item ? 'Edit Recording Profile' : 'Create New Recording Profile';
         valueLabel = 'FFmpeg Command';
         helpText = 'Use {streamUrl} and {filePath} as placeholders. Example: -i "{streamUrl}" -c copy "{filePath}.ts"';
+    } else { // castProfile
+        title = item ? 'Edit Cast Profile' : 'Create New Cast Profile';
+        valueLabel = 'FFmpeg Command';
+        helpText = 'For Chromecast, use MP4 fragmented format with {userAgent} and {streamUrl} placeholders.';
     }
 
 
@@ -587,7 +709,7 @@ const openEditorModal = (type, item = null) => {
 
     const isDefault = item && item.isDefault;
     UIElements.editorName.disabled = isDefault;
-    
+
     // NEW LOGIC: Make the textarea readonly for default profiles so users can copy the command.
     UIElements.editorValue.readOnly = isDefault;
     UIElements.editorValue.classList.toggle('bg-gray-600', isDefault); // Visual cue for readonly
@@ -619,33 +741,111 @@ const saveSettingAndNotify = async (saveFunction, ...args) => {
     return !!updatedSettings;
 };
 
+// --- LOG MANAGEMENT FUNCTIONS ---
+
+/**
+ * Fetches and displays log statistics.
+ */
+async function refreshLogInfo() {
+    try {
+        const res = await apiFetch('/api/logs/info');
+        if (res && res.ok) {
+            const data = await res.json();
+
+            if (UIElements.logFileCount) {
+                UIElements.logFileCount.textContent = data.fileCount;
+            }
+            if (UIElements.logTotalSize) {
+                const sizeMB = (data.totalSize / (1024 * 1024)).toFixed(2);
+                UIElements.logTotalSize.textContent = `${sizeMB} MB`;
+            }
+            if (UIElements.logOldestDate) {
+                if (data.oldestDate) {
+                    const date = new Date(data.oldestDate);
+                    UIElements.logOldestDate.textContent = date.toLocaleDateString();
+                } else {
+                    UIElements.logOldestDate.textContent = 'N/A';
+                }
+            }
+        }
+    } catch (error) {
+        console.error('[SETTINGS] Error fetching log info:', error);
+    }
+}
+
+/**
+ * Triggers download of all log files.
+ */
+async function handleDownloadLogs() {
+    try {
+        window.location.href = '/api/logs/download';
+        showNotification('Downloading logs...', false, 3000);
+    } catch (error) {
+        console.error('[SETTINGS] Error downloading logs:', error);
+        showNotification('Failed to download logs.', true);
+    }
+}
+
+/**
+ * Clears all log files after confirmation.
+ */
+function handleClearLogs() {
+    console.log('[SETTINGS] Clear logs button clicked');
+
+    showConfirm(
+        'Clear All Logs',
+        'Are you sure you want to delete all log files? This action cannot be undone.',
+        async () => {
+            console.log('[SETTINGS] User confirmed log cleanup');
+            console.log('[SETTINGS] Proceeding with log cleanup...');
+
+            try {
+                const res = await apiFetch('/api/logs/cleanup', { method: 'POST' });
+                console.log('[SETTINGS] Cleanup API response:', res);
+                if (res && res.ok) {
+                    const data = await res.json();
+                    console.log('[SETTINGS] Cleanup successful, deleted:', data.deletedCount);
+                    showNotification(`Cleared ${data.deletedCount} log file(s).`, false, 3000);
+                    refreshLogInfo();
+                } else {
+                    console.error('[SETTINGS] Cleanup API returned non-OK response');
+                    showNotification('Failed to clear logs.', true);
+                }
+            } catch (error) {
+                console.error('[SETTINGS] Error clearing logs:', error);
+                showNotification('Failed to clear logs.', true);
+            }
+        }
+    );
+}
+
 /**
  * Sets up all event listeners for the settings page.
  */
 export function setupSettingsEventListeners() {
 
     // --- Source Management ---
-        if (UIElements.processSourcesBtn) {
-            UIElements.processSourcesBtn.addEventListener('click', async () => {
-                if (isProcessingRunning && UIElements.processingStatusModal.classList.contains('hidden')) {
-                    // Process is running in the background, just reopen the modal
-                    openModal(UIElements.processingStatusModal);
-                    return;
-                }
+    if (UIElements.processSourcesBtn) {
+        UIElements.processSourcesBtn.addEventListener('click', async () => {
+            if (isProcessingRunning && UIElements.processingStatusModal.classList.contains('hidden')) {
+                // Process is running in the background, just reopen the modal
+                openModal(UIElements.processingStatusModal);
+                return;
+            }
 
-                // 1. Open the processing modal (this sets isProcessingRunning = true)
-                showProcessingModal();
+            // 1. Open the processing modal (this sets isProcessingRunning = true)
+            showProcessingModal();
 
-                // 2. Trigger the backend process.
-                const res = await apiFetch('/api/process-sources', { method: 'POST' });
+            // 2. Trigger the backend process.
+            const res = await apiFetch('/api/process-sources', { method: 'POST' });
 
-                // 3. Handle initial request failure
-                if (!res || !res.ok) {
-                    const data = res ? await res.json() : { error: 'Could not connect to server.'};
-                    updateProcessingStatus(`Failed to start process: ${data.error}`, 'error');
-                }
-            });
-        }
+            // 3. Handle initial request failure
+            if (!res || !res.ok) {
+                const data = res ? await res.json() : { error: 'Could not connect to server.' };
+                updateProcessingStatus(`Failed to start process: ${data.error}`, 'error');
+            }
+        });
+    }
 
     UIElements.addM3uBtn.addEventListener('click', () => openSourceEditor('m3u'));
     UIElements.addEpgBtn.addEventListener('click', () => openSourceEditor('epg'));
@@ -673,9 +873,9 @@ export function setupSettingsEventListeners() {
         if (filterGroupsContainer) {
             filterGroupsContainer.classList.toggle('hidden', isFile);
             const refreshBtn = filterGroupsContainer.querySelector('#source-editor-refresh-groups-btn');
-             if (refreshBtn) {
-                 refreshBtn.classList.toggle('hidden', isFile);
-             }
+            if (refreshBtn) {
+                refreshBtn.classList.toggle('hidden', isFile);
+            }
         }
     };
 
@@ -701,8 +901,8 @@ export function setupSettingsEventListeners() {
             if (UIElements.sourceEditorFile.files[0]) {
                 formData.append('sourceFile', UIElements.sourceEditorFile.files[0]);
             } else if (!id) {
-                 showNotification('A file must be selected for new file-based sources.', true);
-                 return;
+                showNotification('A file must be selected for new file-based sources.', true);
+                return;
             }
         } else if (currentSourceTypeForEditor === 'xc') {
             formData.append('xc', JSON.stringify({
@@ -729,8 +929,8 @@ export function setupSettingsEventListeners() {
             closeModal(UIElements.sourceEditorModal);
             showNotification(`Source ${id ? 'updated' : 'added'} successfully.`);
         } else {
-             const data = res ? await res.json() : { error: 'An unknown error occurred.'};
-             showNotification(`Error: ${data.error}`, true);
+            const data = res ? await res.json() : { error: 'An unknown error occurred.' };
+            showNotification(`Error: ${data.error}`, true);
         }
     });
 
@@ -766,14 +966,14 @@ export function setupSettingsEventListeners() {
         if (!row) return;
         const sourceId = row.dataset.sourceId;
         const source = guideState.settings[`${sourceType}Sources`].find(s => s.id === sourceId);
-        if(!source) return;
+        if (!source) return;
 
         if (target.closest('.edit-source-btn')) {
             openSourceEditor(sourceType, source);
         } else if (target.closest('.delete-source-btn')) {
             showConfirm('Delete Source?', 'This will delete the source configuration. The downloaded file (if any) will also be removed.', async () => {
                 const res = await apiFetch(`/api/sources/${sourceType}/${sourceId}`, { method: 'DELETE' });
-                if(res?.ok) {
+                if (res?.ok) {
                     const data = await res.json();
                     Object.assign(guideState.settings, data.settings); // Merge settings
                     updateUIFromSettings();
@@ -850,8 +1050,8 @@ export function setupSettingsEventListeners() {
         const selectedId = UIElements.userAgentSelect.value;
         const agentToDelete = guideState.settings.userAgents.find(ua => ua.id === selectedId);
         if (!agentToDelete || agentToDelete.isDefault) {
-             showNotification("Cannot delete the default User Agent.", true);
-             return;
+            showNotification("Cannot delete the default User Agent.", true);
+            return;
         }
         showConfirm('Delete User Agent?', 'Are you sure?', async () => {
             const updatedList = guideState.settings.userAgents.filter(ua => ua.id !== selectedId);
@@ -872,10 +1072,10 @@ export function setupSettingsEventListeners() {
     UIElements.deleteStreamProfileBtn.addEventListener('click', () => {
         const selectedId = UIElements.streamProfileSelect.value;
         const profileToDelete = guideState.settings.streamProfiles.find(p => p.id === selectedId);
-         if (!profileToDelete || profileToDelete.isDefault) {
-             showNotification("Cannot delete a default Stream Profile.", true);
-             return;
-         }
+        if (!profileToDelete || profileToDelete.isDefault) {
+            showNotification("Cannot delete a default Stream Profile.", true);
+            return;
+        }
         showConfirm('Delete Stream Profile?', 'Are you sure?', async () => {
             const updatedList = guideState.settings.streamProfiles.filter(p => p.id !== selectedId);
             const newActiveId = (guideState.settings.activeStreamProfileId === selectedId) ? (guideState.settings.streamProfiles.find(p => p.isDefault)?.id || updatedList[0]?.id || null) : guideState.settings.activeStreamProfileId;
@@ -902,8 +1102,8 @@ export function setupSettingsEventListeners() {
         const selectedId = UIElements.dvrRecordingProfileSelect.value;
         const profileToDelete = (guideState.settings.dvr?.recordingProfiles || []).find(p => p.id === selectedId);
         if (!profileToDelete || profileToDelete.isDefault) {
-             showNotification("Cannot delete a default Recording Profile.", true);
-             return;
+            showNotification("Cannot delete a default Recording Profile.", true);
+            return;
         }
         showConfirm('Delete Recording Profile?', 'Are you sure?', async () => {
             const updatedList = (guideState.settings.dvr?.recordingProfiles || []).filter(p => p.id !== selectedId);
@@ -924,7 +1124,37 @@ export function setupSettingsEventListeners() {
         });
     });
 
-    // --- Editor Modal (User Agent/Stream Profile/Recording Profile) ---
+    // --- Cast Profile Dropdown and Buttons ---
+    UIElements.castProfileSelect.addEventListener('change', (e) => saveSettingAndNotify(saveGlobalSetting, { activeCastProfileId: e.target.value }));
+    UIElements.addCastProfileBtn.addEventListener('click', () => openEditorModal('castProfile'));
+    UIElements.editCastProfileBtn.addEventListener('click', () => {
+        const profile = (guideState.settings.castProfiles || []).find(p => p.id === UIElements.castProfileSelect.value);
+        if (profile) openEditorModal('castProfile', profile);
+    });
+    UIElements.deleteCastProfileBtn.addEventListener('click', () => {
+        const selectedId = UIElements.castProfileSelect.value;
+        const profileToDelete = (guideState.settings.castProfiles || []).find(p => p.id === selectedId);
+        if (!profileToDelete || profileToDelete.isDefault) {
+            showNotification("Cannot delete a default Cast Profile.", true);
+            return;
+        }
+        showConfirm('Delete Cast Profile?', 'Are you sure?', async () => {
+            const updatedList = (guideState.settings.castProfiles || []).filter(p => p.id !== selectedId);
+            const newActiveId = (guideState.settings.activeCastProfileId === selectedId) ? ((guideState.settings.castProfiles || []).find(p => p.isDefault)?.id || updatedList[0]?.id || null) : guideState.settings.activeCastProfileId;
+            const settingsToSave = {
+                castProfiles: updatedList,
+                activeCastProfileId: newActiveId
+            };
+            const settings = await saveGlobalSetting(settingsToSave);
+            if (settings) {
+                guideState.settings = settings;
+                updateUIFromSettings();
+                showNotification('Cast Profile deleted.');
+            }
+        });
+    });
+
+    // --- Editor Modal (User Agent/Stream Profile/Recording Profile/Cast Profile) ---
     UIElements.editorCancelBtn.addEventListener('click', () => closeModal(UIElements.editorModal));
     UIElements.editorForm.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -936,17 +1166,21 @@ export function setupSettingsEventListeners() {
         let listKey, valueKey, activeIdKey;
 
         if (type === 'userAgent') {
-             listKey = 'userAgents';
-             valueKey = 'value';
-             activeIdKey = 'activeUserAgentId';
+            listKey = 'userAgents';
+            valueKey = 'value';
+            activeIdKey = 'activeUserAgentId';
         } else if (type === 'streamProfile') {
             listKey = 'streamProfiles';
             valueKey = 'command';
             activeIdKey = 'activeStreamProfileId';
         } else if (type === 'recordingProfile') {
-             listKey = 'recordingProfiles'; // Will be nested under 'dvr'
-             valueKey = 'command';
-             activeIdKey = 'activeRecordingProfileId'; // Will be nested under 'dvr'
+            listKey = 'recordingProfiles'; // Will be nested under 'dvr'
+            valueKey = 'command';
+            activeIdKey = 'activeRecordingProfileId'; // Will be nested under 'dvr'
+        } else if (type === 'castProfile') {
+            listKey = 'castProfiles';
+            valueKey = 'command';
+            activeIdKey = 'activeCastProfileId';
         } else {
             return showNotification('Invalid editor type.', true);
         }
@@ -956,25 +1190,25 @@ export function setupSettingsEventListeners() {
         if (type === 'recordingProfile') {
             const list = [...(guideState.settings.dvr?.[listKey] || [])];
             const existingIndex = list.findIndex(item => item.id === id);
-             if (existingIndex > -1) {
-                 // Cannot edit default items' core properties
-                 if (list[existingIndex].isDefault) return showNotification('Cannot edit default profiles.', true);
-                 list[existingIndex] = { ...list[existingIndex], ...newItem };
-             } else {
-                 list.push(newItem);
-             }
-             settingsToSave.dvr = { ...guideState.settings.dvr, [listKey]: list };
+            if (existingIndex > -1) {
+                // Cannot edit default items' core properties
+                if (list[existingIndex].isDefault) return showNotification('Cannot edit default profiles.', true);
+                list[existingIndex] = { ...list[existingIndex], ...newItem };
+            } else {
+                list.push(newItem);
+            }
+            settingsToSave.dvr = { ...guideState.settings.dvr, [listKey]: list };
         } else {
-             const list = [...(guideState.settings[listKey] || [])];
-             const existingIndex = list.findIndex(item => item.id === id);
-             if (existingIndex > -1) {
-                  // Cannot edit default items' core properties
-                  if (list[existingIndex].isDefault) return showNotification('Cannot edit default items.', true);
-                  list[existingIndex] = { ...list[existingIndex], ...newItem };
-             } else {
-                 list.push(newItem);
-             }
-             settingsToSave[listKey] = list;
+            const list = [...(guideState.settings[listKey] || [])];
+            const existingIndex = list.findIndex(item => item.id === id);
+            if (existingIndex > -1) {
+                // Cannot edit default items' core properties
+                if (list[existingIndex].isDefault) return showNotification('Cannot edit default items.', true);
+                list[existingIndex] = { ...list[existingIndex], ...newItem };
+            } else {
+                list.push(newItem);
+            }
+            settingsToSave[listKey] = list;
         }
 
 
@@ -1030,21 +1264,21 @@ export function setupSettingsEventListeners() {
             // This ensures we have the latest data, though refreshUserList usually covers it.
             // For simplicity, we can rely on the data used to render the table if refreshUserList is called often.
             // Let's assume refreshUserList keeps the UI consistent for now.
-             const res = await apiFetch('/api/users'); // Re-fetch all users to find the one clicked
-             if (!res) return;
-             const users = await res.json();
-             const user = users.find(u => u.id == userId); // Use == for potential type difference
-             if(user) {
-                 openUserEditor(user);
-             } else {
-                 showNotification('Could not find user data to edit.', true);
-             }
+            const res = await apiFetch('/api/users'); // Re-fetch all users to find the one clicked
+            if (!res) return;
+            const users = await res.json();
+            const user = users.find(u => u.id == userId); // Use == for potential type difference
+            if (user) {
+                openUserEditor(user);
+            } else {
+                showNotification('Could not find user data to edit.', true);
+            }
         }
 
         if (target.classList.contains('delete-user-btn')) {
-             showConfirm('Delete User?', 'Are you sure? This action cannot be undone.', async () => {
-                 const res = await apiFetch(`/api/users/${userId}`, { method: 'DELETE' });
-                if(res?.ok) { // Check for ok status explicitly
+            showConfirm('Delete User?', 'Are you sure? This action cannot be undone.', async () => {
+                const res = await apiFetch(`/api/users/${userId}`, { method: 'DELETE' });
+                if (res?.ok) { // Check for ok status explicitly
                     refreshUserList();
                     showNotification('User deleted.');
                 }
@@ -1057,15 +1291,15 @@ export function setupSettingsEventListeners() {
     UIElements.clearDataBtn.addEventListener('click', () => {
         showConfirm('Clear All Data?', 'This will permanently delete ALL settings and files from the server and your browser cache. The page will reload.', async () => {
             const res = await apiFetch('/api/data', { method: 'DELETE' }); // Use apiFetch
-            if(res?.ok) { // Check for ok status
+            if (res?.ok) { // Check for ok status
                 if (appState.db) {
                     try {
                         await new Promise((resolve, reject) => {
-                             const transaction = appState.db.transaction(['guideData'], 'readwrite');
-                             const store = transaction.objectStore('guideData');
-                             const req = store.clear();
-                             req.onsuccess = resolve;
-                             req.onerror = (event) => reject(event.target.error);
+                            const transaction = appState.db.transaction(['guideData'], 'readwrite');
+                            const store = transaction.objectStore('guideData');
+                            const req = store.clear();
+                            req.onsuccess = resolve;
+                            req.onerror = (event) => reject(event.target.error);
                         });
                         console.log('[SETTINGS] IndexedDB cleared successfully.');
                     } catch (dbError) {
@@ -1119,7 +1353,7 @@ export function setupSettingsEventListeners() {
     // --- Group Filter Modal Interaction Logic (Inside Settings Listeners) ---
     let tempSelectedGroups = new Set(); // Stores group names temporarily while modal is open
 
-    
+
     // Helper function (ensure this is accessible, maybe defined outside setupSettingsEventListeners)
     const populateGroupFilterModal = (allGroups, selectedGroups) => {
         tempSelectedGroups.clear(); // Clear previous temporary selections
@@ -1228,7 +1462,7 @@ export function setupSettingsEventListeners() {
     UIElements.groupFilterCancelBtn.addEventListener('click', () => closeModal(UIElements.groupFilterModal));
     UIElements.groupFilterCloseBtn.addEventListener('click', () => closeModal(UIElements.groupFilterModal));
 
-UIElements.groupFilterSaveBtn.addEventListener('click', () => {
+    UIElements.groupFilterSaveBtn.addEventListener('click', () => {
         // --- START MODIFICATION ---
         // Update tempSelectedGroups one last time from the currently visible tab
         // This ensures selections made just before clicking save are captured.
@@ -1249,10 +1483,10 @@ UIElements.groupFilterSaveBtn.addEventListener('click', () => {
         // Get the hidden input field in the source editor modal
         const hiddenInput = document.getElementById('source-editor-selected-groups');
         if (hiddenInput) {
-             // --- MODIFIED: Save finalSelectedGroups (the complete set from all tabs) ---
-             hiddenInput.value = JSON.stringify(finalSelectedGroups);
-             // --- END MODIFICATION ---
-             console.log('[SETTINGS] Saving selected groups:', finalSelectedGroups);
+            // --- MODIFIED: Save finalSelectedGroups (the complete set from all tabs) ---
+            hiddenInput.value = JSON.stringify(finalSelectedGroups);
+            // --- END MODIFICATION ---
+            console.log('[SETTINGS] Saving selected groups:', finalSelectedGroups);
         } else {
             console.error('[SETTINGS] Could not find hidden input #source-editor-selected-groups to save selections.');
         }
@@ -1268,7 +1502,7 @@ UIElements.groupFilterSaveBtn.addEventListener('click', () => {
             btnSpan.textContent = btnText; // Update the span's text
             console.log(`[SETTINGS] Updated filter button text to: "${btnText}"`);
         } else {
-             console.error('[SETTINGS] Could not find span within #source-editor-filter-groups-btn to update text.');
+            console.error('[SETTINGS] Could not find span within #source-editor-filter-groups-btn to update text.');
         }
 
         // Close the group filter modal
@@ -1325,7 +1559,7 @@ UIElements.groupFilterSaveBtn.addEventListener('click', () => {
                 if ((sourceType === 'url' && !body.url) ||
                     (sourceType === 'xc' && (!body.xc || !JSON.parse(body.xc).server)) ||
                     (sourceType === 'file' && !UIElements.sourceEditorFileInfo.textContent) // Check if file info is present
-                   ) {
+                ) {
                     showNotification('Please enter a valid URL, XC server address, or ensure a file is selected before fetching groups.', true);
                     // --- MODIFIED: Restore button state on early exit ---
                     setButtonLoadingState(btn, false, originalContent);
@@ -1370,7 +1604,7 @@ UIElements.groupFilterSaveBtn.addEventListener('click', () => {
                     // Restore button state regardless of success or failure
                     setButtonLoadingState(btn, false, originalContent);
                 }
-                
+
             }
             // Handle Refresh Groups button ---
             else if (e.target.closest('#source-editor-refresh-groups-btn')) { // Use closest for icon clicks
@@ -1393,12 +1627,12 @@ UIElements.groupFilterSaveBtn.addEventListener('click', () => {
                     sourceId: sourceId // Pass sourceId for cache update
                 };
 
-                 if (sourceType === 'file') {
+                if (sourceType === 'file') {
                     showNotification('Cannot refresh groups for local file sources.', true);
                     setButtonLoadingState(btn, false, originalContent);
                     return;
                 }
-                 if ((sourceType === 'url' && !body.url) || (sourceType === 'xc' && (!body.xc || !JSON.parse(body.xc).server))) {
+                if ((sourceType === 'url' && !body.url) || (sourceType === 'xc' && (!body.xc || !JSON.parse(body.xc).server))) {
                     showNotification('Please enter a valid URL or XC server address before refreshing groups.', true);
                     setButtonLoadingState(btn, false, originalContent);
                     return;
@@ -1430,17 +1664,68 @@ UIElements.groupFilterSaveBtn.addEventListener('click', () => {
                     setButtonLoadingState(btn, false, originalContent); // Restore icon
                 }
             }
-            
+
         });
         console.log('[SETTINGS] Added delegated click listener to source editor modal.');
     } else {
-         console.error('[SETTINGS] Cannot add delegated listener: Source Editor Modal element not found.');
+        console.error('[SETTINGS] Cannot add delegated listener: Source Editor Modal element not found.');
     }
-            
-            // Add other delegated click handlers for the source editor modal here if needed
+
+    // Add other delegated click handlers for the source editor modal here if needed
 
     // Make sure helper functions are defined outside or properly imported/accessible
     // Assuming populateGroupFilterModal and updateGroupFilterList are defined elsewhere in settings.js
 
-}; // Closing brace for setupSettingsEventListeners (ensure this matches your file structure)
+    // --- LOG MANAGEMENT EVENT LISTENERS ---
 
+    // Log settings inputs
+    if (UIElements.logMaxFilesInput) {
+        UIElements.logMaxFilesInput.addEventListener('change', async () => {
+            const maxFiles = parseInt(UIElements.logMaxFilesInput.value, 10);
+            if (maxFiles >= 1 && maxFiles <= 50) {
+                await saveSettingAndNotify(saveGlobalSetting, {
+                    logs: { ...guideState.settings.logs, maxFiles }
+                });
+            }
+        });
+    }
+
+    if (UIElements.logMaxSizeInput) {
+        UIElements.logMaxSizeInput.addEventListener('change', async () => {
+            const maxSizeMB = parseInt(UIElements.logMaxSizeInput.value, 10);
+            if (maxSizeMB >= 1 && maxSizeMB <= 100) {
+                await saveSettingAndNotify(saveGlobalSetting, {
+                    logs: { ...guideState.settings.logs, maxFileSizeBytes: maxSizeMB * 1024 * 1024 }
+                });
+            }
+        });
+    }
+
+    if (UIElements.logAutoDeleteDaysInput) {
+        UIElements.logAutoDeleteDaysInput.addEventListener('change', async () => {
+            const autoDeleteDays = parseInt(UIElements.logAutoDeleteDaysInput.value, 10);
+            if (autoDeleteDays >= 0) {
+                await saveSettingAndNotify(saveGlobalSetting, {
+                    logs: { ...guideState.settings.logs, autoDeleteDays }
+                });
+            }
+        });
+    }
+
+    // Download logs button
+    if (UIElements.downloadLogsBtn) {
+        console.log('[SETTINGS] Attaching download logs button listener');
+        UIElements.downloadLogsBtn.addEventListener('click', handleDownloadLogs);
+    } else {
+        console.warn('[SETTINGS] Download logs button element not found!');
+    }
+
+    // Clear logs button
+    if (UIElements.clearLogsBtn) {
+        console.log('[SETTINGS] Attaching clear logs button listener');
+        UIElements.clearLogsBtn.addEventListener('click', handleClearLogs);
+    } else {
+        console.warn('[SETTINGS] Clear logs button element not found!');
+    }
+
+}; // Closing brace for setupSettingsEventListeners (ensure this matches your file structure)
