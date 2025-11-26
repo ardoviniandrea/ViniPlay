@@ -126,4 +126,14 @@ export const UIElements = {
     groupFilterList: null,
     groupFilterCancelBtn: null,
     groupFilterSaveBtn: null,
+
+    // --- NEW: Log Management Elements ---
+    logFileCount: null,
+    logTotalSize: null,
+    logOldestDate: null,
+    logMaxFilesInput: null,
+    logMaxSizeInput: null,
+    logAutoDeleteDaysInput: null,
+    downloadLogsBtn: null,
+    clearLogsBtn: null,
 };
