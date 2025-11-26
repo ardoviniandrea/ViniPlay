@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -15,38 +16,199 @@
     <script src="https://cdn.jsdelivr.net/npm/gridstack@10.1.2/dist/gridstack-all.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Inter', sans-serif; background-color: #111827; color: #d1d5db; }
-        .custom-scrollbar::-webkit-scrollbar { height: 8px; width: 8px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: #1f2937; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #6b7280; }
-        .tab-button.active { background-color: #3b82f6; color: white; }
-        .bottom-nav-btn.active { color: #3b82f6; } /* Kept for backward compatibility, will be removed by HTML */
-        .programme-item { border-left: 3px solid #3b82f6; transition: all 0.2s; }
-        .programme-item:hover { background-color: #374151; cursor: pointer; }
-        html, body { height: 100%; overflow: hidden; } /* Ensure body doesn't scroll, let inner divs handle it */
-        .favorite-star { transition: all 0.2s; }
-        .favorite-star.favorited { color: #facc15; transform: scale(1.2); }
-        .programme-progress { position: absolute; top: 0; left: 0; bottom: 0; background-color: rgba(59, 130, 246, 0.3); border-radius: 2px 0 0 2px; pointer-events: none; transition: width 0.3s linear; }
-        .programme-item.past { background-color: #374151; border-left-color: #6b7280; opacity: 0.6; }
-        .programme-item.live { border-left: 4px solid #fb923c; background-color: #374151; }
-        .programme-item.live::after { content: 'LIVE'; position: absolute; top: 4px; right: 4px; background-color: #ef4444; color: white; padding: 1px 4px; font-size: 0.65rem; font-weight: 700; border-radius: 4px; z-index: 20; }
-        .programme-item .prog-title { font-size: 0.9rem; font-weight: 600; }
-        .programme-item .prog-time { font-size: 0.75rem; }
-        #group-filter, #source-filter, #search-input { transition: all 0.2s ease; }
-        #group-filter:hover, #source-filter:hover, #search-input:hover { background-color: #4b5563; }
-        body.modal-open { overflow: hidden; }
-        button:disabled { cursor: not-allowed; opacity: 0.6; }
-        .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3b82f6; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        
-        .resize-handle { position: absolute; bottom: 0; right: 0; width: 20px; height: 20px; cursor: se-resize; z-index: 10; }
-        .resize-handle::after { content: ''; position: absolute; display: block; width: 12px; height: 12px; bottom: 2px; right: 2px; background-image: linear-gradient(45deg, #9ca3af 25%, transparent 25%, transparent 75%, #9ca3af 75%), linear-gradient(45deg, #9ca3af 25%, transparent 25%, transparent 75%, #9ca3af 75%); background-size: 6px 6px; background-position: 0 0, 3px 3px; opacity: 0.6; }
-        .resize-handle:hover::after { opacity: 1; }
-        #video-modal-container { overflow: hidden; }
-        #video-modal-container { min-width: 400px; min-height: 300px; position: relative; }
-        #program-details-container { min-width: 320px; max-height: 90vh; position: relative; }
-        #details-desc { overflow-y: auto; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #111827;
+            color: #d1d5db;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar {
+            height: 8px;
+            width: 8px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #1f2937;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #4b5563;
+            border-radius: 4px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #6b7280;
+        }
+
+        .tab-button.active {
+            background-color: #3b82f6;
+            color: white;
+        }
+
+        .bottom-nav-btn.active {
+            color: #3b82f6;
+        }
+
+        /* Kept for backward compatibility, will be removed by HTML */
+        .programme-item {
+            border-left: 3px solid #3b82f6;
+            transition: all 0.2s;
+        }
+
+        .programme-item:hover {
+            background-color: #374151;
+            cursor: pointer;
+        }
+
+        html,
+        body {
+            height: 100%;
+            overflow: hidden;
+        }
+
+        /* Ensure body doesn't scroll, let inner divs handle it */
+        .favorite-star {
+            transition: all 0.2s;
+        }
+
+        .favorite-star.favorited {
+            color: #facc15;
+            transform: scale(1.2);
+        }
+
+        .programme-progress {
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            background-color: rgba(59, 130, 246, 0.3);
+            border-radius: 2px 0 0 2px;
+            pointer-events: none;
+            transition: width 0.3s linear;
+        }
+
+        .programme-item.past {
+            background-color: #374151;
+            border-left-color: #6b7280;
+            opacity: 0.6;
+        }
+
+        .programme-item.live {
+            border-left: 4px solid #fb923c;
+            background-color: #374151;
+        }
+
+        .programme-item.live::after {
+            content: 'LIVE';
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            background-color: #ef4444;
+            color: white;
+            padding: 1px 4px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            border-radius: 4px;
+            z-index: 20;
+        }
+
+        .programme-item .prog-title {
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+
+        .programme-item .prog-time {
+            font-size: 0.75rem;
+        }
+
+        #group-filter,
+        #source-filter,
+        #search-input {
+            transition: all 0.2s ease;
+        }
+
+        #group-filter:hover,
+        #source-filter:hover,
+        #search-input:hover {
+            background-color: #4b5563;
+        }
+
+        body.modal-open {
+            overflow: hidden;
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .resize-handle {
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 20px;
+            height: 20px;
+            cursor: se-resize;
+            z-index: 10;
+        }
+
+        .resize-handle::after {
+            content: '';
+            position: absolute;
+            display: block;
+            width: 12px;
+            height: 12px;
+            bottom: 2px;
+            right: 2px;
+            background-image: linear-gradient(45deg, #9ca3af 25%, transparent 25%, transparent 75%, #9ca3af 75%), linear-gradient(45deg, #9ca3af 25%, transparent 25%, transparent 75%, #9ca3af 75%);
+            background-size: 6px 6px;
+            background-position: 0 0, 3px 3px;
+            opacity: 0.6;
+        }
+
+        .resize-handle:hover::after {
+            opacity: 1;
+        }
+
+        #video-modal-container {
+            overflow: hidden;
+        }
+
+        #video-modal-container {
+            min-width: 400px;
+            min-height: 300px;
+            position: relative;
+        }
+
+        #program-details-container {
+            min-width: 320px;
+            max-height: 90vh;
+            position: relative;
+        }
+
+        #details-desc {
+            overflow-y: auto;
+        }
+
         .programme-item.highlighted-search {
             outline: 3px solid #facc15;
             box-shadow: 0 0 15px rgba(250, 204, 21, 0.5), inset 0 0 0 2px #facc15;
@@ -54,30 +216,103 @@
             transition: all 0.3s ease-out;
             transform: scale(1.02);
         }
+
         .search-results-header {
             padding: 0.5rem 0.75rem;
-            background-color: #374151; /* gray-700 */
-            color: #d1d5db; /* gray-300 */
-            font-size: 0.75rem; /* text-xs */
-            font-weight: 700; /* font-bold */
+            background-color: #374151;
+            /* gray-700 */
+            color: #d1d5db;
+            /* gray-300 */
+            font-size: 0.75rem;
+            /* text-xs */
+            font-weight: 700;
+            /* font-bold */
             text-transform: uppercase;
             letter-spacing: 0.05em;
-            border-bottom: 1px solid #4b5563; /* gray-600 */
+            border-bottom: 1px solid #4b5563;
+            /* gray-600 */
         }
-        .sources-table th, .dvr-table th, .admin-table th { @apply px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider; }
-        .sources-table td, .dvr-table td, .admin-table td { @apply px-4 py-3 whitespace-nowrap text-sm text-gray-300; }
-        .sources-table tbody tr, .dvr-table tbody tr, .admin-table tbody tr { @apply border-b border-gray-700/50; }
-        .sources-table tbody tr:last-child, .dvr-table tbody tr:last-child, .admin-table tbody tr:last-child { @apply border-none; }
-        .sources-table .action-btn, .dvr-table .action-btn, .admin-table .action-btn { @apply text-gray-400 hover:text-white transition-colors; }
+
+        .sources-table th,
+        .dvr-table th,
+        .admin-table th {
+            @apply px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider;
+        }
+
+        .sources-table td,
+        .dvr-table td,
+        .admin-table td {
+            @apply px-4 py-3 whitespace-nowrap text-sm text-gray-300;
+        }
+
+        .sources-table tbody tr,
+        .dvr-table tbody tr,
+        .admin-table tbody tr {
+            @apply border-b border-gray-700/50;
+        }
+
+        .sources-table tbody tr:last-child,
+        .dvr-table tbody tr:last-child,
+        .admin-table tbody tr:last-child {
+            @apply border-none;
+        }
+
+        .sources-table .action-btn,
+        .dvr-table .action-btn,
+        .admin-table .action-btn {
+            @apply text-gray-400 hover:text-white transition-colors;
+        }
 
         /* Custom Switch */
-        .switch { position: relative; display: inline-block; width: 38px; height: 22px; }
-        .switch input { opacity: 0; width: 0; height: 0; }
-        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #4b5563; transition: .4s; border-radius: 22px; }
-        .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
-        input:checked + .slider { background-color: #2563eb; }
-        input:focus + .slider { box-shadow: 0 0 1px #2563eb; }
-        input:checked + .slider:before { transform: translateX(16px); }
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 38px;
+            height: 22px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #4b5563;
+            transition: .4s;
+            border-radius: 22px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        input:checked+.slider {
+            background-color: #2563eb;
+        }
+
+        input:focus+.slider {
+            box-shadow: 0 0 1px #2563eb;
+        }
+
+        input:checked+.slider:before {
+            transform: translateX(16px);
+        }
+
         .source-badge {
             font-size: 0.6rem;
             font-weight: 700;
@@ -96,6 +331,7 @@
             flex-shrink: 0;
             text-transform: uppercase;
         }
+
         .chno-badge {
             font-size: 0.65rem;
             font-weight: 600;
@@ -108,36 +344,49 @@
 
         /* --- Guide Grid Styles for sticky headers --- */
         #guide-container {
-            flex-grow: 1; /* Make it fill available space */
-            background-color: #111827; /* Match body background */
-            overflow: auto; /* Handles both vertical and horizontal scrolling */
-            position: relative; /* For the now-line's absolute positioning relative to scrolled content */
+            flex-grow: 1;
+            /* Make it fill available space */
+            background-color: #111827;
+            /* Match body background */
+            overflow: auto;
+            /* Handles both vertical and horizontal scrolling */
+            position: relative;
+            /* For the now-line's absolute positioning relative to scrolled content */
         }
+
         #guide-grid {
             display: grid;
-            grid-template-columns: var(--channel-col-width, 180px) 1fr; /* Sticky channel info, then scrollable timeline */
-            grid-auto-rows: min-content; /* Rows size to content, important for first row sticky */
-            position: relative; /* For now-line absolute positioning */
-            min-width: fit-content; /* Ensure grid stretches to contain wide timeline */
-            height: fit-content; /* Allow content to dictate height */
+            grid-template-columns: var(--channel-col-width, 180px) 1fr;
+            /* Sticky channel info, then scrollable timeline */
+            grid-auto-rows: min-content;
+            /* Rows size to content, important for first row sticky */
+            position: relative;
+            /* For now-line absolute positioning */
+            min-width: fit-content;
+            /* Ensure grid stretches to contain wide timeline */
+            height: fit-content;
+            /* Allow content to dictate height */
         }
 
         .sticky-corner {
             position: sticky;
             top: 0;
             left: 0;
-            z-index: 45; /* FIX: Increased z-index to be above all other headers */
-            background-color: #1a2233; /* Match channel-info background */
-            height: 64px; /* Explicit height, matches time-bar-cell */
-            width: var(--channel-col-width, 180px); 
+            z-index: 45;
+            /* FIX: Increased z-index to be above all other headers */
+            background-color: #1a2233;
+            /* Match channel-info background */
+            height: 64px;
+            /* Explicit height, matches time-bar-cell */
+            width: var(--channel-col-width, 180px);
             border-bottom: 1px solid #374151;
             border-right: 1px solid #374151;
             box-sizing: border-box;
-            display: flex; 
+            display: flex;
             flex-direction: column;
             align-items: flex-start;
             justify-content: center;
-            padding: 8px; 
+            padding: 8px;
         }
 
         .channel-resize-handle {
@@ -147,8 +396,9 @@
             bottom: 0;
             width: 8px;
             cursor: ew-resize;
-            z-index: 35; 
+            z-index: 35;
         }
+
         .channel-resize-handle::after {
             content: '';
             position: absolute;
@@ -162,89 +412,116 @@
             opacity: 0.6;
             border-radius: 1px;
         }
+
         .channel-resize-handle:hover::after {
             opacity: 1;
             background-color: #ffffff;
         }
-        
+
         .time-bar-cell {
             position: sticky;
             top: 0;
-            z-index: 25; 
+            z-index: 25;
             background-color: #111827;
             height: 64px;
             display: flex;
             align-items: center;
             border-bottom: 1px solid #374151;
             box-sizing: border-box;
-            overflow: hidden; 
+            overflow: hidden;
         }
-        
+
         .channel-info {
             position: sticky;
             left: 0;
-            z-index: 30; 
+            z-index: 30;
             background-color: #1a2233;
             border-right: 1px solid #374151;
             box-sizing: border-box;
-            height: 96px; 
-            width: var(--channel-col-width, 180px); 
+            height: 96px;
+            width: var(--channel-col-width, 180px);
         }
 
         .timeline-row {
             position: relative;
-            height: 96px; 
+            height: 96px;
         }
-        
+
         #now-line {
             position: absolute;
             top: 0;
-            background-color: #ef4444; 
-            width: 2px; 
+            background-color: #ef4444;
+            width: 2px;
             z-index: 28;
             pointer-events: none;
             transition: left 0.5s ease;
-            height: 100%; 
+            height: 100%;
         }
 
         @media (max-width: 767px) {
             #guide-grid {
-                grid-template-columns: 64px 1fr; 
+                grid-template-columns: 64px 1fr;
             }
+
             .channel-info {
-                width: 64px; 
+                width: 64px;
             }
-            .channel-details { display: none; }
-            .sticky-corner { width: 64px; }
-            .channel-resize-handle { display: none; }
+
+            .channel-details {
+                display: none;
+            }
+
+            .sticky-corner {
+                width: 64px;
+            }
+
+            .channel-resize-handle {
+                display: none;
+            }
         }
 
-        #main-header, #unified-guide-header {
-            transition: transform 0.3s ease-out, opacity 0.3s ease-out, max-height 0.3s ease-out, padding 0.3s ease-out, margin 0.3s ease-out, border-width 0.3s ease-out; /* Add padding, margin, border-width to transition */
+        #main-header,
+        #unified-guide-header {
+            transition: transform 0.3s ease-out, opacity 0.3s ease-out, max-height 0.3s ease-out, padding 0.3s ease-out, margin 0.3s ease-out, border-width 0.3s ease-out;
+            /* Add padding, margin, border-width to transition */
             transform: translateY(0);
             opacity: 1;
-            max-height: 200px; /* Set a generous max-height for non-collapsed state */
+            max-height: 200px;
+            /* Set a generous max-height for non-collapsed state */
             overflow: hidden;
             flex-shrink: 0;
             box-shadow: none;
-            padding-top: initial; /* Ensure padding is managed */
-            padding-bottom: initial; /* Ensure padding is managed */
+            padding-top: initial;
+            /* Ensure padding is managed */
+            padding-bottom: initial;
+            /* Ensure padding is managed */
             z-index: 35;
         }
 
-        #main-header { padding: 1rem; z-index: 40; }
-        #unified-guide-header { padding: 0.5rem 1rem; }
+        #main-header {
+            padding: 1rem;
+            z-index: 40;
+        }
+
+        #unified-guide-header {
+            padding: 0.5rem 1rem;
+        }
 
         #app-container.header-collapsed #main-header,
         #app-container.header-collapsed #unified-guide-header {
             transform: translateY(-100%);
             opacity: 0;
-            max-height: 0 !important; /* Force max-height to 0 */
-            padding: 0 !important; /* Force padding to 0 */
-            margin: 0 !important; /* Force margin to 0 */
-            border-width: 0 !important; /* Force border to 0 */
+            max-height: 0 !important;
+            /* Force max-height to 0 */
+            padding: 0 !important;
+            /* Force padding to 0 */
+            margin: 0 !important;
+            /* Force margin to 0 */
+            border-width: 0 !important;
+            /* Force border to 0 */
             pointer-events: none;
         }
+
         #page-guide {
             transition: padding-top 0.3s ease-out;
         }
@@ -252,42 +529,63 @@
         .programme-item.has-notification {
             border-bottom: 3px solid #facc15;
         }
-        
-        .programme-item.has-recording.status-scheduled { border-bottom: 3px solid #3b82f6; }
-        .programme-item.has-recording.status-recording { border-bottom: 3px solid #ef4444; }
-        .programme-item.has-recording.status-completed { border-bottom: 3px solid #22c55e; }
-        .programme-item.has-recording.status-error { border-bottom: 3px solid #f97316; }
-        .programme-item.has-recording.status-cancelled { border-bottom: 3px solid #6b7280; }
 
-        #page-multiview { background-color: #111827; }
+        .programme-item.has-recording.status-scheduled {
+            border-bottom: 3px solid #3b82f6;
+        }
+
+        .programme-item.has-recording.status-recording {
+            border-bottom: 3px solid #ef4444;
+        }
+
+        .programme-item.has-recording.status-completed {
+            border-bottom: 3px solid #22c55e;
+        }
+
+        .programme-item.has-recording.status-error {
+            border-bottom: 3px solid #f97316;
+        }
+
+        .programme-item.has-recording.status-cancelled {
+            border-bottom: 3px solid #6b7280;
+        }
+
+        #page-multiview {
+            background-color: #111827;
+        }
+
         .grid-stack {
             background-color: #1f2937;
             background-image:
                 linear-gradient(rgba(107, 114, 128, 0.1) 1px, transparent 1px),
                 linear-gradient(90deg, rgba(107, 114, 128, 0.1) 1px, transparent 1px);
         }
+
         .grid-stack-item-content {
             display: flex;
             flex-direction: column;
             background-color: #1f2937;
-            color: #d1d5db; 
+            color: #d1d5db;
             border-radius: 0.5rem;
             overflow: hidden;
             box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
             transition: box-shadow 0.2s;
         }
+
         .grid-stack-item-content.active-player {
             box-shadow: 0 0 0 3px #3b82f6, 0 0 15px rgba(59, 130, 246, 0.5);
         }
+
         .player-header {
             display: flex;
             align-items: center;
             justify-content: space-between;
             padding: 0.25rem 0.5rem;
-            background-color: #374151; 
+            background-color: #374151;
             cursor: move;
             flex-shrink: 0;
         }
+
         .player-header-title {
             font-size: 0.875rem;
             font-weight: 500;
@@ -295,7 +593,13 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        .player-controls { display: flex; align-items: center; gap: 0.5rem; }
+
+        .player-controls {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
         .player-controls button {
             background: none;
             border: none;
@@ -304,8 +608,17 @@
             border-radius: 9999px;
             transition: all 0.2s;
         }
-        .player-controls button:hover { color: white; background-color: #4b5563; }
-        .player-controls .volume-slider { width: 60px; height: 4px; accent-color: #3b82f6; }
+
+        .player-controls button:hover {
+            color: white;
+            background-color: #4b5563;
+        }
+
+        .player-controls .volume-slider {
+            width: 60px;
+            height: 4px;
+            accent-color: #3b82f6;
+        }
 
         .player-body {
             flex-grow: 1;
@@ -319,6 +632,7 @@
             align-items: center;
             justify-content: center;
         }
+
         .player-placeholder {
             display: flex;
             flex-direction: column;
@@ -336,11 +650,20 @@
             overflow: hidden;
             transition: background-color 0.2s;
         }
+
         .player-placeholder:hover {
             background-color: #374151;
         }
-        .player-placeholder svg { width: 2rem; height: 2rem; margin-bottom: 0.5rem; }
-        .channel-selector-list { max-height: 400px; }
+
+        .player-placeholder svg {
+            width: 2rem;
+            height: 2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .channel-selector-list {
+            max-height: 400px;
+        }
 
         #guide-date-picker::-webkit-calendar-picker-indicator {
             display: none;
@@ -350,9 +673,11 @@
         #cast-btn svg path {
             transition: all 0.2s ease-in-out;
         }
+
         #cast-btn.cast-connected {
             color: #3b82f6;
         }
+
         #cast-btn.cast-connected:hover {
             color: #60a5fa;
         }
@@ -366,55 +691,87 @@
             border: none;
             cursor: default;
         }
+
         .status-badge.view-error-btn {
             cursor: pointer;
             text-decoration: underline;
         }
-        .status-badge.recording { background-color: #ef4444; color: white; }
-        .status-badge.scheduled { background-color: #3b82f6; color: white; }
-        .status-badge.completed { background-color: #22c55e; color: white; }
-        .status-badge.error { background-color: #f97316; color: white; }
-        .status-badge.cancelled { background-color: #6b7280; color: white; }
+
+        .status-badge.recording {
+            background-color: #ef4444;
+            color: white;
+        }
+
+        .status-badge.scheduled {
+            background-color: #3b82f6;
+            color: white;
+        }
+
+        .status-badge.completed {
+            background-color: #22c55e;
+            color: white;
+        }
+
+        .status-badge.error {
+            background-color: #f97316;
+            color: white;
+        }
+
+        .status-badge.cancelled {
+            background-color: #6b7280;
+            color: white;
+        }
 
         #notification-modal-wrapper {
             position: fixed;
-            top: 1.25rem; 
+            top: 1.25rem;
             right: 1.25rem;
             z-index: 100;
             pointer-events: none;
         }
-        #notification-modal-wrapper.hidden { display: none; }
+
+        #notification-modal-wrapper.hidden {
+            display: none;
+        }
+
         #notification-box {
             color: white;
             padding: 0.5rem 1rem;
             border-radius: 0.5rem;
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-            pointer-events: all; 
+            pointer-events: all;
             opacity: 0;
             transform: translateY(-20px);
             transition: opacity 0.3s ease-out, transform 0.3s ease-out, background-color 0.2s ease-in-out;
-            min-width: 250px; 
+            min-width: 250px;
             text-align: center;
-            background-color: #ef4444; 
+            background-color: #ef4444;
         }
+
         #notification-modal-wrapper:not(.hidden) #notification-box {
             opacity: 1;
             transform: translateY(0);
         }
-        #notification-box.success-bg { background-color: #22c55e; }
-        #notification-box.error-bg { background-color: #ef4444; }
+
+        #notification-box.success-bg {
+            background-color: #22c55e;
+        }
+
+        #notification-box.error-bg {
+            background-color: #ef4444;
+        }
 
         /* Styles for the direct player page */
         #direct-player-container {
             width: 100%;
-            max-width: 960px; 
+            max-width: 960px;
             aspect-ratio: 16 / 9;
             background-color: #000;
             border-radius: 0.5rem;
             overflow: hidden;
             box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
         }
-        
+
         #direct-player-console {
             background-color: #1f2937;
             border: 1px solid #374151;
@@ -426,7 +783,7 @@
             height: 120px;
             overflow-y: auto;
         }
-        
+
         /* NEW: Stream info overlay styles */
         #stream-info-overlay {
             position: absolute;
@@ -441,34 +798,48 @@
             pointer-events: none;
             z-index: 10;
         }
+
         #stream-info-overlay p {
             margin: 0;
             line-height: 1.4;
         }
+
         /* MODIFIED: Added styles for icon placeholders */
         [data-icon] {
             display: inline-flex;
             align-items: center;
             justify-content: center;
         }
-        [data-icon] > svg {
-            width: 1.25rem; /* Corresponds to w-5 */
-            height: 1.25rem; /* Corresponds to h-5 */
+
+        [data-icon]>svg {
+            width: 1.25rem;
+            /* Corresponds to w-5 */
+            height: 1.25rem;
+            /* Corresponds to h-5 */
         }
+
         /* Mobile menu icon size */
-        #mobile-menu-toggle [data-icon] > svg {
-            width: 1.5rem; /* w-6 */
-            height: 1.5rem; /* h-6 */
+        #mobile-menu-toggle [data-icon]>svg {
+            width: 1.5rem;
+            /* w-6 */
+            height: 1.5rem;
+            /* h-6 */
         }
+
         /* Player widget icon size */
-        .player-controls [data-icon] > svg {
-             width: 1rem; /* w-4 */
-            height: 1rem; /* h-4 */
+        .player-controls [data-icon]>svg {
+            width: 1rem;
+            /* w-4 */
+            height: 1rem;
+            /* h-4 */
         }
+
         /* Mobile nav icon size */
-        #mobile-nav-menu [data-icon] > svg {
-             width: 1.5rem; /* w-6 */
-            height: 1.5rem; /* h-6 */
+        #mobile-nav-menu [data-icon]>svg {
+            width: 1.5rem;
+            /* w-6 */
+            height: 1.5rem;
+            /* h-6 */
         }
 
         /* NEW: Broadcast Banner Styles */
@@ -480,6 +851,7 @@
             z-index: 200;
             pointer-events: none;
         }
+
         .broadcast-banner {
             background-color: #fb923c;
             color: #431407;
@@ -491,28 +863,41 @@
             transition: opacity 0.5s, transform 0.5s;
             pointer-events: all;
         }
+
         .broadcast-banner.visible {
             opacity: 1;
             transform: translateY(0);
         }
+
         .clickable-username {
             cursor: pointer;
             text-decoration: underline;
             text-decoration-color: #6b7280;
             transition: color 0.2s;
         }
+
         .clickable-username:hover {
             color: #60a5fa;
         }
+
         .pagination-btn {
             @apply flex items-center justify-center px-3 h-8 leading-tight text-gray-400 bg-gray-800 border border-gray-700 hover:bg-gray-700 hover:text-white;
         }
+
         .pagination-btn.active {
             @apply z-10 text-white font-bold border-blue-600 bg-blue-600;
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.5); /* blue-500 with 50% opacity */
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.5);
+            /* blue-500 with 50% opacity */
         }
-        .pagination-btn:first-child { @apply rounded-l-lg; }
-        .pagination-btn:last-child { @apply rounded-r-lg; }
+
+        .pagination-btn:first-child {
+            @apply rounded-l-lg;
+        }
+
+        .pagination-btn:last-child {
+            @apply rounded-r-lg;
+        }
+
         .transcode-indicator {
             width: 12px;
             height: 12px;
@@ -522,219 +907,335 @@
 
         /* --- NEW: VOD Page Styles --- */
         .vod-item {
-            background-color: #1f2937; /* bg-gray-800 */
-            border-radius: 0.5rem; /* rounded-lg */
+            background-color: #1f2937;
+            /* bg-gray-800 */
+            border-radius: 0.5rem;
+            /* rounded-lg */
             overflow: hidden;
-            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); /* shadow-lg */
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            /* shadow-lg */
             transition: all 0.2s;
             cursor: pointer;
             transform: scale(1);
-            position: relative; /* For the badge */
+            position: relative;
+            /* For the badge */
         }
+
         .vod-item:hover {
-            box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1); /* shadow-xl */
+            box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+            /* shadow-xl */
             transform: scale(1.05);
             z-index: 10;
         }
+
         .vod-item-poster {
             width: 100%;
-            background-color: #374151; /* bg-gray-700 */
-            aspect-ratio: 2 / 3; /* For vertical movie posters */
+            background-color: #374151;
+            /* bg-gray-700 */
+            aspect-ratio: 2 / 3;
+            /* For vertical movie posters */
         }
+
         .vod-item-poster img {
             width: 100%;
             height: 100%;
             object-fit: cover;
         }
+
         .vod-item-info {
-            padding: 0.5rem 0.75rem; /* p-2 p-3 */
+            padding: 0.5rem 0.75rem;
+            /* p-2 p-3 */
         }
+
         .vod-item-title {
-            font-size: 0.875rem; /* text-sm */
-            font-weight: 600; /* font-semibold */
+            font-size: 0.875rem;
+            /* text-sm */
+            font-weight: 600;
+            /* font-semibold */
             color: white;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
+
         .vod-item-type {
-            font-size: 0.75rem; /* text-xs */
-            color: #9ca3af; /* text-gray-400 */
+            font-size: 0.75rem;
+            /* text-xs */
+            color: #9ca3af;
+            /* text-gray-400 */
             text-transform: capitalize;
         }
+
         .vod-type-badge {
             position: absolute;
-            top: 0.5rem; /* top-2 */
-            left: 0.5rem; /* left-2 */
+            top: 0.5rem;
+            /* top-2 */
+            left: 0.5rem;
+            /* left-2 */
             background-color: rgba(0, 0, 0, 0.7);
             color: white;
-            font-size: 0.75rem; /* text-xs */
-            font-weight: 700; /* font-bold */
-            padding: 0.25rem 0.5rem; /* py-1 px-2 */
-            border-radius: 0.25rem; /* rounded */
+            font-size: 0.75rem;
+            /* text-xs */
+            font-weight: 700;
+            /* font-bold */
+            padding: 0.25rem 0.5rem;
+            /* py-1 px-2 */
+            border-radius: 0.25rem;
+            /* rounded */
         }
 
         /* --- NEW: Group Filter Modal Styles --- */
-        .group-filter-tab-btn.active { 
-            background-color: #3b82f6; 
-            color: white; 
-        }
-        .group-filter-tab-btn {
-            font-size: 0.875rem; /* text-sm */
-            font-weight: 500; /* font-medium */
-            padding: 0.5rem 1rem; /* py-2 px-4 */
-            color: #d1d5db; /* text-gray-300 */
-            border-radius: 0.375rem; /* rounded-md */
-            transition: all 0.2s;
-        }
-        .group-filter-tab-btn:not(.active):hover {
-            background-color: #374151; /* hover:bg-gray-700 */
-        }
-        .group-filter-item {
-            background-color: #374151; /* bg-gray-700 */
-            padding: 0.75rem; /* p-3 */
-            border-radius: 0.375rem; /* rounded-md */
-            border: 1px solid #4b5563; /* border-gray-600 */
-            cursor: pointer;
-            transition: all 0.2s;
-            align-self: start; /* Aligns item to the top of its grid cell */
-            min-height: 4.5rem; /* Ensures a minimum height for all items */
-            display: flex; /* Added display flex for vertical centering if needed, though align-self:start might be enough */
-            align-items: center; /* Vertically center content within the min-height */
-            justify-content: center; /* Horizontally center content */
-            text-align: center; /* Center text for wrapping */
-        }
-        .group-filter-item.selected {
-            background-color: #2563eb; /* bg-blue-600 */
-            border-color: #3b82f6; /* border-blue-500 */
+        .group-filter-tab-btn.active {
+            background-color: #3b82f6;
             color: white;
         }
-        .group-filter-item:not(.selected):hover {
-            background-color: #4b5563; /* hover:bg-gray-600 */
-        }
-        
-        /* --- NEW: VOD Details Modal Styles --- */
-        #vod-episode-list .episode-item {
-            display: flex;             /* Replaces @apply flex */
-            align-items: center;       /* Replaces @apply items-center */
-            padding: 0.75rem;          /* Replaces @apply p-3 */
-            border-bottom-width: 1px;  /* Replaces @apply border-b */
-            border-color: rgba(55, 65, 81, 0.5); /* Replaces @apply border-gray-700/50 */
-            cursor: pointer;           /* Replaces @apply cursor-pointer */
-        }
-        #vod-episode-list .episode-item:last-child {
-            border-bottom-width: 0px;  /* Replaces @apply border-b-0 */
-        }
-        #vod-episode-list .episode-item:hover {
-            background-color: rgba(55, 65, 81, 0.5); /* Replaces @apply hover:bg-gray-700/50 */
-        }
-        .episode-item-epnum {
-            color: #9ca3af;            /* Replaces @apply text-gray-400 */
-            font-size: 0.875rem;       /* Replaces @apply text-sm */
-            width: 2rem;               /* Replaces @apply w-8 */
-            text-align: center;        /* Replaces @apply text-center */
-            flex-shrink: 0;            /* Replaces @apply flex-shrink-0 */
-            margin-right: 1rem;        /* Replaces @apply mr-4 */
-            border-radius: 9999px;     /* Replaces @apply rounded-full */
-            background-color: #374151; /* Replaces @apply bg-gray-700 */
-            line-height: 1.5rem;       /* Replaces @apply leading-6 */
-        }
-        .episode-item-title {
-            color: white;              /* Replaces @apply text-white */
-            font-size: 0.875rem;       /* Replaces @apply text-sm */
-            font-weight: 500;          /* Replaces @apply font-medium */
-            flex-grow: 1;              /* Replaces @apply flex-grow */
-            margin-right: 1rem;        /* Replaces @apply mr-4 */
-            overflow: hidden;          /* Replaces @apply truncate (part 1) */
-            text-overflow: ellipsis;   /* Replaces @apply truncate (part 2) */
-            white-space: nowrap;       /* Replaces @apply truncate (part 3) */
-        }
-        .episode-item-duration,
-        .episode-item-date {
-            color: #9ca3af;            /* Replaces @apply text-gray-400 */
-            font-size: 0.75rem;        /* Replaces @apply text-xs */
-            width: 5rem;               /* Replaces @apply w-20 */
-            text-align: right;         /* Replaces @apply text-right */
-            flex-shrink: 0;            /* Replaces @apply flex-shrink-0 */
-            margin-right: 1rem;        /* Replaces @apply mr-4 */
-        }
-        .episode-item-play-btn {
-            color: #60a5fa;            /* Replaces @apply text-blue-400 */
-            padding: 0.25rem;          /* Replaces @apply p-1 */
-            border-radius: 9999px;     /* Replaces @apply rounded-full */
-            flex-shrink: 0;            /* Replaces @apply flex-shrink-0 */
-            margin-left: auto;         /* Replaces @apply ml-auto */
-        }
-        .episode-item-play-btn:hover {
-             color: #93c5fd;           /* Replaces @apply hover:text-blue-300 */
-        }
-        .episode-item-play-btn svg {
-             width: 1.25rem;           /* Replaces @apply w-5 */
-             height: 1.25rem;          /* Replaces @apply h-5 */
+
+        .group-filter-tab-btn {
+            font-size: 0.875rem;
+            /* text-sm */
+            font-weight: 500;
+            /* font-medium */
+            padding: 0.5rem 1rem;
+            /* py-2 px-4 */
+            color: #d1d5db;
+            /* text-gray-300 */
+            border-radius: 0.375rem;
+            /* rounded-md */
+            transition: all 0.2s;
         }
 
-        
+        .group-filter-tab-btn:not(.active):hover {
+            background-color: #374151;
+            /* hover:bg-gray-700 */
+        }
+
+        .group-filter-item {
+            background-color: #374151;
+            /* bg-gray-700 */
+            padding: 0.75rem;
+            /* p-3 */
+            border-radius: 0.375rem;
+            /* rounded-md */
+            border: 1px solid #4b5563;
+            /* border-gray-600 */
+            cursor: pointer;
+            transition: all 0.2s;
+            align-self: start;
+            /* Aligns item to the top of its grid cell */
+            min-height: 4.5rem;
+            /* Ensures a minimum height for all items */
+            display: flex;
+            /* Added display flex for vertical centering if needed, though align-self:start might be enough */
+            align-items: center;
+            /* Vertically center content within the min-height */
+            justify-content: center;
+            /* Horizontally center content */
+            text-align: center;
+            /* Center text for wrapping */
+        }
+
+        .group-filter-item.selected {
+            background-color: #2563eb;
+            /* bg-blue-600 */
+            border-color: #3b82f6;
+            /* border-blue-500 */
+            color: white;
+        }
+
+        .group-filter-item:not(.selected):hover {
+            background-color: #4b5563;
+            /* hover:bg-gray-600 */
+        }
+
+        /* --- NEW: VOD Details Modal Styles --- */
+        #vod-episode-list .episode-item {
+            display: flex;
+            /* Replaces @apply flex */
+            align-items: center;
+            /* Replaces @apply items-center */
+            padding: 0.75rem;
+            /* Replaces @apply p-3 */
+            border-bottom-width: 1px;
+            /* Replaces @apply border-b */
+            border-color: rgba(55, 65, 81, 0.5);
+            /* Replaces @apply border-gray-700/50 */
+            cursor: pointer;
+            /* Replaces @apply cursor-pointer */
+        }
+
+        #vod-episode-list .episode-item:last-child {
+            border-bottom-width: 0px;
+            /* Replaces @apply border-b-0 */
+        }
+
+        #vod-episode-list .episode-item:hover {
+            background-color: rgba(55, 65, 81, 0.5);
+            /* Replaces @apply hover:bg-gray-700/50 */
+        }
+
+        .episode-item-epnum {
+            color: #9ca3af;
+            /* Replaces @apply text-gray-400 */
+            font-size: 0.875rem;
+            /* Replaces @apply text-sm */
+            width: 2rem;
+            /* Replaces @apply w-8 */
+            text-align: center;
+            /* Replaces @apply text-center */
+            flex-shrink: 0;
+            /* Replaces @apply flex-shrink-0 */
+            margin-right: 1rem;
+            /* Replaces @apply mr-4 */
+            border-radius: 9999px;
+            /* Replaces @apply rounded-full */
+            background-color: #374151;
+            /* Replaces @apply bg-gray-700 */
+            line-height: 1.5rem;
+            /* Replaces @apply leading-6 */
+        }
+
+        .episode-item-title {
+            color: white;
+            /* Replaces @apply text-white */
+            font-size: 0.875rem;
+            /* Replaces @apply text-sm */
+            font-weight: 500;
+            /* Replaces @apply font-medium */
+            flex-grow: 1;
+            /* Replaces @apply flex-grow */
+            margin-right: 1rem;
+            /* Replaces @apply mr-4 */
+            overflow: hidden;
+            /* Replaces @apply truncate (part 1) */
+            text-overflow: ellipsis;
+            /* Replaces @apply truncate (part 2) */
+            white-space: nowrap;
+            /* Replaces @apply truncate (part 3) */
+        }
+
+        .episode-item-duration,
+        .episode-item-date {
+            color: #9ca3af;
+            /* Replaces @apply text-gray-400 */
+            font-size: 0.75rem;
+            /* Replaces @apply text-xs */
+            width: 5rem;
+            /* Replaces @apply w-20 */
+            text-align: right;
+            /* Replaces @apply text-right */
+            flex-shrink: 0;
+            /* Replaces @apply flex-shrink-0 */
+            margin-right: 1rem;
+            /* Replaces @apply mr-4 */
+        }
+
+        .episode-item-play-btn {
+            color: #60a5fa;
+            /* Replaces @apply text-blue-400 */
+            padding: 0.25rem;
+            /* Replaces @apply p-1 */
+            border-radius: 9999px;
+            /* Replaces @apply rounded-full */
+            flex-shrink: 0;
+            /* Replaces @apply flex-shrink-0 */
+            margin-left: auto;
+            /* Replaces @apply ml-auto */
+        }
+
+        .episode-item-play-btn:hover {
+            color: #93c5fd;
+            /* Replaces @apply hover:text-blue-300 */
+        }
+
+        .episode-item-play-btn svg {
+            width: 1.25rem;
+            /* Replaces @apply w-5 */
+            height: 1.25rem;
+            /* Replaces @apply h-5 */
+        }
+
+
         /* --- NEW: Immersive Mode Styles --- */
         #app-container.multiview-immersive #main-header,
         #app-container.multiview-immersive #multiview-header {
             display: none;
         }
+
         #app-container.multiview-immersive .player-header {
             display: none;
         }
 
         /* This is for the reappearing header logic */
         #app-container.multiview-immersive #multiview-header.overlay-visible {
-            display: flex; /* Re-show the header */
+            display: flex;
+            /* Re-show the header */
             position: absolute;
             top: 0;
             left: 0;
             right: 0;
-            background-color: rgba(31, 41, 55, 0.95); /* bg-gray-800 with transparency */
+            background-color: rgba(31, 41, 55, 0.95);
+            /* bg-gray-800 with transparency */
             backdrop-filter: blur(5px);
             -webkit-backdrop-filter: blur(5px);
-            z-index: 50; /* Ensure it's on top of the grid */
+            z-index: 50;
+            /* Ensure it's on top of the grid */
         }
-
-
     </style>
 </head>
+
 <body class="h-screen">
     <!-- Auth Container -->
     <div id="auth-container" class="fixed inset-0 bg-gray-900 z-[100] flex items-center justify-center p-4">
         <div class="w-full max-w-sm mx-auto">
-             <img src="/viniplay.png" alt="VINI PLAY Logo" class="h-16 w-16 mx-auto mb-4">
+            <img src="/viniplay.png" alt="VINI PLAY Logo" class="h-16 w-16 mx-auto mb-4">
             <form id="login-form" class="hidden bg-gray-800 p-8 rounded-xl shadow-lg space-y-6">
                 <h2 class="text-2xl font-bold text-center text-white">Welcome Back</h2>
-                <div id="login-error" class="hidden bg-red-900/50 border border-red-700/50 text-red-300 px-4 py-2 rounded-md text-sm"></div>
+                <div id="login-error"
+                    class="hidden bg-red-900/50 border border-red-700/50 text-red-300 px-4 py-2 rounded-md text-sm">
+                </div>
                 <div>
                     <label for="login-username" class="text-sm font-medium text-gray-400 block mb-2">Username</label>
-                    <input type="text" id="login-username" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500" required>
+                    <input type="text" id="login-username"
+                        class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                        required>
                 </div>
                 <div>
                     <label for="login-password" class="text-sm font-medium text-gray-400 block mb-2">Password</label>
-                    <input type="password" id="login-password" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500" required>
+                    <input type="password" id="login-password"
+                        class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                        required>
                 </div>
-                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition-colors">Login</button>
+                <button type="submit"
+                    class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition-colors">Login</button>
             </form>
             <form id="setup-form" class="hidden bg-gray-800 p-8 rounded-xl shadow-lg space-y-6">
                 <h2 class="text-2xl font-bold text-center text-white">Create Admin Account</h2>
-                <p class="text-sm text-center text-gray-400">This is a one-time setup to secure your ViniPlay instance.</p>
-                <div id="setup-error" class="hidden bg-red-900/50 border border-red-700/50 text-red-300 px-4 py-2 rounded-md text-sm"></div>
+                <p class="text-sm text-center text-gray-400">This is a one-time setup to secure your ViniPlay instance.
+                </p>
+                <div id="setup-error"
+                    class="hidden bg-red-900/50 border border-red-700/50 text-red-300 px-4 py-2 rounded-md text-sm">
+                </div>
                 <div>
-                    <label for="setup-username" class="text-sm font-medium text-gray-400 block mb-2">Admin Username</label>
-                    <input type="text" id="setup-username" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500" required>
+                    <label for="setup-username" class="text-sm font-medium text-gray-400 block mb-2">Admin
+                        Username</label>
+                    <input type="text" id="setup-username"
+                        class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                        required>
                 </div>
                 <div>
                     <label for="setup-password" class="text-sm font-medium text-gray-400 block mb-2">Password</label>
-                    <input type="password" id="setup-password" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500" required>
+                    <input type="password" id="setup-password"
+                        class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                        required>
                 </div>
-                <button type="submit" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md transition-colors">Create Admin & Login</button>
+                <button type="submit"
+                    class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md transition-colors">Create
+                    Admin & Login</button>
             </form>
-             <div id="auth-loader" class="text-center">
-                 <div class="loader mx-auto"></div>
-                 <p class="mt-4 text-gray-400">Checking authentication...</p>
-             </div>
+            <div id="auth-loader" class="text-center">
+                <div class="loader mx-auto"></div>
+                <p class="mt-4 text-gray-400">Checking authentication...</p>
+            </div>
         </div>
     </div>
 
@@ -742,50 +1243,71 @@
     <div id="app-container" class="hidden flex flex-col h-screen">
         <!-- NEW: Broadcast Message Banner Container -->
         <div id="broadcast-banner-container"></div>
-        
-        <header id="main-header" class="bg-gray-800 text-white p-4 shadow-md flex-shrink-0 flex items-center justify-between">
+
+        <header id="main-header"
+            class="bg-gray-800 text-white p-4 shadow-md flex-shrink-0 flex items-center justify-between">
             <div class="flex items-center gap-3">
-                <button id="mobile-menu-toggle" class="lg:hidden text-gray-300 hover:text-white p-2 rounded-md transition-colors">
+                <button id="mobile-menu-toggle"
+                    class="lg:hidden text-gray-300 hover:text-white p-2 rounded-md transition-colors">
                     <span data-icon="menu"></span>
                 </button>
                 <img src="/viniplay.png" alt="VINI PLAY Logo" class="h-8 w-8">
                 <h1 class="text-xl sm:text-2xl font-bold">VINI PLAY</h1>
             </div>
             <div class="flex items-center gap-4">
-                 <span id="user-display" class="text-sm text-gray-400 hidden sm:block"></span>
+                <span id="user-display" class="text-sm text-gray-400 hidden sm:block"></span>
                 <div class="hidden lg:flex gap-2">
-                    <button id="tab-guide" class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 active rounded-md transition-colors">TV Guide</button>
-                    <button id="tab-multiview" class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Multi-View</button>
-                    <button id="tab-player" class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Player</button>
-                    <button id="tab-dvr" class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">DVR</button>
-                    <button id="tab-vod" class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">VODs</button>
-                    <button id="tab-activity" class="tab-button hidden text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Activity</button>
-                    <button id="tab-notifications" class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Notifications</button>
-                    <button id="tab-settings" class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Settings</button>
+                    <button id="tab-guide"
+                        class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 active rounded-md transition-colors">TV
+                        Guide</button>
+                    <button id="tab-multiview"
+                        class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Multi-View</button>
+                    <button id="tab-player"
+                        class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Player</button>
+                    <button id="tab-dvr"
+                        class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">DVR</button>
+                    <button id="tab-vod"
+                        class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">VODs</button>
+                    <button id="tab-activity"
+                        class="tab-button hidden text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Activity</button>
+                    <button id="tab-notifications"
+                        class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Notifications</button>
+                    <button id="tab-settings"
+                        class="tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Settings</button>
                 </div>
-                <button id="logout-btn" class="text-sm bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded-md transition-colors">Logout</button>
+                <button id="logout-btn"
+                    class="text-sm bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded-md transition-colors">Logout</button>
             </div>
         </header>
 
         <main class="flex-grow flex flex-col overflow-hidden">
             <!-- TV Guide Page -->
             <div id="page-guide" class="flex flex-grow flex-col overflow-hidden">
-                <div id="unified-guide-header" class="relative flex-shrink-0 bg-gray-800 p-2 sm:p-4 border-b border-gray-700 flex flex-col sm:flex-row items-stretch sm:items-center sm:justify-between gap-3 z-40">
+                <div id="unified-guide-header"
+                    class="relative flex-shrink-0 bg-gray-800 p-2 sm:p-4 border-b border-gray-700 flex flex-col sm:flex-row items-stretch sm:items-center sm:justify-between gap-3 z-40">
                     <div class="flex items-center gap-2 sm:gap-3 date-nav-controls">
                         <span id="guide-date-display" class="text-base sm:text-lg font-semibold text-white"></span>
-                        <label for="guide-date-picker" class="bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-md p-2 cursor-pointer transition-colors" title="Jump to date">
+                        <label for="guide-date-picker"
+                            class="bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-md p-2 cursor-pointer transition-colors"
+                            title="Jump to date">
                             <span data-icon="calendar"></span>
                         </label>
                         <input type="date" id="guide-date-picker" class="hidden">
                     </div>
-                    
-                    <div class="relative w-full sm:w-auto grid grid-cols-1 sm:flex sm:items-center sm:justify-end gap-2 filter-search-controls">
-                        <select id="group-filter" class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500"></select>
-                        <select id="source-filter" class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500"></select>
-                        <input type="search" id="search-input" placeholder="Search..." class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500 sm:w-48">
+
+                    <div
+                        class="relative w-full sm:w-auto grid grid-cols-1 sm:flex sm:items-center sm:justify-end gap-2 filter-search-controls">
+                        <select id="group-filter"
+                            class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500"></select>
+                        <select id="source-filter"
+                            class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500"></select>
+                        <input type="search" id="search-input" placeholder="Search..."
+                            class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500 sm:w-48">
                     </div>
                 </div>
-                <div id="search-results-container" class="hidden absolute top-[100px] right-0 w-full sm:w-96 max-h-80 overflow-y-auto bg-gray-800 border border-gray-600 rounded-md mt-1 z-[55] custom-scrollbar shadow-lg"></div>
+                <div id="search-results-container"
+                    class="hidden absolute top-[100px] right-0 w-full sm:w-96 max-h-80 overflow-y-auto bg-gray-800 border border-gray-600 rounded-md mt-1 z-[55] custom-scrollbar shadow-lg">
+                </div>
 
                 <div id="guide-container" class="flex-grow bg-gray-900 overflow-auto relative custom-scrollbar">
                     <div id="guide-placeholder" class="absolute inset-0 flex items-center justify-center z-40">
@@ -796,61 +1318,80 @@
                         <div id="no-data-message" class="hidden text-center text-gray-500 p-4">
                             <span data-icon="warning" class="mx-auto h-12 w-12 text-gray-600"></span>
                             <h3 class="mt-2 text-sm font-medium">No Data Loaded</h3>
-                            <p class="mt-1 text-sm">Go to the Settings tab to add and activate your M3U and EPG sources.</p>
+                            <p class="mt-1 text-sm">Go to the Settings tab to add and activate your M3U and EPG sources.
+                            </p>
                         </div>
                     </div>
                     <div id="guide-grid" class="h-full w-full">
                         <div class="sticky-corner flex items-center justify-center p-2 sm:p-4">
                             <div class="flex items-center gap-2">
-                                <button id="now-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-3 rounded-md text-sm transition-colors">Now</button>
+                                <button id="now-btn"
+                                    class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-3 rounded-md text-sm transition-colors">Now</button>
                             </div>
                             <div id="channel-column-resize-handle" class="channel-resize-handle"></div>
                         </div>
                         <div class="time-bar-cell"></div>
-                        <div id="now-line" class="absolute top-0 bg-red-500 w-0.5 z-30 pointer-events-none hidden"></div>
+                        <div id="now-line" class="absolute top-0 bg-red-500 w-0.5 z-30 pointer-events-none hidden">
+                        </div>
                     </div>
                 </div>
             </div>
 
             <!-- Multi-View Page -->
             <div id="page-multiview" class="hidden flex-grow flex-col overflow-hidden">
-                <div id="multiview-header" class="flex-shrink-0 bg-gray-800 p-2 border-b border-gray-700 flex items-center justify-between flex-wrap gap-2 z-20">
+                <div id="multiview-header"
+                    class="flex-shrink-0 bg-gray-800 p-2 border-b border-gray-700 flex items-center justify-between flex-wrap gap-2 z-20">
                     <div class="flex items-center gap-2">
-                        <button id="multiview-add-player" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-3 rounded-md text-sm transition-colors flex items-center gap-2">
+                        <button id="multiview-add-player"
+                            class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-3 rounded-md text-sm transition-colors flex items-center gap-2">
                             <span data-icon="addPlayer"></span>
                             Add Player
                         </button>
-                        <button id="multiview-remove-player" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded-md text-sm transition-colors flex items-center gap-2">
-                             <span data-icon="removePlayer"></span>
+                        <button id="multiview-remove-player"
+                            class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded-md text-sm transition-colors flex items-center gap-2">
+                            <span data-icon="removePlayer"></span>
                             Remove Player
                         </button>
                     </div>
                     <div class="flex items-center gap-2">
                         <span class="text-sm font-medium text-gray-400">Preset Layouts:</span>
-                        <button id="layout-btn-auto" class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-3 rounded-md text-sm transition-colors">Auto</button>
-                        <button id="layout-btn-2x2" class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-3 rounded-md text-sm transition-colors">2x2 Grid</button>
-                        <button id="layout-btn-1x3" class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-3 rounded-md text-sm transition-colors">1 Large + 3</button>
+                        <button id="layout-btn-auto"
+                            class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-3 rounded-md text-sm transition-colors">Auto</button>
+                        <button id="layout-btn-2x2"
+                            class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-3 rounded-md text-sm transition-colors">2x2
+                            Grid</button>
+                        <button id="layout-btn-1x3"
+                            class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-3 rounded-md text-sm transition-colors">1
+                            Large + 3</button>
                     </div>
                     <div class="flex items-center gap-2">
-                         <label for="saved-layouts-select" class="text-sm font-medium text-gray-400">Saved Layouts:</label>
-                         <select id="saved-layouts-select" class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500">
-                             <option value="">-- Select --</option>
-                         </select>
-                         <button id="multiview-load-layout-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-3 rounded-md text-sm transition-colors">Load</button>
-                         <button id="multiview-save-layout-btn" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-3 rounded-md text-sm transition-colors">Save Current</button>
-                         <button id="multiview-delete-layout-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold p-2 rounded-md text-sm transition-colors" title="Delete Selected Layout">
+                        <label for="saved-layouts-select" class="text-sm font-medium text-gray-400">Saved
+                            Layouts:</label>
+                        <select id="saved-layouts-select"
+                            class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500">
+                            <option value="">-- Select --</option>
+                        </select>
+                        <button id="multiview-load-layout-btn"
+                            class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-3 rounded-md text-sm transition-colors">Load</button>
+                        <button id="multiview-save-layout-btn"
+                            class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-3 rounded-md text-sm transition-colors">Save
+                            Current</button>
+                        <button id="multiview-delete-layout-btn"
+                            class="bg-red-600 hover:bg-red-700 text-white font-bold p-2 rounded-md text-sm transition-colors"
+                            title="Delete Selected Layout">
                             <span data-icon="trash"></span>
-                         </button>
+                        </button>
                     </div>
-                    
+
                     <!-- NEW: Immersive Mode Toggle -->
-                   <div class="flex items-center gap-2 border-l border-gray-700 pl-4 ml-2">
-                       <label for="immersive-mode-toggle" class="text-sm font-medium text-gray-400 cursor-pointer">Immersive Mode</label>
-                       <label class="switch">
-                           <input type="checkbox" id="immersive-mode-toggle">
-                           <span class="slider"></span>
-                       </label>
-                   </div>
+                    <div class="flex items-center gap-2 border-l border-gray-700 pl-4 ml-2">
+                        <label for="immersive-mode-toggle"
+                            class="text-sm font-medium text-gray-400 cursor-pointer">Immersive Mode</label>
+                        <label class="switch">
+                            <input type="checkbox" id="immersive-mode-toggle">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
                 </div>
                 <div id="multiview-container" class="flex-grow bg-gray-900 overflow-auto relative custom-scrollbar p-2">
                     <div id="multiview-grid" class="grid-stack"></div>
@@ -862,47 +1403,60 @@
                 <div class="w-full max-w-4xl mx-auto space-y-6">
                     <!-- Input Form -->
                     <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
-                        <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Direct Stream Player</h2>
-                        <p class="text-sm text-gray-400 mb-4">Enter a direct URL to a `.ts` or `.m3u8` stream to play it here.</p>
+                        <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Direct Stream Player
+                        </h2>
+                        <p class="text-sm text-gray-400 mb-4">Enter a direct URL to a `.ts` or `.m3u8` stream to play it
+                            here.</p>
                         <form id="direct-player-form" class="space-y-4">
                             <div class="flex flex-col sm:flex-row items-end gap-3">
                                 <div class="flex-grow w-full">
-                                    <label for="direct-stream-url" class="block text-sm font-medium text-gray-400 mb-1">Stream URL</label>
-                                    <input type="url" id="direct-stream-url" placeholder="https://example.com/stream.m3u8" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500" required>
+                                    <label for="direct-stream-url"
+                                        class="block text-sm font-medium text-gray-400 mb-1">Stream URL</label>
+                                    <input type="url" id="direct-stream-url"
+                                        placeholder="https://example.com/stream.m3u8"
+                                        class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                                        required>
                                 </div>
-                                <button type="submit" id="direct-play-btn" class="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition-colors flex items-center justify-center gap-2">
+                                <button type="submit" id="direct-play-btn"
+                                    class="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition-colors flex items-center justify-center gap-2">
                                     <span data-icon="play"></span>
                                     Play
                                 </button>
-                                <button type="button" id="direct-stop-btn" class="hidden w-full sm:w-auto bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md transition-colors flex items-center justify-center gap-2">
+                                <button type="button" id="direct-stop-btn"
+                                    class="hidden w-full sm:w-auto bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md transition-colors flex items-center justify-center gap-2">
                                     <span data-icon="stop"></span>
                                     Stop
                                 </button>
                             </div>
                             <div class="flex items-center space-x-2 pt-2">
-                                <input id="direct-play-checkbox" type="checkbox" class="h-4 w-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500">
-                                <label for="direct-play-checkbox" class="text-sm text-gray-400">Direct Play (Bypass server proxy/ffmpeg)</label>
+                                <input id="direct-play-checkbox" type="checkbox"
+                                    class="h-4 w-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500">
+                                <label for="direct-play-checkbox" class="text-sm text-gray-400">Direct Play (Bypass
+                                    server proxy/ffmpeg)</label>
                             </div>
                         </form>
                     </div>
-            
+
                     <!-- Player Container -->
                     <div id="direct-player-container" class="hidden bg-black rounded-lg shadow-xl w-full">
-                         <video id="direct-video-element" controls autoplay class="w-full h-full"></video>
+                        <video id="direct-video-element" controls autoplay class="w-full h-full"></video>
                     </div>
-            
+
                     <!-- Console for Logs -->
                     <div id="direct-player-console-container" class="hidden w-full">
                         <div class="bg-gray-800 p-4 rounded-xl shadow-lg">
                             <h3 class="text-md font-semibold text-white mb-2">Stream Log</h3>
-                            <div id="direct-player-console" class="bg-gray-900/50 rounded-md p-3 h-32 overflow-y-auto custom-scrollbar text-xs font-mono"></div>
+                            <div id="direct-player-console"
+                                class="bg-gray-900/50 rounded-md p-3 h-32 overflow-y-auto custom-scrollbar text-xs font-mono">
+                            </div>
                         </div>
                     </div>
-            
+
                     <!-- Recent Links Table -->
                     <div id="recent-links-table-container" class="hidden w-full">
                         <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
-                            <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Recent Links</h2>
+                            <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Recent Links
+                            </h2>
                             <div id="no-recent-links-message" class="text-center text-gray-500 p-4">
                                 <p class="mt-1 text-sm">No recent links. Played streams will appear here.</p>
                             </div>
@@ -937,26 +1491,37 @@
 
                     <!-- MODIFIED: Wrapped manual recording in a div -->
                     <div id="manual-recording-section" class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
-                        <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Manual Recording</h2>
+                        <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Manual Recording
+                        </h2>
                         <form id="manual-recording-form" class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
                             <div class="md:col-span-2">
                                 <label class="block text-sm font-medium text-gray-400 mb-1">Channel</label>
                                 <div class="flex items-center gap-3">
-                                    <button type="button" id="manual-rec-channel-select-btn" class="flex-shrink-0 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-md transition-colors">Select Channel</button>
-                                    <span id="manual-rec-selected-channel-name" class="text-gray-300 truncate">No channel selected</span>
+                                    <button type="button" id="manual-rec-channel-select-btn"
+                                        class="flex-shrink-0 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-md transition-colors">Select
+                                        Channel</button>
+                                    <span id="manual-rec-selected-channel-name" class="text-gray-300 truncate">No
+                                        channel selected</span>
                                 </div>
                                 <input type="hidden" id="manual-rec-channel-id" required>
                                 <input type="hidden" id="manual-rec-channel-name">
                             </div>
                             <div>
-                                <label for="manual-rec-start" class="block text-sm font-medium text-gray-400 mb-1">Start Time</label>
-                                <input type="datetime-local" id="manual-rec-start" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500" required>
+                                <label for="manual-rec-start" class="block text-sm font-medium text-gray-400 mb-1">Start
+                                    Time</label>
+                                <input type="datetime-local" id="manual-rec-start"
+                                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                                    required>
                             </div>
-                             <div>
-                                <label for="manual-rec-end" class="block text-sm font-medium text-gray-400 mb-1">End Time</label>
-                                <input type="datetime-local" id="manual-rec-end" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500" required>
+                            <div>
+                                <label for="manual-rec-end" class="block text-sm font-medium text-gray-400 mb-1">End
+                                    Time</label>
+                                <input type="datetime-local" id="manual-rec-end"
+                                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                                    required>
                             </div>
-                            <button type="submit" class="w-full md:col-start-4 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md transition-colors">Schedule</button>
+                            <button type="submit"
+                                class="w-full md:col-start-4 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md transition-colors">Schedule</button>
                         </form>
                     </div>
 
@@ -964,10 +1529,13 @@
                     <div id="scheduled-recordings-section" class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
                         <div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2">
                             <h2 class="text-xl font-bold text-white">Scheduled Recordings</h2>
-                            <button id="clear-scheduled-dvr-btn" class="hidden bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-1 px-3 rounded-md">Clear All</button>
+                            <button id="clear-scheduled-dvr-btn"
+                                class="hidden bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-1 px-3 rounded-md">Clear
+                                All</button>
                         </div>
                         <div id="no-dvr-jobs-message" class="hidden text-center text-gray-500 p-4">
-                            <p class="mt-1 text-sm">No upcoming recordings scheduled. Find a program in the TV Guide to record it.</p>
+                            <p class="mt-1 text-sm">No upcoming recordings scheduled. Find a program in the TV Guide to
+                                record it.</p>
                         </div>
                         <div id="dvr-jobs-table-container" class="overflow-x-auto">
                             <table class="min-w-full dvr-table">
@@ -992,7 +1560,9 @@
                     <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
                         <div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2">
                             <h2 class="text-xl font-bold text-white">Completed Recordings</h2>
-                            <button id="clear-completed-dvr-btn" class="hidden bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-1 px-3 rounded-md">Clear All</button>
+                            <button id="clear-completed-dvr-btn"
+                                class="hidden bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-1 px-3 rounded-md">Clear
+                                All</button>
                         </div>
                         <div id="no-dvr-recordings-message" class="hidden text-center text-gray-500 p-4">
                             <p class="mt-1 text-sm">No recordings have been completed yet.</p>
@@ -1019,19 +1589,28 @@
             </div>
 
             <div id="page-vod" class="hidden flex-grow flex-col overflow-hidden">
-                <div id="vod-filter-bar" class="flex-shrink-0 bg-gray-800 p-2 sm:p-4 border-b border-gray-700 flex flex-col sm:flex-row items-stretch sm:items-center sm:justify-between gap-3 z-30">
+                <div id="vod-filter-bar"
+                    class="flex-shrink-0 bg-gray-800 p-2 sm:p-4 border-b border-gray-700 flex flex-col sm:flex-row items-stretch sm:items-center sm:justify-between gap-3 z-30">
                     <div class="flex items-center gap-2 sm:gap-3">
-                        <button id="vod-type-all" class="vod-type-btn tab-button active text-sm sm:text-base font-medium py-2 px-4 rounded-md transition-colors">All</button>
-                        <button id="vod-type-movies" class="vod-type-btn tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Movies</button>
-                        <button id="vod-type-series" class="vod-type-btn tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Series</button>
+                        <button id="vod-type-all"
+                            class="vod-type-btn tab-button active text-sm sm:text-base font-medium py-2 px-4 rounded-md transition-colors">All</button>
+                        <button id="vod-type-movies"
+                            class="vod-type-btn tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Movies</button>
+                        <button id="vod-type-series"
+                            class="vod-type-btn tab-button text-sm sm:text-base font-medium py-2 px-4 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">Series</button>
                     </div>
-                    <div class="relative w-full sm:w-auto grid grid-cols-1 sm:flex sm:items-center sm:justify-end gap-2">
-                        <select id="vod-group-filter" class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500">
+                    <div
+                        class="relative w-full sm:w-auto grid grid-cols-1 sm:flex sm:items-center sm:justify-end gap-2">
+                        <select id="vod-group-filter"
+                            class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500">
                             <option value="all">All Categories</option>
                         </select>
-                        <input type="search" id="vod-search-input" placeholder="Search VOD..." class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500 sm:w-48">
+                        <input type="search" id="vod-search-input" placeholder="Search VOD..."
+                            class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500 sm:w-48">
                         <div class="flex items-center gap-2 border-l border-gray-700 pl-4 ml-2">
-                            <label for="vod-direct-play-checkbox" class="text-sm font-medium text-gray-400 cursor-pointer whitespace-nowrap">Direct Play</label>
+                            <label for="vod-direct-play-checkbox"
+                                class="text-sm font-medium text-gray-400 cursor-pointer whitespace-nowrap">Direct
+                                Play</label>
                             <label class="switch">
                                 <input type="checkbox" id="vod-direct-play-checkbox">
                                 <span class="slider"></span>
@@ -1043,13 +1622,15 @@
                     <div id="vod-no-results" class="hidden text-center text-gray-500 p-10">
                         <span data-icon="warning" class="mx-auto h-12 w-12 text-gray-600"></span>
                         <h3 class="mt-2 text-sm font-medium">No VOD Content Found</h3>
-                        <p class="mt-1 text-sm">No movies or series were found from your active sources, or your filters match no results.</p>
+                        <p class="mt-1 text-sm">No movies or series were found from your active sources, or your filters
+                            match no results.</p>
                     </div>
-                    <div id="vod-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 md:gap-6">
-                        </div>
+                    <div id="vod-grid"
+                        class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 md:gap-6">
+                    </div>
                 </div>
                 <div id="vod-pagination-controls" class="flex-shrink-0 bg-gray-800 border-t border-gray-700">
-                    </div>
+                </div>
             </div>
 
             <!-- Admin Activity Page -->
@@ -1071,9 +1652,12 @@
                         <div class="bg-gray-800 p-5 rounded-xl shadow-lg col-span-1 md:col-span-2 lg:col-span-1">
                             <p class="text-sm font-medium text-gray-400 mb-2">Server Health</p>
                             <div class="space-y-2 text-xs">
-                                <div id="stat-cpu-health"><span class="text-gray-500">CPU:</span> <span class="font-mono ml-1">- %</span></div>
-                                <div id="stat-ram-health"><span class="text-gray-500">RAM:</span> <span class="font-mono ml-1">- %</span></div>
-                                <div id="stat-dvr-disk-health"><span class="text-gray-500">DVR Disk:</span><span class="font-mono ml-1">- %</span></div>
+                                <div id="stat-cpu-health"><span class="text-gray-500">CPU:</span> <span
+                                        class="font-mono ml-1">- %</span></div>
+                                <div id="stat-ram-health"><span class="text-gray-500">RAM:</span> <span
+                                        class="font-mono ml-1">- %</span></div>
+                                <div id="stat-dvr-disk-health"><span class="text-gray-500">DVR Disk:</span><span
+                                        class="font-mono ml-1">- %</span></div>
                             </div>
                         </div>
                         <!-- Stat Card: Top Channels -->
@@ -1087,15 +1671,17 @@
                             <div id="stat-top-users" class="space-y-1 text-sm"></div>
                         </div>
                     </div>
-                    
+
                     <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
                         <div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2">
                             <h2 class="text-xl font-bold text-white">Live Activity</h2>
-                             <div class="flex items-center gap-2">
-                                <button id="broadcast-message-btn" class="bg-orange-600 hover:bg-orange-500 text-white text-sm font-bold py-1 px-3 rounded-md flex items-center gap-2">
+                            <div class="flex items-center gap-2">
+                                <button id="broadcast-message-btn"
+                                    class="bg-orange-600 hover:bg-orange-500 text-white text-sm font-bold py-1 px-3 rounded-md flex items-center gap-2">
                                     <span data-icon="broadcast"></span> Broadcast
                                 </button>
-                                <button id="refresh-activity-btn" class="bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-1 px-3 rounded-md flex items-center gap-2">
+                                <button id="refresh-activity-btn"
+                                    class="bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-1 px-3 rounded-md flex items-center gap-2">
                                     <span data-icon="process"></span> Refresh
                                 </button>
                             </div>
@@ -1123,20 +1709,26 @@
                     </div>
 
                     <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
-                        <div class="flex flex-col sm:flex-row justify-between items-center mb-4 border-b border-gray-700 pb-3 gap-4">
+                        <div
+                            class="flex flex-col sm:flex-row justify-between items-center mb-4 border-b border-gray-700 pb-3 gap-4">
                             <h2 class="text-xl font-bold text-white flex-shrink-0">Watch History</h2>
                             <div id="history-filters" class="flex flex-wrap items-center justify-end gap-2 w-full">
-                                <input type="search" id="history-search-input" placeholder="Filter by user or channel..." class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500 sm:w-48">
-                                <select id="history-date-filter" class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500">
+                                <input type="search" id="history-search-input"
+                                    placeholder="Filter by user or channel..."
+                                    class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500 sm:w-48">
+                                <select id="history-date-filter"
+                                    class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500">
                                     <option value="all">All Time</option>
                                     <option value="24h">Last 24 Hours</option>
                                     <option value="7d">Last 7 Days</option>
                                     <option value="custom">Custom Range</option>
                                 </select>
                                 <div id="history-custom-date-container" class="hidden flex items-center gap-2">
-                                    <input type="date" id="history-date-start" class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white">
+                                    <input type="date" id="history-date-start"
+                                        class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white">
                                     <span class="text-gray-400 text-sm">to</span>
-                                    <input type="date" id="history-date-end" class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white">
+                                    <input type="date" id="history-date-end"
+                                        class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white">
                                 </div>
                             </div>
                         </div>
@@ -1160,16 +1752,20 @@
                             </table>
                         </div>
                         <!-- NEW: Pagination Controls -->
-                        <nav id="history-pagination-controls" class="hidden flex flex-col md:flex-row justify-between items-start md:items-center space-y-3 md:space-y-0 p-4" aria-label="Table navigation">
+                        <nav id="history-pagination-controls"
+                            class="hidden flex flex-col md:flex-row justify-between items-start md:items-center space-y-3 md:space-y-0 p-4"
+                            aria-label="Table navigation">
                             <div class="flex items-center gap-2">
                                 <span class="text-sm font-normal text-gray-400">Page Size:</span>
-                                <select id="history-page-size-select" class="bg-gray-700 border border-gray-600 rounded-md px-2 py-1 text-sm text-white focus:ring-blue-500 focus:border-blue-500">
+                                <select id="history-page-size-select"
+                                    class="bg-gray-700 border border-gray-600 rounded-md px-2 py-1 text-sm text-white focus:ring-blue-500 focus:border-blue-500">
                                     <option value="25">25</option>
                                     <option value="50">50</option>
                                     <option value="75">75</option>
                                     <option value="100">100</option>
                                 </select>
-                                <span id="history-pagination-info" class="text-sm font-normal text-gray-400 ml-4"></span>
+                                <span id="history-pagination-info"
+                                    class="text-sm font-normal text-gray-400 ml-4"></span>
                             </div>
                             <ul id="history-pagination-pages" class="inline-flex items-center -space-x-px">
                                 <!-- Page buttons will be generated by JS -->
@@ -1180,26 +1776,32 @@
             </div>
 
             <!-- Notifications Page -->
-            <div id="page-notifications" class="hidden flex-grow flex-col items-center p-4 overflow-y-auto custom-scrollbar">
+            <div id="page-notifications"
+                class="hidden flex-grow flex-col items-center p-4 overflow-y-auto custom-scrollbar">
                 <div class="w-full max-w-4xl mx-auto space-y-6 pb-16">
                     <div id="notification-settings-container" class="mb-6"></div>
 
-                    <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Upcoming Notifications</h2>
+                    <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Upcoming Notifications
+                    </h2>
                     <div id="no-notifications-message" class="hidden text-center text-gray-500 p-4">
                         <span data-icon="notifications" class="mx-auto h-12 w-12 text-gray-600"></span>
                         <h3 class="mt-2 text-sm font-medium">No Notifications Set</h3>
-                        <p class="mt-1 text-sm">Browse the TV Guide and set notifications for your favorite upcoming programs.</p>
+                        <p class="mt-1 text-sm">Browse the TV Guide and set notifications for your favorite upcoming
+                            programs.</p>
                     </div>
                     <div id="notifications-list" class="space-y-4"></div>
 
                     <div class="flex justify-between items-center mt-8 mb-4 border-b border-gray-700 pb-2">
                         <h2 class="text-xl font-bold text-white">Past & Expired Notifications</h2>
-                        <button id="clear-past-notifications-btn" class="hidden bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-1 px-3 rounded-md">Clear All</button>
+                        <button id="clear-past-notifications-btn"
+                            class="hidden bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-1 px-3 rounded-md">Clear
+                            All</button>
                     </div>
                     <div id="no-past-notifications-message" class="hidden text-center text-gray-500 p-4">
                         <span data-icon="cancel" class="mx-auto h-12 w-12 text-gray-600"></span>
                         <h3 class="mt-2 text-sm font-medium">No Past Notifications</h3>
-                        <p class="mt-1 text-sm">Notifications that have already triggered or expired will appear here.</p>
+                        <p class="mt-1 text-sm">Notifications that have already triggered or expired will appear here.
+                        </p>
                     </div>
                     <div id="past-notifications-list" class="space-y-4 opacity-80"></div>
                 </div>
@@ -1214,16 +1816,26 @@
                     <div id="user-management-section" class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
                         <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">User Management</h2>
                         <div class="flex justify-end mb-4">
-                            <button id="add-user-btn" class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-2 px-4 rounded-md">Add New User</button>
+                            <button id="add-user-btn"
+                                class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-2 px-4 rounded-md">Add
+                                New User</button>
                         </div>
                         <div class="overflow-x-auto">
                             <table class="min-w-full">
                                 <thead class="bg-gray-700/50">
                                     <tr>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Username</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Role</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">DVR Enabled</th>
-                                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Actions</th>
+                                        <th
+                                            class="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                                            Username</th>
+                                        <th
+                                            class="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                                            Role</th>
+                                        <th
+                                            class="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                                            DVR Enabled</th>
+                                        <th
+                                            class="px-4 py-2 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">
+                                            Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody id="user-list" class="bg-gray-800 divide-y divide-gray-700"></tbody>
@@ -1234,7 +1846,8 @@
                     <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
                         <div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2">
                             <h2 class="text-xl font-bold text-white">Guide Data Sources</h2>
-                             <button id="process-sources-btn" class="bg-green-600 hover:bg-green-700 disabled:bg-green-800 text-white font-bold py-2 px-4 rounded-md transition-colors flex items-center justify-center gap-2">
+                            <button id="process-sources-btn"
+                                class="bg-green-600 hover:bg-green-700 disabled:bg-green-800 text-white font-bold py-2 px-4 rounded-md transition-colors flex items-center justify-center gap-2">
                                 <span id="process-sources-btn-content">
                                     <span data-icon="process" class="inline-block -mt-1 mr-1"></span>
                                     <span>Process Sources & View Guide</span>
@@ -1244,29 +1857,53 @@
                         <div class="mb-8">
                             <div class="flex justify-between items-center mb-3">
                                 <h3 class="text-lg font-semibold text-gray-300">M3U Accounts</h3>
-                                <button id="add-m3u-btn" class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-1 px-3 rounded-md flex items-center gap-1">
+                                <button id="add-m3u-btn"
+                                    class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-1 px-3 rounded-md flex items-center gap-1">
                                     <span data-icon="add"></span>
                                     Add M3U
                                 </button>
                             </div>
                             <div class="overflow-x-auto bg-gray-900/50 rounded-lg">
                                 <table class="min-w-full sources-table">
-                                    <thead><tr><th>Name</th><th>Type</th><th>URL / File Path</th><th>Status</th><th>Last Updated</th><th>Refresh</th><th>Active</th><th class="text-right">Actions</th></tr></thead>
+                                    <thead>
+                                        <tr>
+                                            <th>Name</th>
+                                            <th>Type</th>
+                                            <th>URL / File Path</th>
+                                            <th>Status</th>
+                                            <th>Last Updated</th>
+                                            <th>Refresh</th>
+                                            <th>Active</th>
+                                            <th class="text-right">Actions</th>
+                                        </tr>
+                                    </thead>
                                     <tbody id="m3u-sources-tbody"></tbody>
                                 </table>
                             </div>
                         </div>
                         <div>
-                             <div class="flex justify-between items-center mb-3">
+                            <div class="flex justify-between items-center mb-3">
                                 <h3 class="text-lg font-semibold text-gray-300">EPG Accounts</h3>
-                                <button id="add-epg-btn" class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-1 px-3 rounded-md flex items-center gap-1">
-                                     <span data-icon="add"></span>
-                                     Add EPG
-                                 </button>
+                                <button id="add-epg-btn"
+                                    class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-1 px-3 rounded-md flex items-center gap-1">
+                                    <span data-icon="add"></span>
+                                    Add EPG
+                                </button>
                             </div>
                             <div class="overflow-x-auto bg-gray-900/50 rounded-lg">
                                 <table class="min-w-full sources-table">
-                                     <thead><tr><th>Name</th><th>Type</th><th>URL / File Path</th><th>Status</th><th>Last Updated</th><th>Refresh</th><th>Active</th><th class="text-right">Actions</th></tr></thead>
+                                    <thead>
+                                        <tr>
+                                            <th>Name</th>
+                                            <th>Type</th>
+                                            <th>URL / File Path</th>
+                                            <th>Status</th>
+                                            <th>Last Updated</th>
+                                            <th>Refresh</th>
+                                            <th>Active</th>
+                                            <th class="text-right">Actions</th>
+                                        </tr>
+                                    </thead>
                                     <tbody id="epg-sources-tbody"></tbody>
                                 </table>
                             </div>
@@ -1275,32 +1912,46 @@
 
                     <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
                         <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Player Settings</h2>
-                        
+
                         <!-- MODIFIED: Hardware Info Display Moved Here -->
-                        <div id="hardware-info-display" class="mb-6 bg-gray-900/50 rounded-md p-3 text-sm flex items-center justify-between">
-                            <p class="text-gray-400"><strong>Detected Hardware/Drivers:</strong> <span id="hardware-info-text" class="font-mono text-gray-300">Detecting...</span></p>
-                            <button type="button" id="hardware-info-btn" class="hidden text-gray-400 hover:text-white p-1 rounded-full hover:bg-gray-700" title="Learn more about hardware acceleration">
+                        <div id="hardware-info-display"
+                            class="mb-6 bg-gray-900/50 rounded-md p-3 text-sm flex items-center justify-between">
+                            <p class="text-gray-400"><strong>Detected Hardware/Drivers:</strong> <span
+                                    id="hardware-info-text" class="font-mono text-gray-300">Detecting...</span></p>
+                            <button type="button" id="hardware-info-btn"
+                                class="hidden text-gray-400 hover:text-white p-1 rounded-full hover:bg-gray-700"
+                                title="Learn more about hardware acceleration">
                                 <span data-icon="info"></span>
                             </button>
                         </div>
-                        
+
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-8">
                             <div>
-                                <label for="user-agent-select" class="block text-sm font-medium text-gray-400 mb-2">Active User Agent</label>
-                                <select id="user-agent-select" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500 mb-2"></select>
+                                <label for="user-agent-select"
+                                    class="block text-sm font-medium text-gray-400 mb-2">Active User Agent</label>
+                                <select id="user-agent-select"
+                                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500 mb-2"></select>
                                 <div class="flex gap-2">
-                                    <button id="add-user-agent-btn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-2 px-4 rounded-md">New</button>
-                                    <button id="edit-user-agent-btn" class="flex-1 bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-2 px-4 rounded-md">Edit</button>
-                                    <button id="delete-user-agent-btn" class="flex-1 bg-red-600 hover:bg-red-700 text-white text-sm font-bold py-2 px-4 rounded-md">Delete</button>
+                                    <button id="add-user-agent-btn"
+                                        class="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-2 px-4 rounded-md">New</button>
+                                    <button id="edit-user-agent-btn"
+                                        class="flex-1 bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-2 px-4 rounded-md">Edit</button>
+                                    <button id="delete-user-agent-btn"
+                                        class="flex-1 bg-red-600 hover:bg-red-700 text-white text-sm font-bold py-2 px-4 rounded-md">Delete</button>
                                 </div>
                             </div>
                             <div id="stream-profile-container">
-                                <label for="stream-profile-select" class="block text-sm font-medium text-gray-400 mb-2">Active Stream Profile</label>
-                                <select id="stream-profile-select" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500 mb-2"></select>
+                                <label for="stream-profile-select"
+                                    class="block text-sm font-medium text-gray-400 mb-2">Active Stream Profile</label>
+                                <select id="stream-profile-select"
+                                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500 mb-2"></select>
                                 <div class="flex gap-2">
-                                    <button id="add-stream-profile-btn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-2 px-4 rounded-md">New</button>
-                                    <button id="edit-stream-profile-btn" class="flex-1 bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-2 px-4 rounded-md">Edit</button>
-                                    <button id="delete-stream-profile-btn" class="flex-1 bg-red-600 hover:bg-red-700 text-white text-sm font-bold py-2 px-4 rounded-md">Delete</button>
+                                    <button id="add-stream-profile-btn"
+                                        class="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-2 px-4 rounded-md">New</button>
+                                    <button id="edit-stream-profile-btn"
+                                        class="flex-1 bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-2 px-4 rounded-md">Edit</button>
+                                    <button id="delete-stream-profile-btn"
+                                        class="flex-1 bg-red-600 hover:bg-red-700 text-white text-sm font-bold py-2 px-4 rounded-md">Delete</button>
                                 </div>
                             </div>
                         </div>
@@ -1310,71 +1961,128 @@
                         <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">DVR Settings</h2>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-8">
                             <div id="dvr-profile-container">
-                                <label for="dvr-recording-profile-select" class="block text-sm font-medium text-gray-400 mb-2">Active Recording Profile</label>
-                                <select id="dvr-recording-profile-select" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500 mb-2"></select>
+                                <label for="dvr-recording-profile-select"
+                                    class="block text-sm font-medium text-gray-400 mb-2">Active Recording
+                                    Profile</label>
+                                <select id="dvr-recording-profile-select"
+                                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500 mb-2"></select>
                                 <div class="flex gap-2">
-                                    <button id="add-dvr-profile-btn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-2 px-4 rounded-md">New</button>
-                                    <button id="edit-dvr-profile-btn" class="flex-1 bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-2 px-4 rounded-md">Edit</button>
-                                    <button id="delete-dvr-profile-btn" class="flex-1 bg-red-600 hover:bg-red-700 text-white text-sm font-bold py-2 px-4 rounded-md">Delete</button>
+                                    <button id="add-dvr-profile-btn"
+                                        class="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-2 px-4 rounded-md">New</button>
+                                    <button id="edit-dvr-profile-btn"
+                                        class="flex-1 bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-2 px-4 rounded-md">Edit</button>
+                                    <button id="delete-dvr-profile-btn"
+                                        class="flex-1 bg-red-600 hover:bg-red-700 text-white text-sm font-bold py-2 px-4 rounded-md">Delete</button>
                                 </div>
                             </div>
                             <div class="grid grid-cols-2 gap-x-4">
                                 <div>
-                                    <label for="dvr-pre-buffer-input" class="block text-sm font-medium text-gray-400 mb-2">Start Early (mins)</label>
-                                    <input type="number" id="dvr-pre-buffer-input" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white" min="0" value="1">
+                                    <label for="dvr-pre-buffer-input"
+                                        class="block text-sm font-medium text-gray-400 mb-2">Start Early (mins)</label>
+                                    <input type="number" id="dvr-pre-buffer-input"
+                                        class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white"
+                                        min="0" value="1">
                                 </div>
                                 <div>
-                                    <label for="dvr-post-buffer-input" class="block text-sm font-medium text-gray-400 mb-2">End Late (mins)</label>
-                                    <input type="number" id="dvr-post-buffer-input" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white" min="0" value="2">
+                                    <label for="dvr-post-buffer-input"
+                                        class="block text-sm font-medium text-gray-400 mb-2">End Late (mins)</label>
+                                    <input type="number" id="dvr-post-buffer-input"
+                                        class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white"
+                                        min="0" value="2">
                                 </div>
                             </div>
                             <div class="md:col-span-2">
-                                <label for="dvr-max-streams-input" class="block text-sm font-medium text-gray-400 mb-2">Maximum Simultaneous Recordings</label>
-                                <input type="number" id="dvr-max-streams-input" class="w-full md:w-1/2 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white" min="1" value="1">
+                                <label for="dvr-max-streams-input"
+                                    class="block text-sm font-medium text-gray-400 mb-2">Maximum Simultaneous
+                                    Recordings</label>
+                                <input type="number" id="dvr-max-streams-input"
+                                    class="w-full md:w-1/2 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white"
+                                    min="1" value="1">
                             </div>
                         </div>
                     </div>
- 
+
+                    <div id="chromecast-settings-section" class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
+                        <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Chromecast Settings
+                        </h2>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-8">
+                            <div id="cast-profile-container">
+                                <label for="cast-profile-select"
+                                    class="block text-sm font-medium text-gray-400 mb-2">Active Cast Profile</label>
+                                <p class="text-xs text-gray-500 mb-2">Select the FFmpeg profile to use when casting to
+                                    Chromecast devices.</p>
+                                <select id="cast-profile-select"
+                                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500 mb-2"></select>
+                                <div class="flex gap-2">
+                                    <button id="add-cast-profile-btn"
+                                        class="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-2 px-4 rounded-md">New</button>
+                                    <button id="edit-cast-profile-btn"
+                                        class="flex-1 bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-2 px-4 rounded-md">Edit</button>
+                                    <button id="delete-cast-profile-btn"
+                                        class="flex-1 bg-red-600 hover:bg-red-700 text-white text-sm font-bold py-2 px-4 rounded-md">Delete</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
-                        <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">FFmpeg Logging Settings</h2>
-                        
+                        <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">FFmpeg Logging
+                            Settings</h2>
+
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-8">
                             <div>
-                                <label for="player-log-level-select" class="block text-sm font-medium text-gray-400 mb-2">Player FFmpeg Logging Level</label>
-                                <p class="text-xs text-gray-500 mb-2">Tell player what ffmpeg messages should be logged. Typically not changed unless debugging.</p>
-                                <select id="player-log-level-select" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500 mb-2">
+                                <label for="player-log-level-select"
+                                    class="block text-sm font-medium text-gray-400 mb-2">Player FFmpeg Logging
+                                    Level</label>
+                                <p class="text-xs text-gray-500 mb-2">Tell player what ffmpeg messages should be logged.
+                                    Typically not changed unless debugging.</p>
+                                <select id="player-log-level-select"
+                                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500 mb-2">
                                     <option value="error">[error] Log all errors including handled ones</option>
                                     <option value="warning" selected>[warning] Log all warnings and errors</option>
                                     <option value="info">[info] Log info messages, warnings and errors</option>
-                                    <option value="verbose">[verbose] Log more info messages, warnings and errors</option>
-                                    <option value="debug">[debug] Log absolutely everything including debug messages</option>
+                                    <option value="verbose">[verbose] Log more info messages, warnings and errors
+                                    </option>
+                                    <option value="debug">[debug] Log absolutely everything including debug messages
+                                    </option>
 
                                 </select>
                             </div>
                             <div>
-                                <label for="dvr-log-level-select" class="block text-sm font-medium text-gray-400 mb-2">DVR FFmpeg Logging Level</label>
-                                <p class="text-xs text-gray-500 mb-2">Tell DVR what ffmpeg messages should be logged. Typically not changed  unless debugging.</p>
-                                <select id="dvr-log-level-select" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500 mb-2">
+                                <label for="dvr-log-level-select"
+                                    class="block text-sm font-medium text-gray-400 mb-2">DVR FFmpeg Logging
+                                    Level</label>
+                                <p class="text-xs text-gray-500 mb-2">Tell DVR what ffmpeg messages should be logged.
+                                    Typically not changed unless debugging.</p>
+                                <select id="dvr-log-level-select"
+                                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500 mb-2">
                                     <option value="error">[error] Log all errors including handled ones</option>
                                     <option value="warning" selected>[warning] Log all warnings and errors</option>
                                     <option value="info">[info] Log info messages, warnings and errors</option>
-                                    <option value="verbose">[verbose] Log more info messages, warnings and errors</option>
-                                    <option value="debug">[debug] Log absolutely everything including debug messages</option>
+                                    <option value="verbose">[verbose] Log more info messages, warnings and errors
+                                    </option>
+                                    <option value="debug">[debug] Log absolutely everything including debug messages
+                                    </option>
                                 </select>
                             </div>
                         </div>
                     </div>
-  
+
                     <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
-                        <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Storage Management</h2>
+                        <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Storage Management
+                        </h2>
                         <div class="space-y-4">
-                             <div>
-                                <label for="dvr-storage-delete-days" class="block text-sm font-medium text-gray-400 mb-1">Auto-Delete Recordings Older Than</label>
+                            <div>
+                                <label for="dvr-storage-delete-days"
+                                    class="block text-sm font-medium text-gray-400 mb-1">Auto-Delete Recordings Older
+                                    Than</label>
                                 <div class="flex items-center gap-2">
-                                    <input type="number" id="dvr-storage-delete-days" class="w-24 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white" min="0" value="0">
+                                    <input type="number" id="dvr-storage-delete-days"
+                                        class="w-24 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white"
+                                        min="0" value="0">
                                     <span class="text-gray-400">days (0 to disable)</span>
                                 </div>
-                             </div>
+                            </div>
                         </div>
                     </div>
 
@@ -1382,48 +2090,138 @@
                         <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">App Settings</h2>
                         <div class="space-y-4">
                             <div>
-                                <label for="timezone-offset-select" class="block text-sm font-medium text-gray-400 mb-1">EPG Timezone Correction</label>
-                                 <p class="text-xs text-gray-500 mb-2">Use this if EPG times are wrong. The server will re-parse the EPG data.</p>
-                                <select id="timezone-offset-select" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"></select>
+                                <label for="timezone-offset-select"
+                                    class="block text-sm font-medium text-gray-400 mb-1">EPG Timezone Correction</label>
+                                <p class="text-xs text-gray-500 mb-2">Use this if EPG times are wrong. The server will
+                                    re-parse the EPG data.</p>
+                                <select id="timezone-offset-select"
+                                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"></select>
                                 <p id="detected-timezone-info" class="text-xs text-gray-500 mt-2 hidden"></p>
                             </div>
                             <div>
-                                 <label for="search-scope-select" class="block text-sm font-medium text-gray-400 mb-1">Guide Search Scope</label>
-                                  <p class="text-xs text-gray-500 mb-2">Control what the search bar in the TV Guide looks for.</p>
-                                 <select id="search-scope-select" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
-                                    <option value="channels_only_filtered">Search Channels Only (in filtered group)</option>
-                                    <option value="channels_programs_filtered">Search Channels & Programs (in filtered group)</option>
-                                    <option value="all_channels_unfiltered" selected>Search All Channels (ignore group filter)</option>
-                                    <option value="all_channels_programs_unfiltered">Search All Channels & Programs (ignore group filter)</option>
+                                <label for="search-scope-select"
+                                    class="block text-sm font-medium text-gray-400 mb-1">Guide Search Scope</label>
+                                <p class="text-xs text-gray-500 mb-2">Control what the search bar in the TV Guide looks
+                                    for.</p>
+                                <select id="search-scope-select"
+                                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
+                                    <option value="channels_only_filtered">Search Channels Only (in filtered group)
+                                    </option>
+                                    <option value="channels_programs_filtered">Search Channels & Programs (in filtered
+                                        group)</option>
+                                    <option value="all_channels_unfiltered" selected>Search All Channels (ignore group
+                                        filter)</option>
+                                    <option value="all_channels_programs_unfiltered">Search All Channels & Programs
+                                        (ignore group filter)</option>
                                 </select>
-                             </div>
+                            </div>
                             <div>
-                                <label for="notification-lead-time-input" class="block text-sm font-medium text-gray-400 mb-1">Notify Me Before (minutes)</label>
-                                <p class="text-xs text-gray-500 mb-2">Set how many minutes before a program starts you'd like to be notified.</p>
-                                <input type="number" id="notification-lead-time-input" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500" min="1" value="10">
+                                <label for="notification-lead-time-input"
+                                    class="block text-sm font-medium text-gray-400 mb-1">Notify Me Before
+                                    (minutes)</label>
+                                <p class="text-xs text-gray-500 mb-2">Set how many minutes before a program starts you'd
+                                    like to be notified.</p>
+                                <input type="number" id="notification-lead-time-input"
+                                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                                    min="1" value="10">
                             </div>
                             <div class="border-t border-gray-700/50 pt-4">
-                                <label class="block text-sm font-medium text-gray-400 mb-1">Server Public IP Address</label>
+                                <label class="block text-sm font-medium text-gray-400 mb-1">Server Public IP
+                                    Address</label>
                                 <p class="text-xs text-gray-500 mb-2">Server Public IP Address</p>
-                                <div id="public-ip-display" class="w-full bg-gray-900/50 rounded-md px-3 py-2 text-gray-300 font-mono">
+                                <div id="public-ip-display"
+                                    class="w-full bg-gray-900/50 rounded-md px-3 py-2 text-gray-300 font-mono">
                                     Loading...
                                 </div>
                             </div>
                         </div>
                     </div>
-                
-                    <div id="danger-zone-section" class="bg-red-900/50 border border-red-700/50 p-4 sm:p-6 rounded-xl shadow-lg">
+
+                    <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
+                        <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Log Management</h2>
+                        <div class="space-y-4">
+                            <!-- Log Statistics Display -->
+                            <div class="bg-gray-900/50 rounded-md p-4">
+                                <p class="text-sm text-gray-400 mb-2">Current Log Status</p>
+                                <div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+                                    <div>
+                                        <span class="text-gray-500">Files:</span>
+                                        <span id="log-file-count" class="ml-2 font-mono text-white">-</span>
+                                    </div>
+                                    <div>
+                                        <span class="text-gray-500">Total Size:</span>
+                                        <span id="log-total-size" class="ml-2 font-mono text-white">-</span>
+                                    </div>
+                                    <div>
+                                        <span class="text-gray-500">Oldest:</span>
+                                        <span id="log-oldest-date" class="ml-2 font-mono text-white">-</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Log Settings -->
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div>
+                                    <label for="log-max-files-input"
+                                        class="block text-sm font-medium text-gray-400 mb-1">Max Log Files</label>
+                                    <input type="number" id="log-max-files-input"
+                                        class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white"
+                                        min="1" max="50" value="5">
+                                </div>
+                                <div>
+                                    <label for="log-max-size-input"
+                                        class="block text-sm font-medium text-gray-400 mb-1">Max File Size (MB)</label>
+                                    <input type="number" id="log-max-size-input"
+                                        class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white"
+                                        min="1" max="100" value="5">
+                                </div>
+                                <div>
+                                    <label for="log-auto-delete-days-input"
+                                        class="block text-sm font-medium text-gray-400 mb-1">Auto-Delete After
+                                        (days)</label>
+                                    <div class="flex items-center gap-2">
+                                        <input type="number" id="log-auto-delete-days-input"
+                                            class="w-24 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white"
+                                            min="0" value="7">
+                                        <span class="text-gray-400 text-xs">(0 = disabled)</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Action Buttons -->
+                            <div class="flex flex-col sm:flex-row gap-3 pt-2">
+                                <button id="download-logs-btn"
+                                    class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md flex items-center justify-center gap-2">
+                                    <span data-icon="export"></span>
+                                    Download Logs
+                                </button>
+                                <button id="clear-logs-btn"
+                                    class="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md flex items-center justify-center gap-2">
+                                    <span data-icon="trash"></span>
+                                    Clear All Logs
+                                </button>
+                            </div>
+                            <p class="text-xs text-gray-500">Logs are stored in /data/logs and include all console
+                                output from the server.</p>
+                        </div>
+                    </div>
+
+                    <div id="danger-zone-section"
+                        class="bg-red-900/50 border border-red-700/50 p-4 sm:p-6 rounded-xl shadow-lg">
                         <h2 class="text-xl font-bold text-red-300 mb-4 border-b border-red-700/50 pb-2">Danger Zone</h2>
                         <div class="space-y-4">
                             <!-- NEW: Backup & Restore buttons -->
                             <div>
-                                <p class="text-sm text-gray-400 mb-2">Backup or restore your application settings. This includes all sources, profiles, and app configurations.</p>
+                                <p class="text-sm text-gray-400 mb-2">Backup or restore your application settings. This
+                                    includes all sources, profiles, and app configurations.</p>
                                 <div class="flex flex-col sm:flex-row gap-3">
-                                    <button id="export-settings-btn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md flex items-center justify-center gap-2">
+                                    <button id="export-settings-btn"
+                                        class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md flex items-center justify-center gap-2">
                                         <span data-icon="export"></span>
                                         Export Settings
                                     </button>
-                                    <button id="import-settings-btn" class="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md flex items-center justify-center gap-2">
+                                    <button id="import-settings-btn"
+                                        class="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md flex items-center justify-center gap-2">
                                         <span data-icon="import"></span>
                                         Import Settings
                                     </button>
@@ -1431,8 +2229,10 @@
                                 </div>
                             </div>
                             <div class="border-t border-red-700/50 pt-4">
-                                <p class="text-sm text-gray-400 mb-2">This permanently deletes all saved application data from the server and your browser cache. The page will reload.</p>
-                                <button id="clear-data-btn" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-md flex items-center justify-center gap-2">
+                                <p class="text-sm text-gray-400 mb-2">This permanently deletes all saved application
+                                    data from the server and your browser cache. The page will reload.</p>
+                                <button id="clear-data-btn"
+                                    class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-md flex items-center justify-center gap-2">
                                     <span data-icon="trash"></span>
                                     <span>Clear All Data & Reset</span>
                                 </button>
@@ -1442,44 +2242,55 @@
                 </div>
             </div>
         </main>
-        
+
     </div>
 
     <!-- Mobile Navigation Menu -->
-    <div id="mobile-nav-menu" class="hidden fixed inset-y-0 left-0 w-64 bg-gray-900 border-r border-gray-700 z-50 flex-col py-6 px-4 transform -translate-x-full transition-transform duration-300 ease-in-out">
+    <div id="mobile-nav-menu"
+        class="hidden fixed inset-y-0 left-0 w-64 bg-gray-900 border-r border-gray-700 z-50 flex-col py-6 px-4 transform -translate-x-full transition-transform duration-300 ease-in-out">
         <div class="flex justify-between items-center mb-6">
             <h2 class="text-xl font-bold text-white">Navigation</h2>
-            <button id="mobile-menu-close" class="text-gray-400 hover:text-white text-3xl leading-none font-bold">&times;</button>
+            <button id="mobile-menu-close"
+                class="text-gray-400 hover:text-white text-3xl leading-none font-bold">&times;</button>
         </div>
         <nav class="flex flex-col gap-4">
-            <button id="mobile-nav-guide" class="text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors active">
+            <button id="mobile-nav-guide"
+                class="text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors active">
                 <span class="flex items-center gap-2"><span data-icon="guide"></span> TV Guide</span>
             </button>
-            <button id="mobile-nav-multiview" class="text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors">
+            <button id="mobile-nav-multiview"
+                class="text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors">
                 <span class="flex items-center gap-2"><span data-icon="multiview"></span> Multi-View</span>
             </button>
-            <button id="mobile-nav-player" class="text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors">
+            <button id="mobile-nav-player"
+                class="text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors">
                 <span class="flex items-center gap-2"><span data-icon="play"></span> Player</span>
             </button>
-            <button id="mobile-nav-dvr" class="text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors">
+            <button id="mobile-nav-dvr"
+                class="text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors">
                 <span class="flex items-center gap-2"><span data-icon="dvr"></span> DVR</span>
             </button>
-            <button id="mobile-nav-vod" class="text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors">
+            <button id="mobile-nav-vod"
+                class="text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors">
                 <span class="flex items-center gap-2"><span data-icon="multiview"></span> VODs</span>
             </button>
             <!-- NEW: Admin Activity Tab (Mobile) -->
-            <button id="mobile-nav-activity" class="hidden text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors">
+            <button id="mobile-nav-activity"
+                class="hidden text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors">
                 <span class="flex items-center gap-2"><span data-icon="info"></span> Activity</span>
             </button>
-            <button id="mobile-nav-notifications" class="text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors">
+            <button id="mobile-nav-notifications"
+                class="text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors">
                 <span class="flex items-center gap-2"><span data-icon="notifications"></span> Notifications</span>
             </button>
-            <button id="mobile-nav-settings" class="text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors">
+            <button id="mobile-nav-settings"
+                class="text-left tab-button text-lg font-medium py-2 px-3 text-gray-300 hover:bg-gray-800 rounded-md transition-colors">
                 <span class="flex items-center gap-2"><span data-icon="settings"></span> Settings</span>
             </button>
         </nav>
         <div class="mt-auto">
-            <button id="mobile-nav-logout-btn" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded-md transition-colors">Logout</button>
+            <button id="mobile-nav-logout-btn"
+                class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded-md transition-colors">Logout</button>
         </div>
     </div>
 
@@ -1487,41 +2298,54 @@
 
     <!-- Modals -->
     <div id="video-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-        <div id="video-modal-container" class="bg-gray-900 rounded-lg shadow-xl max-h-[90vh] flex flex-col" style="width: 896px; height: 504px;">
+        <div id="video-modal-container" class="bg-gray-900 rounded-lg shadow-xl max-h-[90vh] flex flex-col"
+            style="width: 896px; height: 504px;">
             <div class="flex justify-between items-center p-3 border-b border-gray-700 flex-shrink-0">
                 <h3 id="video-title" class="text-lg font-semibold text-white truncate"></h3>
                 <div class="flex items-center gap-2">
                     <!-- NEW: Stream Info Toggle Button -->
-                    <button id="stream-info-toggle-btn" class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700" title="Toggle Stream Info">
+                    <button id="stream-info-toggle-btn"
+                        class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700"
+                        title="Toggle Stream Info">
                         <span data-icon="info"></span>
                     </button>
-                    <button id="refresh-stream-btn" class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700" title="Refresh Stream">
+                    <button id="refresh-stream-btn"
+                        class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700" title="Refresh Stream">
                         <span data-icon="refresh"></span>
                     </button>
-                    <button id="cast-btn" class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700" title="Cast to device">
+                    <button id="cast-btn" class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700"
+                        title="Cast to device">
                         <span data-icon="cast"></span>
                     </button>
-                    <button id="pip-btn" class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700" title="Picture-in-Picture">
+                    <button id="pip-btn" class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700"
+                        title="Picture-in-Picture">
                         <span data-icon="pip"></span>
                     </button>
-                    <button id="audio-track-btn" class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700 hidden" title="Audio Tracks">
+                    <button id="audio-track-btn"
+                        class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700 hidden"
+                        title="Audio Tracks">
                         <span data-icon="audio"></span>
                     </button>
-                    <button id="subtitle-track-btn" class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700 hidden" title="Subtitles">
+                    <button id="subtitle-track-btn"
+                        class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700 hidden"
+                        title="Subtitles">
                         <span data-icon="subtitles"></span>
                     </button>
-                    <button id="close-modal" class="text-gray-400 hover:text-white text-2xl leading-none font-bold">&times;</button>
+                    <button id="close-modal"
+                        class="text-gray-400 hover:text-white text-2xl leading-none font-bold">&times;</button>
                 </div>
             </div>
-                
+
             <!-- Audio Track Menu -->
-            <div id="audio-track-menu" class="absolute bottom-16 right-4 bg-gray-900 rounded-lg shadow-xl border border-gray-700 min-w-[200px] max-h-[300px] overflow-y-auto z-50 hidden">
+            <div id="audio-track-menu"
+                class="absolute bottom-16 right-4 bg-gray-900 rounded-lg shadow-xl border border-gray-700 min-w-[200px] max-h-[300px] overflow-y-auto z-50 hidden">
                 <div class="px-4 py-3 border-b border-gray-700 font-semibold text-white">Audio Tracks</div>
                 <div id="audio-track-list" class="py-2"></div>
             </div>
-            
+
             <!-- Subtitle Track Menu -->
-            <div id="subtitle-track-menu" class="absolute bottom-16 right-4 bg-gray-900 rounded-lg shadow-xl border border-gray-700 min-w-[200px] max-h-[300px] overflow-y-auto z-50 hidden">
+            <div id="subtitle-track-menu"
+                class="absolute bottom-16 right-4 bg-gray-900 rounded-lg shadow-xl border border-gray-700 min-w-[200px] max-h-[300px] overflow-y-auto z-50 hidden">
                 <div class="px-4 py-3 border-b border-gray-700 font-semibold text-white">Subtitles</div>
                 <div id="subtitle-track-list" class="py-2"></div>
             </div>
@@ -1537,7 +2361,8 @@
                     <p id="stream-info-video"></p>
                     <p id="stream-info-audio"></p>
                 </div>
-                <div id="cast-status" class="hidden absolute inset-0 flex-col items-center justify-center bg-black text-white p-4">
+                <div id="cast-status"
+                    class="hidden absolute inset-0 flex-col items-center justify-center bg-black text-white p-4">
                     <span data-icon="cast" class="w-16 h-16 mb-4"></span>
                     <p id="cast-status-text" class="text-lg font-semibold"></p>
                     <p id="cast-status-channel" class="text-sm text-gray-400"></p>
@@ -1546,18 +2371,21 @@
             <div id="video-resize-handle" class="resize-handle"></div>
         </div>
     </div>
-    
+
     <div id="program-details-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-        <div id="program-details-container" class="bg-gray-800 rounded-lg shadow-xl p-6 flex flex-col w-full relative" style="width: 512px;">
+        <div id="program-details-container" class="bg-gray-800 rounded-lg shadow-xl p-6 flex flex-col w-full relative"
+            style="width: 512px;">
             <div class="absolute top-4 right-4 flex items-center gap-2 z-10">
-                <button id="details-favorite-btn" class="p-2 text-gray-500 hover:text-yellow-400 rounded-full hover:bg-gray-700 transition-colors">
+                <button id="details-favorite-btn"
+                    class="p-2 text-gray-500 hover:text-yellow-400 rounded-full hover:bg-gray-700 transition-colors">
                     <span data-icon="star" class="w-6 h-6 favorite-star"></span>
                 </button>
-                <button id="details-close-btn" class="p-2 text-gray-400 hover:text-white rounded-full hover:bg-gray-700 transition-colors">
+                <button id="details-close-btn"
+                    class="p-2 text-gray-400 hover:text-white rounded-full hover:bg-gray-700 transition-colors">
                     <span data-icon="close" class="w-6 h-6"></span>
                 </button>
             </div>
-    
+
             <div id="program-details-header" class="pb-3 border-b border-gray-700 mb-3 flex-shrink-0">
                 <div class="pr-20">
                     <h2 id="details-channel" class="text-2xl font-bold text-white"></h2>
@@ -1566,17 +2394,25 @@
                 </div>
             </div>
             <p id="details-desc" class="text-base text-gray-300 flex-grow custom-scrollbar mb-4"></p>
-            <div id="program-details-footer" class="flex justify-start items-center gap-2 pt-3 border-t border-gray-700 flex-shrink-0 flex-wrap">
-                <button id="details-play-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Play Channel</button>
-                <button id="details-record-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md hidden">Record</button>
-                <button id="program-details-notify-btn" class="bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-2 px-4 rounded-md hidden">Notify Me</button>
+            <div id="program-details-footer"
+                class="flex justify-start items-center gap-2 pt-3 border-t border-gray-700 flex-shrink-0 flex-wrap">
+                <button id="details-play-btn"
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Play
+                    Channel</button>
+                <button id="details-record-btn"
+                    class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md hidden">Record</button>
+                <button id="program-details-notify-btn"
+                    class="bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-2 px-4 rounded-md hidden">Notify
+                    Me</button>
             </div>
             <div id="details-resize-handle" class="resize-handle"></div>
         </div>
     </div>
-    
+
     <div id="notification-modal-wrapper" class="hidden">
-        <div id="notification-box"><p id="notification-message"></p></div>
+        <div id="notification-box">
+            <p id="notification-message"></p>
+        </div>
     </div>
 
     <div id="confirm-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
@@ -1584,28 +2420,34 @@
             <h3 id="confirm-title" class="text-lg font-bold text-white mb-2"></h3>
             <p id="confirm-message" class="text-gray-400 mb-6"></p>
             <div class="flex justify-end gap-4">
-                <button id="confirm-cancel-btn" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
-                <button id="confirm-ok-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md">Confirm</button>
+                <button id="confirm-cancel-btn"
+                    class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
+                <button id="confirm-ok-btn"
+                    class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md">Confirm</button>
             </div>
         </div>
     </div>
 
-    <div id="multiview-channel-selector-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[60] p-4">
+    <div id="multiview-channel-selector-modal"
+        class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[60] p-4">
         <div class="bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl flex flex-col" style="height: 70vh;">
             <div class="p-4 border-b border-gray-700 flex-shrink-0">
                 <div class="flex justify-between items-center mb-4">
                     <h3 class="text-xl font-bold text-white">Select a Channel</h3>
-                    <select id="multiview-channel-filter" class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500">
+                    <select id="multiview-channel-filter"
+                        class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500">
                         <option value="all">All Groups</option>
                         <option value="favorites">Favorites</option>
                         <option value="recents">Recents</option>
                     </select>
                 </div>
-                <input type="search" id="channel-selector-search" placeholder="Search channels..." class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500">
+                <input type="search" id="channel-selector-search" placeholder="Search channels..."
+                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500">
             </div>
             <div id="channel-selector-list" class="flex-grow p-2 overflow-y-auto custom-scrollbar"></div>
             <div class="bg-gray-700/50 px-6 py-4 flex justify-end gap-4 rounded-b-lg flex-shrink-0">
-                <button type="button" id="channel-selector-cancel-btn" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
+                <button type="button" id="channel-selector-cancel-btn"
+                    class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
             </div>
         </div>
     </div>
@@ -1618,12 +2460,16 @@
                     <p class="text-gray-400 mb-4 text-sm">Enter a name for the current grid layout.</p>
                     <div>
                         <label for="save-layout-name" class="sr-only">Layout Name</label>
-                        <input type="text" id="save-layout-name" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500" placeholder="e.g., Sports 2x2" required>
+                        <input type="text" id="save-layout-name"
+                            class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="e.g., Sports 2x2" required>
                     </div>
                 </div>
                 <div class="bg-gray-700/50 px-6 py-4 flex justify-end gap-4 rounded-b-lg">
-                    <button type="button" id="save-layout-cancel-btn" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
-                    <button type="submit" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-md">Save</button>
+                    <button type="button" id="save-layout-cancel-btn"
+                        class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
+                    <button type="submit"
+                        class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-md">Save</button>
                 </div>
             </form>
         </div>
@@ -1639,50 +2485,67 @@
                     <div class="space-y-4">
                         <div>
                             <label for="source-editor-name" class="block text-sm font-medium text-gray-400">Name</label>
-                            <input type="text" id="source-editor-name" class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500" required>
+                            <input type="text" id="source-editor-name"
+                                class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                                required>
                         </div>
                         <div class="flex items-center">
-                             <input id="source-editor-isActive" type="checkbox" class="h-4 w-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500">
-                             <label for="source-editor-isActive" class="ml-2 block text-sm text-gray-300">Active</label>
+                            <input id="source-editor-isActive" type="checkbox"
+                                class="h-4 w-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500">
+                            <label for="source-editor-isActive" class="ml-2 block text-sm text-gray-300">Active</label>
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-400 mb-2">Source Type</label>
-                             <div class="flex border border-gray-600 rounded-md overflow-hidden">
-                                <button type="button" id="source-editor-type-btn-url" class="flex-1 py-2 text-sm text-gray-300 hover:bg-gray-700/80">URL</button>
-                                <button type="button" id="source-editor-type-btn-file" class="flex-1 py-2 text-sm text-gray-300 hover:bg-gray-700/80">File</button>
-                                <button type="button" id="source-editor-type-btn-xc" class="flex-1 py-2 text-sm text-gray-300 hover:bg-gray-700/80">XC</button>
+                            <div class="flex border border-gray-600 rounded-md overflow-hidden">
+                                <button type="button" id="source-editor-type-btn-url"
+                                    class="flex-1 py-2 text-sm text-gray-300 hover:bg-gray-700/80">URL</button>
+                                <button type="button" id="source-editor-type-btn-file"
+                                    class="flex-1 py-2 text-sm text-gray-300 hover:bg-gray-700/80">File</button>
+                                <button type="button" id="source-editor-type-btn-xc"
+                                    class="flex-1 py-2 text-sm text-gray-300 hover:bg-gray-700/80">XC</button>
                             </div>
                         </div>
                         <div id="source-editor-url-container">
                             <label for="source-editor-url" class="block text-sm font-medium text-gray-400">URL</label>
                             <!-- NEW: Added flex container for Test button -->
                             <div class="flex items-center gap-2 mt-1">
-                                <input type="url" id="source-editor-url" placeholder="http://example.com/playlist.m3u" class="flex-grow block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
-                                <button type="button" id="test-source-url-btn" class="flex-shrink-0 bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-2 px-4 rounded-md">Test</button>
+                                <input type="url" id="source-editor-url" placeholder="http://example.com/playlist.m3u"
+                                    class="flex-grow block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
+                                <button type="button" id="test-source-url-btn"
+                                    class="flex-shrink-0 bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-2 px-4 rounded-md">Test</button>
                             </div>
                         </div>
-                         <div id="source-editor-file-container" class="hidden">
+                        <div id="source-editor-file-container" class="hidden">
                             <label for="source-editor-file" class="block text-sm font-medium text-gray-400">File</label>
-                            <input type="file" id="source-editor-file" class="mt-1 block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-500 file:text-white hover:file:bg-blue-600 cursor-pointer">
+                            <input type="file" id="source-editor-file"
+                                class="mt-1 block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-500 file:text-white hover:file:bg-blue-600 cursor-pointer">
                             <p id="source-editor-file-info" class="text-xs text-gray-500 mt-1"></p>
                         </div>
                         <div id="source-editor-xc-container" class="hidden space-y-4">
                             <div>
-                                <label for="source-editor-xc-url" class="block text-sm font-medium text-gray-400">Server URL</label>
-                                <input type="url" id="source-editor-xc-url" placeholder="http://xtream.example.com:8080" class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
+                                <label for="source-editor-xc-url" class="block text-sm font-medium text-gray-400">Server
+                                    URL</label>
+                                <input type="url" id="source-editor-xc-url" placeholder="http://xtream.example.com:8080"
+                                    class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
                             </div>
                             <div>
-                                <label for="source-editor-xc-username" class="block text-sm font-medium text-gray-400">Username</label>
-                                <input type="text" id="source-editor-xc-username" class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
+                                <label for="source-editor-xc-username"
+                                    class="block text-sm font-medium text-gray-400">Username</label>
+                                <input type="text" id="source-editor-xc-username"
+                                    class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
                             </div>
                             <div>
-                                <label for="source-editor-xc-password" class="block text-sm font-medium text-gray-400">Password</label>
-                                <input type="password" id="source-editor-xc-password" class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
+                                <label for="source-editor-xc-password"
+                                    class="block text-sm font-medium text-gray-400">Password</label>
+                                <input type="password" id="source-editor-xc-password"
+                                    class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
                             </div>
                         </div>
                         <div id="source-editor-refresh-container">
-                            <label for="source-editor-refresh-interval" class="block text-sm font-medium text-gray-400">Refresh Interval</label>
-                            <select id="source-editor-refresh-interval" class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
+                            <label for="source-editor-refresh-interval"
+                                class="block text-sm font-medium text-gray-400">Refresh Interval</label>
+                            <select id="source-editor-refresh-interval"
+                                class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
                                 <option value="0">Disabled</option>
                                 <option value="1">Every 1 Hour</option>
                                 <option value="4">Every 4 Hours</option>
@@ -1693,8 +2556,10 @@
                     </div>
                 </div>
                 <div class="bg-gray-700/50 px-6 py-4 flex justify-end gap-4 rounded-b-lg">
-                    <button type="button" id="source-editor-cancel-btn" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
-                    <button type="submit" id="source-editor-save-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Save</button>
+                    <button type="button" id="source-editor-cancel-btn"
+                        class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
+                    <button type="submit" id="source-editor-save-btn"
+                        class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Save</button>
                 </div>
             </form>
         </div>
@@ -1708,58 +2573,78 @@
                 <input type="hidden" id="editor-type">
                 <div>
                     <label for="editor-name" class="block text-sm font-medium text-gray-400">Name</label>
-                    <input type="text" id="editor-name" class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500" required>
+                    <input type="text" id="editor-name"
+                        class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                        required>
                 </div>
                 <div id="editor-value-container">
-                    <label for="editor-value" id="editor-value-label" class="block text-sm font-medium text-gray-400"></label>
-                    <textarea id="editor-value" rows="4" class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500 custom-scrollbar" required></textarea>
-                     <p class="text-xs text-gray-500 mt-1">For ffmpeg commands, use {userAgent} and {streamUrl} as placeholders.</p>
+                    <label for="editor-value" id="editor-value-label"
+                        class="block text-sm font-medium text-gray-400"></label>
+                    <textarea id="editor-value" rows="4"
+                        class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500 custom-scrollbar"
+                        required></textarea>
+                    <p class="text-xs text-gray-500 mt-1">For ffmpeg commands, use {userAgent} and {streamUrl} as
+                        placeholders.</p>
                 </div>
                 <div class="flex justify-end gap-4 pt-4">
-                    <button type="button" id="editor-cancel-btn" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
-                    <button type="submit" id="editor-save-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Save</button>
+                    <button type="button" id="editor-cancel-btn"
+                        class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
+                    <button type="submit" id="editor-save-btn"
+                        class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Save</button>
                 </div>
             </form>
         </div>
     </div>
-    
+
     <div id="user-editor-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
         <div class="bg-gray-800 rounded-lg shadow-xl w-full max-w-md p-6">
             <h3 id="user-editor-title" class="text-xl font-bold text-white mb-4">Edit User</h3>
             <form id="user-editor-form" class="space-y-4">
                 <input type="hidden" id="user-editor-id">
-                <div id="user-editor-error" class="hidden bg-red-900/50 border border-red-700/50 text-red-300 px-4 py-2 rounded-md text-sm"></div>
-                <div>
-                    <label for="user-editor-username" class="block text-sm font-medium text-gray-400">Username</label>
-                    <input type="text" id="user-editor-username" class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white" required>
+                <div id="user-editor-error"
+                    class="hidden bg-red-900/50 border border-red-700/50 text-red-300 px-4 py-2 rounded-md text-sm">
                 </div>
                 <div>
-                    <label for="user-editor-password" class="block text-sm font-medium text-gray-400">New Password (optional)</label>
-                    <input type="password" id="user-editor-password" class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white">
+                    <label for="user-editor-username" class="block text-sm font-medium text-gray-400">Username</label>
+                    <input type="text" id="user-editor-username"
+                        class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white"
+                        required>
+                </div>
+                <div>
+                    <label for="user-editor-password" class="block text-sm font-medium text-gray-400">New Password
+                        (optional)</label>
+                    <input type="password" id="user-editor-password"
+                        class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white">
                 </div>
                 <div class="flex items-center gap-6">
                     <div class="flex items-center">
-                        <input id="user-editor-isAdmin" type="checkbox" class="h-4 w-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500">
-                        <label for="user-editor-isAdmin" class="ml-2 block text-sm text-gray-300">Is Administrator</label>
+                        <input id="user-editor-isAdmin" type="checkbox"
+                            class="h-4 w-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500">
+                        <label for="user-editor-isAdmin" class="ml-2 block text-sm text-gray-300">Is
+                            Administrator</label>
                     </div>
                     <div class="flex items-center">
-                        <input id="user-editor-canUseDvr" type="checkbox" class="h-4 w-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500">
+                        <input id="user-editor-canUseDvr" type="checkbox"
+                            class="h-4 w-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500">
                         <label for="user-editor-canUseDvr" class="ml-2 block text-sm text-gray-300">Can use DVR</label>
                     </div>
                 </div>
                 <div class="flex justify-end gap-4 pt-4">
-                    <button type="button" id="user-editor-cancel-btn" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
-                    <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Save</button>
+                    <button type="button" id="user-editor-cancel-btn"
+                        class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
+                    <button type="submit"
+                        class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Save</button>
                 </div>
             </form>
         </div>
     </div>
-    
+
     <div id="recording-player-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
         <div class="bg-gray-900 rounded-lg shadow-xl max-h-[90vh] flex flex-col" style="width: 896px;">
             <div class="flex justify-between items-center p-3 border-b border-gray-700 flex-shrink-0">
                 <h3 id="recording-title" class="text-lg font-semibold text-white truncate"></h3>
-                <button id="close-recording-player-btn" class="text-gray-400 hover:text-white text-2xl leading-none font-bold">&times;</button>
+                <button id="close-recording-player-btn"
+                    class="text-gray-400 hover:text-white text-2xl leading-none font-bold">&times;</button>
             </div>
             <div class="flex-grow p-1 bg-black relative">
                 <video id="recording-video-element" controls autoplay class="w-full h-full"></video>
@@ -1774,10 +2659,12 @@
             </div>
             <div class="p-6 flex-grow overflow-y-auto custom-scrollbar">
                 <p class="text-sm text-gray-400 mb-2">The following error was reported by the recording engine:</p>
-                <pre id="dvr-error-modal-content" class="text-xs bg-gray-900 p-3 rounded-md text-red-300 whitespace-pre-wrap"></pre>
+                <pre id="dvr-error-modal-content"
+                    class="text-xs bg-gray-900 p-3 rounded-md text-red-300 whitespace-pre-wrap"></pre>
             </div>
             <div class="bg-gray-700/50 px-6 py-4 flex justify-end gap-4 rounded-b-lg flex-shrink-0">
-                <button type="button" id="dvr-error-modal-close-btn" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Close</button>
+                <button type="button" id="dvr-error-modal-close-btn"
+                    class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Close</button>
             </div>
         </div>
     </div>
@@ -1790,33 +2677,43 @@
                     <input type="hidden" id="dvr-edit-id">
                     <div class="space-y-4">
                         <div>
-                            <label for="dvr-edit-start" class="block text-sm font-medium text-gray-400">Start Time</label>
-                            <input type="datetime-local" id="dvr-edit-start" class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500" required>
+                            <label for="dvr-edit-start" class="block text-sm font-medium text-gray-400">Start
+                                Time</label>
+                            <input type="datetime-local" id="dvr-edit-start"
+                                class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                                required>
                         </div>
                         <div>
                             <label for="dvr-edit-end" class="block text-sm font-medium text-gray-400">End Time</label>
-                            <input type="datetime-local" id="dvr-edit-end" class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500" required>
+                            <input type="datetime-local" id="dvr-edit-end"
+                                class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                                required>
                         </div>
                     </div>
                 </div>
                 <div class="bg-gray-700/50 px-6 py-4 flex justify-end gap-4 rounded-b-lg">
-                    <button type="button" id="dvr-edit-cancel-btn" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
-                    <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Save Changes</button>
+                    <button type="button" id="dvr-edit-cancel-btn"
+                        class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
+                    <button type="submit"
+                        class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Save
+                        Changes</button>
                 </div>
             </form>
         </div>
     </div>
-    
+
     <div id="hardware-info-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[60] p-4">
         <div class="bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl flex flex-col" style="max-height: 80vh;">
             <div class="p-4 border-b border-gray-700 flex-shrink-0">
                 <h3 id="hardware-info-modal-title" class="text-xl font-bold text-white">Hardware Acceleration Info</h3>
             </div>
-            <div id="hardware-info-modal-content" class="p-6 flex-grow overflow-y-auto custom-scrollbar space-y-4 text-gray-300">
+            <div id="hardware-info-modal-content"
+                class="p-6 flex-grow overflow-y-auto custom-scrollbar space-y-4 text-gray-300">
                 <!-- Content will be populated by JS -->
             </div>
             <div class="bg-gray-700/50 px-6 py-4 flex justify-end gap-4 rounded-b-lg flex-shrink-0">
-                <button type="button" id="hardware-info-modal-close-btn" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Close</button>
+                <button type="button" id="hardware-info-modal-close-btn"
+                    class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Close</button>
             </div>
         </div>
     </div>
@@ -1825,76 +2722,100 @@
         <div class="bg-gray-800 rounded-lg shadow-xl w-full max-w-3xl flex flex-col" style="height: 80vh;">
             <div class="p-4 border-b border-gray-700 flex-shrink-0 flex justify-between items-center">
                 <h3 class="text-xl font-bold text-white">M3U Group Filter</h3>
-                <button type="button" id="group-filter-close-btn" class="text-gray-400 hover:text-white p-2 rounded-full text-2xl">&times;</button>
+                <button type="button" id="group-filter-close-btn"
+                    class="text-gray-400 hover:text-white p-2 rounded-full text-2xl">&times;</button>
             </div>
             <div class="p-4 flex-shrink-0 border-b border-gray-700">
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                     <div class="flex space-x-1 sm:space-x-4">
-                        <button id="group-filter-tab-live" data-type="live" class="group-filter-tab-btn tab-button active">Live</button>
-                        <button id="group-filter-tab-movies" data-type="movie" class="group-filter-tab-btn tab-button">VOD - Movies</button>
-                        <button id="group-filter-tab-series" data-type="series" class="group-filter-tab-btn tab-button">VOD - Series</button>
+                        <button id="group-filter-tab-live" data-type="live"
+                            class="group-filter-tab-btn tab-button active">Live</button>
+                        <button id="group-filter-tab-movies" data-type="movie"
+                            class="group-filter-tab-btn tab-button">VOD - Movies</button>
+                        <button id="group-filter-tab-series" data-type="series"
+                            class="group-filter-tab-btn tab-button">VOD - Series</button>
                     </div>
                     <div class="flex gap-2">
-                        <button id="group-filter-select-all" class="bg-gray-700 hover:bg-gray-600 text-white text-sm font-bold py-2 px-3 rounded-md">Select All</button>
-                        <button id="group-filter-deselect-all" class="bg-gray-700 hover:bg-gray-600 text-white text-sm font-bold py-2 px-3 rounded-md">Deselect All</button>
+                        <button id="group-filter-select-all"
+                            class="bg-gray-700 hover:bg-gray-600 text-white text-sm font-bold py-2 px-3 rounded-md">Select
+                            All</button>
+                        <button id="group-filter-deselect-all"
+                            class="bg-gray-700 hover:bg-gray-600 text-white text-sm font-bold py-2 px-3 rounded-md">Deselect
+                            All</button>
                     </div>
                 </div>
-                <input type="search" id="group-filter-search" placeholder="Filter groups..." class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500 mt-4">
+                <input type="search" id="group-filter-search" placeholder="Filter groups..."
+                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500 mt-4">
             </div>
-            <div id="group-filter-list" class="p-4 flex-grow overflow-y-auto custom-scrollbar grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                </div>
+            <div id="group-filter-list"
+                class="p-4 flex-grow overflow-y-auto custom-scrollbar grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            </div>
             <div class="bg-gray-700/50 px-6 py-4 flex justify-end gap-4 rounded-b-lg flex-shrink-0">
-                <button type="button" id="group-filter-cancel-btn" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
-                <button type="button" id="group-filter-save-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Save and Close</button>
+                <button type="button" id="group-filter-cancel-btn"
+                    class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
+                <button type="button" id="group-filter-save-btn"
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Save and
+                    Close</button>
             </div>
         </div>
     </div>
 
     <div id="vod-details-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[60] p-4">
-        <div id="vod-details-container" class="bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl flex flex-col relative" style="max-height: 90vh;">
-            <button id="vod-details-close-btn" class="absolute top-3 right-3 p-2 text-gray-400 hover:text-white rounded-full hover:bg-gray-700 transition-colors z-20">
+        <div id="vod-details-container" class="bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl flex flex-col relative"
+            style="max-height: 90vh;">
+            <button id="vod-details-close-btn"
+                class="absolute top-3 right-3 p-2 text-gray-400 hover:text-white rounded-full hover:bg-gray-700 transition-colors z-20">
                 <span data-icon="close" class="w-6 h-6"></span>
             </button>
-    
+
             <div id="vod-details-backdrop" class="absolute inset-0 w-full h-full overflow-hidden rounded-lg">
-                <img id="vod-details-backdrop-img" src="" class="w-full h-full object-cover object-center opacity-20" style="filter: blur(10px);">
+                <img id="vod-details-backdrop-img" src="" class="w-full h-full object-cover object-center opacity-20"
+                    style="filter: blur(10px);">
                 <div class="absolute inset-0 bg-gradient-to-t from-gray-800 via-gray-800/80 to-transparent"></div>
             </div>
-    
+
             <div id="vod-details-content" class="relative flex-grow flex flex-col overflow-y-auto custom-scrollbar">
                 <div class="p-6 md:p-8 flex flex-col md:flex-row gap-6">
-                    <img id="vod-details-poster" src="" class="w-48 h-72 object-cover rounded-md shadow-lg flex-shrink-0 bg-gray-700">
+                    <img id="vod-details-poster" src=""
+                        class="w-48 h-72 object-cover rounded-md shadow-lg flex-shrink-0 bg-gray-700">
                     <div class="flex-grow pt-4">
                         <h2 id="vod-details-title" class="text-3xl font-bold text-white mb-2"></h2>
-                        <div id="vod-details-meta" class="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-gray-400 mb-4">
+                        <div id="vod-details-meta"
+                            class="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-gray-400 mb-4">
                             <span id="vod-details-year"></span>
                             <span id="vod-details-rating" class="font-bold text-yellow-400"></span>
                             <span id="vod-details-type" class="font-semibold text-purple-400"></span>
                             <span id="vod-details-duration"></span>
                         </div>
-                        <p class="text-sm mb-2"><strong class="text-gray-300">Genre:</strong> <span id="vod-details-genre"></span></p>
-                        <p class="text-sm mb-2"><strong class="text-gray-300">Director:</strong> <span id="vod-details-director"></span></p>
-                        <p class="text-sm mb-4"><strong class="text-gray-300">Cast:</strong> <span id="vod-details-cast"></span></p>
+                        <p class="text-sm mb-2"><strong class="text-gray-300">Genre:</strong> <span
+                                id="vod-details-genre"></span></p>
+                        <p class="text-sm mb-2"><strong class="text-gray-300">Director:</strong> <span
+                                id="vod-details-director"></span></p>
+                        <p class="text-sm mb-4"><strong class="text-gray-300">Cast:</strong> <span
+                                id="vod-details-cast"></span></p>
                         <p id="vod-details-desc" class="text-base text-gray-300 mb-6"></p>
-    
+
                         <div id="vod-details-movie-actions" class="hidden">
-                            <button id="vod-play-movie-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-md text-lg flex items-center gap-2">
+                            <button id="vod-play-movie-btn"
+                                class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-md text-lg flex items-center gap-2">
                                 <span data-icon="play"></span> Play Movie
                             </button>
                         </div>
                     </div>
                 </div>
-    
+
                 <div id="vod-details-series-actions" class="hidden px-6 md:px-8 pb-6">
                     <div class="flex justify-between items-center mb-4">
-                         <h3 class="text-xl font-bold text-white">Episodes</h3>
+                        <h3 class="text-xl font-bold text-white">Episodes</h3>
                         <div class="flex-shrink-0">
                             <label for="vod-season-select" class="sr-only">Select Season</label>
-                            <select id="vod-season-select" class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"></select>
+                            <select id="vod-season-select"
+                                class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"></select>
                         </div>
                     </div>
-                    <div id="vod-episode-list" class="max-h-60 overflow-y-auto custom-scrollbar bg-gray-900/50 rounded-md border border-gray-700">
-                        </div>
+                    <div id="vod-episode-list"
+                        class="max-h-60 overflow-y-auto custom-scrollbar bg-gray-900/50 rounded-md border border-gray-700">
+                    </div>
                 </div>
             </div>
         </div>
@@ -1903,23 +2824,31 @@
 
     <script type="module" src="/js/main.js"></script>
 
-    <div id="processing-status-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[70] p-4">
+    <div id="processing-status-modal"
+        class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[70] p-4">
         <div class="bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl flex flex-col" style="max-height: 80vh;">
             <div class="p-4 border-b border-gray-700 flex-shrink-0">
                 <h3 id="processing-status-title" class="text-xl font-bold text-white">Processing Sources...</h3>
             </div>
-            <div id="processing-status-log" class="p-6 flex-grow overflow-y-auto custom-scrollbar font-mono text-sm text-gray-400 space-y-2">
-                </div>
-            <div id="processing-status-footer" class="bg-gray-700/50 px-6 py-4 flex justify-end gap-4 rounded-b-lg flex-shrink-0">
+            <div id="processing-status-log"
+                class="p-6 flex-grow overflow-y-auto custom-scrollbar font-mono text-sm text-gray-400 space-y-2">
+            </div>
+            <div id="processing-status-footer"
+                class="bg-gray-700/50 px-6 py-4 flex justify-end gap-4 rounded-b-lg flex-shrink-0">
                 <div id="processing-status-running-actions" class="hidden">
-                    <button type="button" id="processing-status-background-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Continue in the background</button>
+                    <button type="button" id="processing-status-background-btn"
+                        class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Continue in the
+                        background</button>
                 </div>
                 <div id="processing-status-finished-actions" class="hidden">
-                    <button type="button" id="processing-status-close-refresh-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md">Close and update</button>
+                    <button type="button" id="processing-status-close-refresh-btn"
+                        class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md">Close and
+                        update</button>
                 </div>
             </div>
         </div>
     </div>
-    
+
 </body>
+
 </html>
