@@ -97,7 +97,7 @@ const initializeUIElements = () => {
     UIElements.directPlayBtn = document.getElementById('direct-play-btn');
     UIElements.directPlayerContainer = document.getElementById('direct-player-container');
     UIElements.directVideoElement = document.getElementById('direct-video-element');
-    
+
     // DVR Elements
     UIElements.pageDvr = document.getElementById('page-dvr');
     UIElements.tabDvr = document.getElementById('tab-dvr');
@@ -197,7 +197,18 @@ const initializeUIElements = () => {
     UIElements.groupFilterCancelBtn = document.getElementById('group-filter-cancel-btn');
     UIElements.groupFilterSaveBtn = document.getElementById('group-filter-save-btn');
     // --- END Group Filter Elements ---
-    
+
+    // --- NEW: Log Management Elements ---
+    UIElements.logFileCount = document.getElementById('log-file-count');
+    UIElements.logTotalSize = document.getElementById('log-total-size');
+    UIElements.logOldestDate = document.getElementById('log-oldest-date');
+    UIElements.logMaxFilesInput = document.getElementById('log-max-files-input');
+    UIElements.logMaxSizeInput = document.getElementById('log-max-size-input');
+    UIElements.logAutoDeleteDaysInput = document.getElementById('log-auto-delete-days-input');
+    UIElements.downloadLogsBtn = document.getElementById('download-logs-btn');
+    UIElements.clearLogsBtn = document.getElementById('clear-logs-btn');
+    // --- END Log Management Elements ---
+
 };
 
 
@@ -239,7 +250,7 @@ const showSetupScreen = () => {
     const setupForm = document.getElementById('setup-form');
     const authLoader = document.getElementById('auth-loader');
     const setupError = document.getElementById('setup-error');
-    
+
     console.log('[AUTH_UI] Displaying setup screen.');
     authContainer.classList.remove('hidden');
     appContainer.classList.add('hidden');
@@ -255,7 +266,7 @@ const showSetupScreen = () => {
  */
 const showApp = (user) => {
     appState.currentUser = user;
-    
+
     const authContainer = document.getElementById('auth-container');
     const appContainer = document.getElementById('app-container');
 
@@ -274,7 +285,7 @@ const showApp = (user) => {
     // This prevents race conditions during app initialization.
     UIElements.userDisplay.textContent = user.username;
     UIElements.userDisplay.classList.remove('hidden');
-    
+
     console.log(`[AUTH_UI] User display set to: ${user.username}.`);
 
     if (!appState.appInitialized) {
@@ -313,7 +324,7 @@ export async function checkAuthStatus() {
             console.log('[AUTH] User not logged in. Checking if setup is needed...');
             const setupRes = await fetch('/api/auth/needs-setup');
             if (!setupRes.ok) {
-                 console.warn(`[AUTH] /api/auth/needs-setup returned non-OK status: ${setupRes.status} ${setupRes.statusText}`);
+                console.warn(`[AUTH] /api/auth/needs-setup returned non-OK status: ${setupRes.status} ${setupRes.statusText}`);
             }
             const setup = await setupRes.json();
             console.log('[AUTH] /api/auth/needs-setup response:', setup);
