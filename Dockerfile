@@ -36,8 +36,10 @@ COPY . .
 # Stage 2: The Final Image
 FROM ubuntu:24.04
 
+ARG TARGETARCH
+
 # Set environment variables for NVIDIA capabilities
-ENV NVIDIA_DRIVER_CAPABILITIES all
+ENV NVIDIA_DRIVER_CAPABILITIES=all
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LD_LIBRARY_PATH=/usr/lib/jellyfin-ffmpeg/lib
 
@@ -53,7 +55,7 @@ RUN apt-get update && \
     ca-certificates \
     mesa-va-drivers && \
     curl -s https://repo.jellyfin.org/ubuntu/jellyfin_team.gpg.key | gpg --dearmor | tee /usr/share/keyrings/jellyfin.gpg >/dev/null && \
-    echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/jellyfin.gpg] https://repo.jellyfin.org/ubuntu noble main' > /etc/apt/sources.list.d/jellyfin.list && \
+    echo "deb [arch=${TARGETARCH} signed-by=/usr/share/keyrings/jellyfin.gpg] https://repo.jellyfin.org/ubuntu noble main" > /etc/apt/sources.list.d/jellyfin.list && \
     curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
     apt-get install -y --no-install-recommends \
     jellyfin-ffmpeg7 \
