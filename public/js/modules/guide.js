@@ -110,7 +110,7 @@ export function openProgramDetails(progItem) {
             saveUserSetting('favorites', guideState.settings.favorites);
 
             if (UIElements.groupFilter.value === 'favorites') {
-                handleSearchAndFilter();
+                handleSearchAndFilter(false, true);
             }
         };
     }
@@ -149,7 +149,7 @@ export function openProgramDetails(progItem) {
                 programDetailsNotifyBtn.classList.toggle('hover:bg-yellow-700', !updatedNotification);
                 programDetailsNotifyBtn.classList.toggle('bg-gray-600', !!updatedNotification);
                 programDetailsNotifyBtn.classList.toggle('hover:bg-gray-500', !!updatedNotification);
-                handleSearchAndFilter(false);
+                handleSearchAndFilter(false, true);
             };
         } else {
             programDetailsNotifyBtn.classList.add('hidden');
@@ -199,7 +199,7 @@ export function openProgramDetails(progItem) {
             programDetailsRecordBtn.onclick = async () => {
                 await addOrRemoveDvrJob(programData);
                 closeModal(programDetailsModal);
-                handleSearchAndFilter(false);
+                handleSearchAndFilter(false, true);
             };
 
         } else {
@@ -560,9 +560,21 @@ const renderGuide = (channelsToRender, resetScroll = false, shouldCenter = false
         guideState.scrollHandler = throttle(updateVisibleRows, 16);
         guideContainer.addEventListener('scroll', guideState.scrollHandler);
 
+        // MODIFIED: Preserve vertical scroll position if not resetting
+        const currentScrollTop = guideContainer.scrollTop;
+        console.log('[RENDER_DEBUG] Captured scrollTop at start:', currentScrollTop);
+
         if (resetScroll) {
             guideContainer.scrollTop = 0;
             guideContainer.scrollLeft = 0;
+        } else {
+            // Restore vertical scroll after a short delay to allow layout update
+            console.log('[SCROLL_DEBUG] Restoring scrollTop:', currentScrollTop);
+            requestAnimationFrame(() => {
+                console.log('[SCROLL_DEBUG] Setting scrollTop to:', currentScrollTop, 'Current:', guideContainer.scrollTop);
+                guideContainer.scrollTop = currentScrollTop;
+                console.log('[SCROLL_DEBUG] New scrollTop:', guideContainer.scrollTop);
+            });
         }
         updateVisibleRows();
         console.log('[RENDER_DEBUG] About to call updateNowLine with shouldCenter:', shouldCenter);
@@ -703,7 +715,7 @@ const populateSourceFilter = () => {
  * @param {boolean} shouldCenter - Indicates if the guide should auto-center to current time.
  * @returns {Promise<boolean>} A promise that resolves when the re-render is complete.
  */
-export function handleSearchAndFilter(shouldCenter = false) {
+export function handleSearchAndFilter(shouldCenter = false, preserveScroll = false) {
     const searchTerm = UIElements.searchInput.value.trim().toLowerCase();
     const selectedGroup = UIElements.groupFilter.value;
     const selectedSource = UIElements.sourceFilter.value;
@@ -774,7 +786,12 @@ export function handleSearchAndFilter(shouldCenter = false) {
     // 3. Finally, render the guide with the correct list of channels.
     // When shouldCenter is true, we DON'T want to reset scroll (let it stay where it is)
     // Then we'll center it to the now line
-    return renderGuide(channelsForGuide, !shouldCenter, shouldCenter);
+    // MODIFIED: Logic for resetScroll.
+    // If preserveScroll is true, we NEVER reset.
+    // If shouldCenter is true, we also don't reset (because we want to scroll to a specific place, not 0,0).
+    // So we only reset if BOTH are false.
+    const resetScroll = !shouldCenter && !preserveScroll;
+    return renderGuide(channelsForGuide, resetScroll, shouldCenter);
 };
 /**
  * Renders the search results dropdown.
