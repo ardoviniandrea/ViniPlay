@@ -122,11 +122,11 @@ export const loadAndScheduleNotifications = async () => {
         const notifications = await getProgramNotifications();
         guideState.userNotifications = notifications;
         console.log(`[NOTIF] Loaded ${notifications.length} scheduled notifications from server.`);
-        
+
         renderNotificationSettings();
         renderNotifications();
         renderPastNotifications();
-        await handleSearchAndFilter(false);
+        await handleSearchAndFilter(false, true);
     } catch (error) {
         console.error('[NOTIF] Error loading notifications:', error);
         showNotification('An error occurred loading notifications.', true);
@@ -136,7 +136,7 @@ export const loadAndScheduleNotifications = async () => {
 export const addOrRemoveNotification = async (programDetails) => {
     console.log(`[NOTIF] Add/remove for: ${programDetails.programTitle}`);
     const existingNotification = findNotificationForProgram(programDetails, programDetails.channelId);
-    
+
     if (existingNotification) {
         showConfirm(
             'Remove Notification?',
@@ -153,8 +153,8 @@ export const addOrRemoveNotification = async (programDetails) => {
         );
     } else {
         if (Notification.permission === 'denied') {
-             showNotification('Notifications are blocked. Please enable them in site settings.', true, 8000);
-             return;
+            showNotification('Notifications are blocked. Please enable them in site settings.', true, 8000);
+            return;
         }
 
         if (Notification.permission !== 'granted') {
@@ -164,13 +164,13 @@ export const addOrRemoveNotification = async (programDetails) => {
                 return;
             }
         }
-        
+
         await subscribeUserToPush();
         if (!isSubscribed) {
             showNotification('Could not subscribe to notifications. Cannot set alert.', true);
             return;
         }
-        
+
         let notificationLeadTime = parseInt(guideState.settings.notificationLeadTime, 10);
         if (isNaN(notificationLeadTime)) {
             notificationLeadTime = 10;
@@ -181,12 +181,12 @@ export const addOrRemoveNotification = async (programDetails) => {
             showNotification('Cannot set notification due to an invalid program start time.', true);
             return;
         }
-        
+
         const scheduledTime = new Date(programStartTime.getTime() - notificationLeadTime * 60 * 1000);
-        
+
         if (scheduledTime <= new Date()) {
-             showNotification(`Cannot set notification for a program that has already started.`, true);
-             return;
+            showNotification(`Cannot set notification for a program that has already started.`, true);
+            return;
         }
 
         const newNotificationData = {
@@ -252,7 +252,7 @@ export const renderNotifications = () => {
         const notificationTime = new Date(notif.scheduledTime);
 
         if (isNaN(programStartTime.getTime()) || isNaN(notificationTime.getTime())) {
-            return ''; 
+            return '';
         }
 
         const leadTimeMinutes = Math.round((programStartTime.getTime() - notificationTime.getTime()) / 60000);
@@ -294,21 +294,21 @@ export const renderPastNotifications = () => {
 
     // FIX: Corrected the logic to show the "no past notifications" message only when the list is empty.
     UIElements.noPastNotificationsMessage.classList.toggle('hidden', pastNotifications.length > 0);
-    
+
     // Show/hide the "Clear All" button based on whether there are past notifications.
     UIElements.clearPastNotificationsBtn.classList.toggle('hidden', pastNotifications.length === 0);
 
     pastNotificationsListEl.innerHTML = pastNotifications.map(notif => {
         const programStartTime = new Date(notif.programStart);
         const notificationTriggerTime = new Date(notif.triggeredAt || notif.scheduledTime);
-        
+
         if (isNaN(programStartTime.getTime()) || isNaN(notificationTriggerTime.getTime())) {
             return '';
         }
 
         const formattedProgramTime = programStartTime.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
         const formattedTriggerTime = notificationTriggerTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-        
+
         let statusText = '';
         if (notif.status === 'sent') {
             statusText = `Notified at ${formattedTriggerTime}`;
@@ -369,7 +369,7 @@ const setupNotificationListEventListeners = () => {
     UIElements.pastNotificationsList?.removeEventListener('click', handleClicks);
     // NEW: Add event listener for the clear all button
     UIElements.clearPastNotificationsBtn?.removeEventListener('click', handleClearAllPast);
-    
+
     UIElements.notificationsList?.addEventListener('click', handleClicks);
     UIElements.pastNotificationsList?.addEventListener('click', handleClicks);
     UIElements.clearPastNotificationsBtn?.addEventListener('click', handleClearAllPast);
@@ -431,11 +431,11 @@ export const navigateToProgramInGuide = async (channelId, programStart, programI
             showNotification("Could not navigate to program: Guide did not load in time.", true);
             return;
         }
-        
+
         // The rest of the original logic can now execute safely.
         console.log(`[NOTIF_NAV] Navigating to program. Channel: ${channelId}, Start: ${programStart}`);
         const stableChannelIdSuffix = channelId.includes('_') ? '_' + channelId.split('_').pop() : channelId;
-        
+
         // No need to navigate again if we are already on the guide page from the deep link
         if (window.location.pathname !== '/tvguide' && window.location.pathname !== '/') {
             navigate('/tvguide');
@@ -454,12 +454,12 @@ export const navigateToProgramInGuide = async (channelId, programStart, programI
             console.log(`[NOTIF_NAV] Program is on a different day. Switching guide date to ${targetProgramStart.toDateString()}`);
             guideState.currentDate = targetProgramStart;
             // This will re-render the guide for the correct day
-            await handleSearchAndFilter(true); 
+            await handleSearchAndFilter(true);
         }
 
         // Scroll to the correct channel. This function already has a built-in wait mechanism.
         const channelScrolledAndRendered = await scrollToChannel(stableChannelIdSuffix);
-        
+
         if (!channelScrolledAndRendered) {
             showNotification("Could not find the channel in the guide.", false, 6000);
             return;
@@ -473,7 +473,7 @@ export const navigateToProgramInGuide = async (channelId, programStart, programI
             return;
         }
         const currentDynamicChannelId = currentChannelElement.dataset.id;
-        
+
         // Find the program element using its unique data attributes
         const programElement = UIElements.guideGrid.querySelector(
             `.programme-item[data-prog-start="${programStart}"][data-channel-id="${currentDynamicChannelId}"]`
@@ -484,9 +484,9 @@ export const navigateToProgramInGuide = async (channelId, programStart, programI
             // It's possible the program is off-screen horizontally, so let's try to scroll horizontally.
             const guideContainer = UIElements.guideContainer;
             const guideStartUtc = new Date(guideState.currentDate);
-            guideStartUtc.setHours(0,0,0,0);
+            guideStartUtc.setHours(0, 0, 0, 0);
             const left = ((targetProgramStart.getTime() - guideStartUtc.getTime()) / 3600000) * guideState.hourWidthPixels;
-            
+
             guideContainer.scrollTo({
                 left: Math.max(0, left - (guideContainer.clientWidth / 4)),
                 behavior: 'smooth'
@@ -499,7 +499,7 @@ export const navigateToProgramInGuide = async (channelId, programStart, programI
         const guideContainer = UIElements.guideContainer;
         const programRect = programElement.getBoundingClientRect();
         const containerRect = guideContainer.getBoundingClientRect();
-        
+
         const desiredScrollTop = guideContainer.scrollTop + programRect.top - containerRect.top - (containerRect.height / 2) + (programRect.height / 2);
         const desiredScrollLeft = guideContainer.scrollLeft + programRect.left - containerRect.left - (containerRect.width / 2) + (programRect.width / 2);
 
