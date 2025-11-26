@@ -62,6 +62,7 @@ const STREAM_INACTIVITY_TIMEOUT = 30000; // 30 seconds to kill an inactive strea
 // --- Configuration ---
 const DATA_DIR = '/data';
 const DVR_DIR = '/dvr';
+const LOGS_DIR = path.join(DATA_DIR, 'logs'); // NEW: Log management directory
 const VAPID_KEYS_PATH = path.join(DATA_DIR, 'vapid.json');
 const SOURCES_DIR = path.join(DATA_DIR, 'sources');
 const RAW_CACHE_DIR = path.join(SOURCES_DIR, 'raw_cache');
@@ -101,6 +102,7 @@ try {
     if (!fs.existsSync(SOURCES_DIR)) fs.mkdirSync(SOURCES_DIR, { recursive: true });
     if (!fs.existsSync(DVR_DIR)) fs.mkdirSync(DVR_DIR, { recursive: true });
     if (!fs.existsSync(RAW_CACHE_DIR)) fs.mkdirSync(RAW_CACHE_DIR, { recursive: true });
+    if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
     console.log(`[INIT] All required directories checked/created.`);
 } catch (mkdirError) {
     console.error(`[INIT] FATAL: Failed to create necessary directories: ${mkdirError.message}`);
@@ -651,14 +653,13 @@ function getSettings() {
         epgSources: [],
         userAgents: [{ id: `default-ua-1724778434000`, name: 'ViniPlay Default', value: 'VLC/3.0.20 (Linux; x86_64)', isDefault: true }],
         streamProfiles: [
-            { id: 'redirect', name: 'Redirect (No Transcoding)', command: 'redirect', isDefault: false },
-            { id: 'ffmpeg-default', name: 'ffmpeg (Built in)', command: '-user_agent "{userAgent}" -i "{streamUrl}" -c:v libx264 -preset veryfast -crf 23 -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: true },
+            { id: 'redirect', name: 'Redirect (No Transcoding)', command: 'redirect', isDefault: true },
+            { id: 'ffmpeg-default', name: 'ffmpeg (Built in)', command: '-user_agent "{userAgent}" -i "{streamUrl}" -c:v libx264 -preset ultrafast -crf 23 -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false },
             { id: 'ffmpeg-nvidia', name: 'ffmpeg (NVIDIA NVENC)', command: '-user_agent "{userAgent}" -re -i "{streamUrl}" -c:v h264_nvenc -preset p6 -tune hq -c:a copy -f mpegts pipe:1', isDefault: false },
             { id: 'ffmpeg-nvidia-reconnect', name: 'ffmpeg (NVIDIA reconnect)', command: '-user_agent "{userAgent}" -re -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -i "{streamUrl}" -c:v h264_nvenc -preset p6 -tune hq -c:a copy -f mpegts pipe:1', isDefault: false },
             { id: 'ffmpeg-intel', name: 'ffmpeg (Intel QSV)', command: '-hwaccel qsv -c:v h264_qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false },
             { id: 'ffmpeg-vaapi', name: 'ffmpeg (VA-API) Intel', command: '-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf "format=nv12|vaapi,hwupload" -c:v h264_vaapi -preset medium -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false },
-            { id: 'ffmpeg-vaapi-amd', name: 'ffmpeg (VA-API) Radeon/AMD', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false },
-            { id: 'ffmpeg-cast', name: 'Cast (MP4 Fragmented)', command: '-user_agent "{userAgent}" -i "{streamUrl}" -c:v libx264 -preset veryfast -crf 23 -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1', isDefault: false }
+            { id: 'ffmpeg-vaapi-amd', name: 'ffmpeg (VA-API) Radeon/AMD', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false }
         ],
         dvr: {
             preBufferMinutes: 1,
@@ -683,13 +684,26 @@ function getSettings() {
                 { id: 'dvr-mp4-radeon-vaapi', name: 'Radeon/AMD VA-API MP4 (H.264/AAC)', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -preset medium -vf scale_vaapi=format=nv12 -c:a aac -ac 2 -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false }
             ]
         },
+        castProfiles: [
+            { id: 'cast-default', name: 'Cast Default (CPU)', command: '-user_agent "{userAgent}" -i "{streamUrl}" -c:v libx264 -preset veryfast -crf 23 -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1', isDefault: true },
+            { id: 'cast-nvidia', name: 'Cast (NVIDIA NVENC)', command: '-user_agent "{userAgent}" -i "{streamUrl}" -c:v h264_nvenc -preset p6 -tune hq -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1', isDefault: false },
+            { id: 'cast-intel', name: 'Cast (Intel QSV)', command: '-hwaccel qsv -c:v h264_qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1', isDefault: false },
+            { id: 'cast-vaapi', name: 'Cast (VA-API Intel)', command: '-hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -vf "format=nv12|vaapi,hwupload" -c:v h264_vaapi -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1', isDefault: false },
+            { id: 'cast-vaapi-amd', name: 'Cast (VA-API Radeon/AMD)', command: '-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i "{streamUrl}" -c:v h264_vaapi -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1', isDefault: false }
+        ],
+        activeCastProfileId: 'cast-default',
         activeUserAgentId: `default-ua-1724778434000`,
-        activeStreamProfileId: 'ffmpeg-default',
+        activeStreamProfileId: 'redirect',
         playerLogLevel: 'warning',
         dvrLogLevel: 'warning',
         searchScope: 'all_channels_unfiltered',
         notificationLeadTime: 10,
-        sourcesLastUpdated: null
+        sourcesLastUpdated: null,
+        logs: {
+            maxFiles: 5,
+            maxFileSizeBytes: 5 * 1024 * 1024, // 5MB
+            autoDeleteDays: 7
+        }
     };
 
     if (!fs.existsSync(SETTINGS_PATH)) {
@@ -744,6 +758,35 @@ function getSettings() {
             });
         }
 
+        // Cast profiles migration
+        if (!settings.castProfiles) {
+            console.log(`[SETTINGS_MIGRATE] Initializing Cast profiles block.`);
+            settings.castProfiles = defaultSettings.castProfiles;
+            needsSave = true;
+        } else {
+            defaultSettings.castProfiles.forEach(defaultProfile => {
+                const existingProfile = settings.castProfiles.find(p => p.id === defaultProfile.id);
+                if (!existingProfile) {
+                    console.log(`[SETTINGS_MIGRATE] Adding missing Cast profile: ${defaultProfile.name}`);
+                    settings.castProfiles.push(defaultProfile);
+                    needsSave = true;
+                } else if (existingProfile.isDefault) {
+                    // Update default cast profile commands
+                    if (existingProfile.command !== defaultProfile.command) {
+                        console.log(`[SETTINGS_MIGRATE] Updating outdated default Cast profile command for: ${defaultProfile.name}`);
+                        existingProfile.command = defaultProfile.command;
+                        needsSave = true;
+                    }
+                }
+            });
+        }
+
+        if (!settings.activeCastProfileId) {
+            console.log(`[SETTINGS_MIGRATE] Initializing missing activeCastProfileId to ${defaultSettings.activeCastProfileId}.`);
+            settings.activeCastProfileId = defaultSettings.activeCastProfileId;
+            needsSave = true;
+        }
+
         if (!settings.playerLogLevel) {
             // There is no playerLogLevel setting.  Add it with default setting.
             console.log(`[SETTINGS_MIGRATE] Initializing missing player Log Level setting to ${defaultSettings.playerLogLevel}.`);
@@ -766,6 +809,30 @@ function getSettings() {
             console.log(`[SETTINGS_MIGRATE_ERROR] dvr Log Level setting: ${settings.dvrLogLevel} is invalid, set to default: ${defaultSettings.dvrLogLevel}.`);
             settings.dvrLogLevel = defaultSettings.dvrLogLevel;
             needsSave = true;
+        }
+
+        // NEW: Logs settings migration
+        if (!settings.logs) {
+            console.log(`[SETTINGS_MIGRATE] Initializing missing logs settings block.`);
+            settings.logs = defaultSettings.logs;
+            needsSave = true;
+        } else {
+            // Ensure all log sub-settings exist
+            if (settings.logs.maxFiles === undefined) {
+                console.log(`[SETTINGS_MIGRATE] Adding missing logs.maxFiles setting.`);
+                settings.logs.maxFiles = defaultSettings.logs.maxFiles;
+                needsSave = true;
+            }
+            if (settings.logs.maxFileSizeBytes === undefined) {
+                console.log(`[SETTINGS_MIGRATE] Adding missing logs.maxFileSizeBytes setting.`);
+                settings.logs.maxFileSizeBytes = defaultSettings.logs.maxFileSizeBytes;
+                needsSave = true;
+            }
+            if (settings.logs.autoDeleteDays === undefined) {
+                console.log(`[SETTINGS_MIGRATE] Adding missing logs.autoDeleteDays setting.`);
+                settings.logs.autoDeleteDays = defaultSettings.logs.autoDeleteDays;
+                needsSave = true;
+            }
         }
 
         // Check that all expected settings are present and set and if not,
@@ -798,6 +865,220 @@ function getSettings() {
         return defaultSettings;
     }
 }
+
+// --- LOG ROTATION SYSTEM ---
+let currentLogStream = null;
+let currentLogFilePath = null;
+let currentLogSize = 0;
+let cachedLogSettings = {
+    maxFiles: 5,
+    maxFileSizeBytes: 5 * 1024 * 1024,
+    autoDeleteDays: 7
+};
+
+/**
+ * Updates the cached log settings. Call this after settings are changed.
+ */
+function refreshLogSettings() {
+    try {
+        const settings = getSettings();
+        if (settings.logs) {
+            cachedLogSettings = settings.logs;
+        }
+    } catch (error) {
+        // Silently fail to avoid recursion
+    }
+}
+
+/**
+ * Gets the current active log file path.
+ * @returns {string} Path to the current log file.
+ */
+function getCurrentLogFilePath() {
+    if (!currentLogFilePath) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        currentLogFilePath = path.join(LOGS_DIR, `viniplay-${timestamp}.log`);
+    }
+    return currentLogFilePath;
+}
+
+/**
+ * Rotates the log file when size limit is reached.
+ */
+function rotateLogFile() {
+    try {
+        if (currentLogStream) {
+            currentLogStream.end();
+            currentLogStream = null;
+        }
+
+        // Create new log file
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        currentLogFilePath = path.join(LOGS_DIR, `viniplay-${timestamp}.log`);
+        currentLogSize = 0;
+
+        // Use original console.log to avoid recursion
+        const originalLog = console.log.__original || console.log;
+        originalLog.call(console, `[LOG_ROTATE] Created new log file: ${path.basename(currentLogFilePath)}`);
+
+        // Clean up old log files based on maxFiles setting
+        cleanupOldLogsByCount();
+    } catch (error) {
+        // Silently fail to avoid recursion
+    }
+}
+
+/**
+ * Cleans up old log files based on the maxFiles setting.
+ */
+function cleanupOldLogsByCount() {
+    try {
+        const maxFiles = cachedLogSettings.maxFiles || 5;
+
+        const logFiles = fs.readdirSync(LOGS_DIR)
+            .filter(file => file.startsWith('viniplay-') && file.endsWith('.log'))
+            .map(file => ({
+                name: file,
+                path: path.join(LOGS_DIR, file),
+                mtime: fs.statSync(path.join(LOGS_DIR, file)).mtime
+            }))
+            .sort((a, b) => b.mtime - a.mtime); // Sort by newest first
+
+        // Delete files beyond maxFiles limit
+        if (logFiles.length > maxFiles) {
+            const filesToDelete = logFiles.slice(maxFiles);
+            filesToDelete.forEach(file => {
+                try {
+                    fs.unlinkSync(file.path);
+                    const originalLog = console.log.__original || console.log;
+                    originalLog.call(console, `[LOG_CLEANUP] Deleted old log file: ${file.name}`);
+                } catch (err) {
+                    // Silently fail
+                }
+            });
+        }
+    } catch (error) {
+        // Silently fail to avoid recursion
+    }
+}
+
+/**
+ * Cleans up log files older than the configured autoDeleteDays.
+ */
+function cleanupOldLogsByAge() {
+    try {
+        const autoDeleteDays = cachedLogSettings.autoDeleteDays || 0;
+
+        if (autoDeleteDays === 0) {
+            return; // Auto-delete disabled
+        }
+
+        const cutoffTime = Date.now() - (autoDeleteDays * 24 * 60 * 60 * 1000);
+
+        const logFiles = fs.readdirSync(LOGS_DIR)
+            .filter(file => file.startsWith('viniplay-') && file.endsWith('.log'));
+
+        logFiles.forEach(file => {
+            const filePath = path.join(LOGS_DIR, file);
+            const stats = fs.statSync(filePath);
+
+            if (stats.mtime.getTime() < cutoffTime) {
+                try {
+                    fs.unlinkSync(filePath);
+                    const originalLog = console.log.__original || console.log;
+                    originalLog.call(console, `[LOG_CLEANUP] Deleted old log file (age): ${file}`);
+                } catch (err) {
+                    // Silently fail
+                }
+            }
+        });
+    } catch (error) {
+        // Silently fail to avoid recursion
+    }
+}
+
+/**
+ * Writes a log message to the current log file.
+ * @param {string} message - The log message to write.
+ */
+function writeToLogFile(message) {
+    try {
+        const maxSize = cachedLogSettings.maxFileSizeBytes || (5 * 1024 * 1024);
+
+        // Check if we need to rotate
+        if (currentLogSize >= maxSize) {
+            rotateLogFile();
+        }
+
+        // Create stream if it doesn't exist
+        if (!currentLogStream) {
+            const logPath = getCurrentLogFilePath();
+            currentLogStream = fs.createWriteStream(logPath, { flags: 'a' });
+
+            // Get current file size if file exists
+            if (fs.existsSync(logPath)) {
+                currentLogSize = fs.statSync(logPath).size;
+            }
+        }
+
+        const logLine = `${message}\n`;
+        currentLogStream.write(logLine);
+        currentLogSize += Buffer.byteLength(logLine);
+
+    } catch (error) {
+        // Silently fail to avoid infinite loop
+    }
+}
+
+/**
+ * Initializes the log system by overriding console methods.
+ */
+function initializeLogSystem() {
+    const originalLog = console.log;
+    const originalError = console.error;
+    const originalWarn = console.warn;
+
+    // Store original functions for internal use
+    console.log.__original = originalLog;
+    console.error.__original = originalError;
+    console.warn.__original = originalWarn;
+
+    console.log = function (...args) {
+        const message = args.map(arg =>
+            typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
+        ).join(' ');
+        originalLog.apply(console, args);
+        writeToLogFile(`[LOG] ${new Date().toISOString()} ${message}`);
+    };
+
+    console.error = function (...args) {
+        const message = args.map(arg =>
+            typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
+        ).join(' ');
+        originalError.apply(console, args);
+        writeToLogFile(`[ERROR] ${new Date().toISOString()} ${message}`);
+    };
+
+    console.warn = function (...args) {
+        const message = args.map(arg =>
+            typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
+        ).join(' ');
+        originalWarn.apply(console, args);
+        writeToLogFile(`[WARN] ${new Date().toISOString()} ${message}`);
+    };
+
+    // Refresh settings cache initially
+    refreshLogSettings();
+
+    // Run age-based cleanup on startup and then every 24 hours
+    cleanupOldLogsByAge();
+    setInterval(cleanupOldLogsByAge, 24 * 60 * 60 * 1000);
+
+    console.log('[LOG_SYSTEM] Log rotation system initialized.');
+}
+
+// Initialize the log system
+initializeLogSystem();
 
 /**
  * Initiates the VOD refresh process for a given XC provider.
@@ -2906,7 +3187,11 @@ app.get('/stream', allowLocalOrAuth, async (req, res) => {
     if (!streamUrl) return res.status(400).send('Error: `url` query parameter is required.');
 
     let settings = getSettings();
-    const profile = (settings.streamProfiles || []).find(p => p.id === profileId);
+    // Check both streamProfiles and castProfiles arrays
+    let profile = (settings.streamProfiles || []).find(p => p.id === profileId);
+    if (!profile) {
+        profile = (settings.castProfiles || []).find(p => p.id === profileId);
+    }
 
     if (!profile) {
         console.error(`[STREAM] Stream profile with ID "${profileId}" not found in settings.`);
@@ -3092,14 +3377,37 @@ app.post('/api/cast/generate-token', requireAuth, (req, res) => {
 // ============================================================
 app.post('/api/stream/stop', requireAuth, (req, res) => {
     const { url: streamUrl, profileId } = req.body;
-
-    // Build stream key with profileId if provided (for Cast streams)
-    const streamKey = profileId
-        ? `${req.session.userId}::${streamUrl}::${profileId}`
-        : `${req.session.userId}::${streamUrl}`;
+    let streamKey;
 
     if (!streamUrl) {
         return res.status(400).json({ error: "Stream URL is required to stop the stream." });
+    }
+
+    // If profileId is provided, construct the specific key
+    if (profileId) {
+        streamKey = `${req.session.userId}::${streamUrl}::${profileId}`;
+    } else {
+        // If no profileId, try to find a matching key for this user and URL
+        // The key format is either "userId::url" (old) or "userId::url::profileId" (new)
+        const partialKey = `${req.session.userId}::${streamUrl}`;
+
+        // Check for exact match first (legacy format or redirect)
+        if (activeStreamProcesses.has(partialKey)) {
+            streamKey = partialKey;
+        } else {
+            // Search for keys starting with the partial key
+            for (const key of activeStreamProcesses.keys()) {
+                if (key.startsWith(partialKey + '::')) {
+                    streamKey = key;
+                    break; // Stop at the first match
+                }
+            }
+        }
+
+        // If still not found, default to the partial key so the error message is consistent
+        if (!streamKey) {
+            streamKey = partialKey;
+        }
     }
 
     const activeStreamInfo = activeStreamProcesses.get(streamKey);
@@ -3115,14 +3423,15 @@ app.post('/api/stream/stop', requireAuth, (req, res) => {
             }
             activeStreamInfo.process.kill('SIGKILL');
             activeStreamProcesses.delete(streamKey);
-            broadcastAdminActivityUpdate();
+            //-- ENHANCEMENT: Notify admins that a stream has ended.
+            broadcastAdminUpdate();
             console.log(`[STREAM_STOP_API] Successfully terminated process for key: ${streamKey}`);
         } catch (e) {
             console.warn(`[STREAM_STOP_API] Could not kill process for key: ${streamKey}. It might have already exited. Error: ${e.message}`);
         }
         res.json({ success: true, message: `Stream process for ${streamKey} terminated.` });
     } else {
-        console.log(`[STREAM_STOP_API] Received stop request for user ${req.session.userId}, but no active stream was found for key: ${streamKey}`);
+        console.log(`[STREAM_STOP_API] Received stop request for user ${req.session.userId}, but no active stream was found for key (or partial match): ${streamKey}`);
         res.json({ success: true, message: 'No active stream to stop.' });
     }
 });
@@ -3683,9 +3992,20 @@ async function startRecording(job) {
 
     ffmpeg.on('close', (code) => {
         runningFFmpegProcesses.delete(job.id);
-        const wasStoppedIntentionally = ffmpegErrorOutput.includes('Exiting normally, received signal 2');
+        // MODIFIED: Accept exit code 255 as a graceful exit (standard for SIGINT in ffmpeg)
+        const wasStoppedIntentionally = ffmpegErrorOutput.includes('Exiting normally, received signal 2') || code === 255;
         const logMessage = (code === 0 || wasStoppedIntentionally) ? 'finished gracefully' : `exited with error code ${code}`;
         console.log(`[DVR] Recording process for job ${job.id} ("${job.programTitle}") ${logMessage}.`);
+
+        // MODIFIED: Explicitly set file permissions to 0o666 (rw-rw-rw-) so the user can manage the file.
+        try {
+            if (fs.existsSync(fullFilePath)) {
+                fs.chmodSync(fullFilePath, 0o666);
+                console.log(`[DVR] Set permissions to 0o666 for: ${fullFilePath}`);
+            }
+        } catch (chmodErr) {
+            console.error(`[DVR] Failed to set permissions for ${fullFilePath}:`, chmodErr.message);
+        }
 
         fs.stat(fullFilePath, (statErr, stats) => {
             if ((code === 0 || wasStoppedIntentionally) && !statErr && stats && stats.size > 1024) {
@@ -4274,6 +4594,129 @@ app.post('/api/settings/import', requireAdmin, settingsUpload.single('settingsFi
         res.status(400).json({ error: `Invalid settings file. Error: ${error.message}` });
     }
 });
+// --- LOG MANAGEMENT API ENDPOINTS ---
+
+/**
+ * GET /api/logs/info
+ * Returns statistics about current log files.
+ */
+app.get('/api/logs/info', requireAuth, requireAdmin, (req, res) => {
+    try {
+        const logFiles = fs.readdirSync(LOGS_DIR)
+            .filter(file => file.startsWith('viniplay-') && file.endsWith('.log'))
+            .map(file => {
+                const filePath = path.join(LOGS_DIR, file);
+                const stats = fs.statSync(filePath);
+                return {
+                    name: file,
+                    size: stats.size,
+                    mtime: stats.mtime
+                };
+            })
+            .sort((a, b) => b.mtime - a.mtime);
+
+        const totalSize = logFiles.reduce((sum, file) => sum + file.size, 0);
+        const oldestFile = logFiles.length > 0 ? logFiles[logFiles.length - 1] : null;
+
+        res.json({
+            fileCount: logFiles.length,
+            totalSize: totalSize,
+            oldestDate: oldestFile ? oldestFile.mtime : null,
+            files: logFiles
+        });
+    } catch (error) {
+        console.error('[API] Error getting log info:', error);
+        res.status(500).json({ error: 'Failed to get log information.' });
+    }
+});
+
+/**
+ * GET /api/logs/download
+ * Downloads all log files combined into a single text file.
+ */
+app.get('/api/logs/download', requireAuth, requireAdmin, (req, res) => {
+    try {
+        const logFiles = fs.readdirSync(LOGS_DIR)
+            .filter(file => file.startsWith('viniplay-') && file.endsWith('.log'))
+            .map(file => ({
+                name: file,
+                path: path.join(LOGS_DIR, file),
+                mtime: fs.statSync(path.join(LOGS_DIR, file)).mtime
+            }))
+            .sort((a, b) => a.mtime - b.mtime); // Sort by oldest first
+
+        if (logFiles.length === 0) {
+            return res.status(404).json({ error: 'No log files found.' });
+        }
+
+        // Combine all log files
+        let combinedLogs = `ViniPlay Application Logs\n`;
+        combinedLogs += `Generated: ${new Date().toISOString()}\n`;
+        combinedLogs += `Total Files: ${logFiles.length}\n`;
+        combinedLogs += `${'='.repeat(80)}\n\n`;
+
+        logFiles.forEach(file => {
+            combinedLogs += `\n${'='.repeat(80)}\n`;
+            combinedLogs += `File: ${file.name}\n`;
+            combinedLogs += `Modified: ${file.mtime.toISOString()}\n`;
+            combinedLogs += `${'='.repeat(80)}\n\n`;
+
+            try {
+                const content = fs.readFileSync(file.path, 'utf-8');
+                combinedLogs += content;
+                combinedLogs += '\n\n';
+            } catch (err) {
+                combinedLogs += `[ERROR] Could not read file: ${err.message}\n\n`;
+            }
+        });
+
+        const filename = `viniplay-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+        res.setHeader('Content-Type', 'text/plain');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.send(combinedLogs);
+
+        console.log(`[API] User ${req.session.userId} downloaded logs.`);
+    } catch (error) {
+        console.error('[API] Error downloading logs:', error);
+        res.status(500).json({ error: 'Failed to download logs.' });
+    }
+});
+
+/**
+ * POST /api/logs/cleanup
+ * Deletes all log files.
+ */
+app.post('/api/logs/cleanup', requireAuth, requireAdmin, (req, res) => {
+    try {
+        const logFiles = fs.readdirSync(LOGS_DIR)
+            .filter(file => file.startsWith('viniplay-') && file.endsWith('.log'));
+
+        let deletedCount = 0;
+        logFiles.forEach(file => {
+            try {
+                fs.unlinkSync(path.join(LOGS_DIR, file));
+                deletedCount++;
+            } catch (err) {
+                console.error(`[API] Error deleting log file ${file}:`, err);
+            }
+        });
+
+        // Close current log stream and reset
+        if (currentLogStream) {
+            currentLogStream.end();
+            currentLogStream = null;
+        }
+        currentLogFilePath = null;
+        currentLogSize = 0;
+
+        console.log(`[API] User ${req.session.userId} cleared ${deletedCount} log files.`);
+        res.json({ success: true, deletedCount });
+    } catch (error) {
+        console.error('[API] Error cleaning up logs:', error);
+        res.status(500).json({ error: 'Failed to cleanup logs.' });
+    }
+});
+
 // --- Main Route Handling ---
 app.get('*', (req, res) => {
     const filePath = path.join(PUBLIC_DIR, req.path);
