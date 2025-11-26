@@ -12,6 +12,7 @@ import { logToPlayerConsole } from './player_direct.js';
 
 let streamInfoInterval = null; // Interval to update stream stats
 let currentLocalStreamUrl = null; // ADDED: Track the original URL of the currently playing local stream
+let currentProfileId = null; // ADDED: Track the profile ID of the current stream
 let currentRedirectHistoryId = null; // To track redirect streams for logging
 
 // --- NEW: Auto-retry logic state ---
@@ -74,7 +75,7 @@ export async function forceRefreshStream() {
 
     // Stop the current player instance without closing the modal
     if (appState.player) {
-        await stopStream(currentLocalStreamUrl);
+        await stopStream(currentLocalStreamUrl, currentProfileId);
         appState.player.destroy();
         appState.player = null;
     }
@@ -106,9 +107,10 @@ export const stopAndCleanupPlayer = async () => { // MODIFIED: Made function asy
 
     // Explicitly tell the server to stop the stream process.
     if (currentLocalStreamUrl && !castState.isCasting) {
-        console.log(`[PLAYER] Sending stop request to server for URL: ${currentLocalStreamUrl}`);
-        await stopStream(currentLocalStreamUrl);
+        console.log(`[PLAYER] Sending stop request to server for URL: ${currentLocalStreamUrl} with Profile ID: ${currentProfileId}`);
+        await stopStream(currentLocalStreamUrl, currentProfileId);
         currentLocalStreamUrl = null; // Clear the tracked URL after stopping
+        currentProfileId = null; // Clear the profile ID
     }
 
     // Clear the stream info update interval
@@ -121,12 +123,8 @@ export const stopAndCleanupPlayer = async () => { // MODIFIED: Made function asy
         UIElements.streamInfoOverlay.classList.add('hidden');
     }
 
-    if (castState.isCasting) {
-        console.log('[PLAYER] Closing modal but leaving cast session active.');
-        closeModal(UIElements.videoModal);
-        return;
-    }
-
+    // CRITICAL FIX: Always destroy the local player first, regardless of cast state
+    // This ensures local playback stops when switching to cast or closing the modal
     if (appState.player) {
         console.log('[PLAYER] Destroying local mpegts player.');
         appState.player.destroy();
@@ -137,6 +135,13 @@ export const stopAndCleanupPlayer = async () => { // MODIFIED: Made function asy
     UIElements.videoElement.load();
 
     setLocalPlayerState(null, null, null);
+
+    // If we're casting, just close the modal and keep the cast session active
+    if (castState.isCasting) {
+        console.log('[PLAYER] Closing modal but leaving cast session active.');
+        closeModal(UIElements.videoModal);
+        return;
+    }
 
     if (document.pictureInPictureElement) {
         document.exitPictureInPicture().catch(console.error);
@@ -242,9 +247,10 @@ export const playChannel = (url, name, channelId) => {
 
     // --- Local Playback Logic ---
     currentLocalStreamUrl = url;
-    console.log(`[PLAYER] Playing channel "${name}" locally. Tracking URL for cleanup: ${currentLocalStreamUrl}`);
+    currentProfileId = profileId; // Store the profile ID
+    console.log(`[PLAYER] Playing channel "${name}" locally. Tracking URL for cleanup: ${currentLocalStreamUrl}, Profile: ${currentProfileId}`);
 
-    setLocalPlayerState(streamUrlToPlay, name, logo);
+    setLocalPlayerState(streamUrlToPlay, name, logo, url, profileId);
 
     if (appState.player) {
         appState.player.destroy();
@@ -401,6 +407,7 @@ export const playVOD = async (url, title, logo = '') => {
     // Store the *original* VOD URL for potential stop requests if using /stream
     if (profile.command !== 'redirect') {
         currentLocalStreamUrl = url;
+        currentProfileId = profileId; // Store the profile ID
     }
 
     // --- Activity Logging for Redirect VODs (using mpegts.js) ---
