@@ -4,7 +4,8 @@
  */
 
 import { showNotification } from './ui.js';
-import { UIElements } from './state.js';
+import { UIElements, guideState, appState } from './state.js';
+import { stopStream } from './api.js';
 
 const APPLICATION_ID = 'CC1AD845'; // Default Media Receiver App ID
 
@@ -30,10 +31,11 @@ export const castState = {
 async function stopCastStream(streamUrl) {
     try {
         console.log(`[CAST] Sending stop request for Cast stream: ${streamUrl}`);
+        const activeCastProfileId = guideState.settings?.activeCastProfileId || 'cast-default';
         const response = await fetch('/api/stream/stop', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: streamUrl, profileId: 'ffmpeg-cast' })
+            body: JSON.stringify({ url: streamUrl, profileId: activeCastProfileId })
         });
 
         if (response.ok) {
@@ -52,11 +54,15 @@ async function stopCastStream(streamUrl) {
  * @param {string} streamUrl - The URL of the stream.
  * @param {string} name - The name of the channel.
  * @param {string} logo - The URL for the channel's logo.
+ * @param {string} originalUrl - The original stream URL (for stopping server stream).
+ * @param {string} profileId - The profile ID (for stopping server stream).
  */
-export function setLocalPlayerState(streamUrl, name, logo) {
+export function setLocalPlayerState(streamUrl, name, logo, originalUrl = null, profileId = null) {
     castState.localPlayerState.streamUrl = streamUrl;
     castState.localPlayerState.name = name;
     castState.localPlayerState.logo = logo;
+    castState.localPlayerState.originalUrl = originalUrl;
+    castState.localPlayerState.profileId = profileId;
     console.log(`[CAST] Local player state updated: ${name}`);
 }
 
@@ -122,6 +128,29 @@ function handleSessionStateChange(event) {
             // Auto-cast if local player is active and not already casting
             if (castState.localPlayerState.streamUrl && !castState.currentMedia) {
                 console.log('[CAST] Automatically casting local content after session start.');
+
+                // CRITICAL FIX: Stop the server-side stream FIRST
+                const { originalUrl, profileId } = castState.localPlayerState;
+                if (originalUrl && profileId) {
+                    console.log(`[CAST] Stopping server stream: ${originalUrl} with profile ${profileId}`);
+                    stopStream(originalUrl, profileId).catch(err => {
+                        console.error('[CAST] Error stopping server stream:', err);
+                    });
+                }
+
+                // CRITICAL FIX: Stop the local player before casting
+                if (appState.player) {
+                    console.log('[CAST] Stopping local player before casting.');
+                    appState.player.destroy();
+                    appState.player = null;
+                    // Clear the video element
+                    if (UIElements.videoElement) {
+                        UIElements.videoElement.src = "";
+                        UIElements.videoElement.removeAttribute('src');
+                        UIElements.videoElement.load();
+                    }
+                }
+
                 const { streamUrl, name, logo } = castState.localPlayerState;
                 // CRITICAL FIX: Convert relative URLs to absolute for Chromecast
                 const absoluteUrl = streamUrl.startsWith('http')
@@ -204,18 +233,19 @@ export async function loadMedia(url, name, logo) {
     console.log(`[CAST] Loading media: "${name}" from URL: ${url}`);
 
     // ONLY modify URL to use cast profile if NOT already using it
-    // This ensures we switch to MP4 for Chromecast
+    // This ensures we switch to the active cast profile for Chromecast
+    const activeCastProfileId = guideState.settings?.activeCastProfileId || 'cast-default';
     let castUrl = url;
-    if (!url.includes('profileId=ffmpeg-cast')) {
+    if (!url.includes(`profileId=${activeCastProfileId}`)) {
         if (url.includes('profileId=')) {
-            // Replace existing profileId with cast profile
-            castUrl = url.replace(/profileId=[^&]+/, 'profileId=ffmpeg-cast');
-            console.log(`[CAST] Replaced profile with ffmpeg-cast`);
+            // Replace existing profileId with active cast profile
+            castUrl = url.replace(/profileId=[^&]+/, `profileId=${activeCastProfileId}`);
+            console.log(`[CAST] Replaced profile with ${activeCastProfileId}`);
         } else {
             // Add cast profile
             const separator = url.includes('?') ? '&' : '?';
-            castUrl = `${url}${separator}profileId=ffmpeg-cast`;
-            console.log(`[CAST] Added ffmpeg-cast profile`);
+            castUrl = `${url}${separator}profileId=${activeCastProfileId}`;
+            console.log(`[CAST] Added ${activeCastProfileId} profile`);
         }
     }
 
