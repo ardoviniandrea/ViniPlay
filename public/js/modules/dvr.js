@@ -25,7 +25,7 @@ export async function initDvrPage() {
     // Toggle visibility of DVR sections based on user permissions
     const manualRecSection = document.getElementById('manual-recording-section');
     const scheduledSection = document.getElementById('scheduled-recordings-section');
-    
+
     if (manualRecSection) manualRecSection.classList.toggle('hidden', !hasDvrPermission);
     if (scheduledSection) scheduledSection.classList.toggle('hidden', !hasDvrPermission);
 
@@ -206,10 +206,10 @@ function renderScheduledJobs() {
     // Toggle visibility of the entire table container vs the message
     UIElements.noDvrJobsMessage.classList.toggle('hidden', hasJobs);
     UIElements.dvrJobsTableContainer.classList.toggle('hidden', !hasJobs);
-    
+
     // Show/hide the "Clear All" button
     UIElements.clearScheduledDvrBtn.classList.toggle('hidden', !hasJobs);
-    
+
     // MODIFIED: Show/hide the user column header
     const userHeader = UIElements.dvrJobsTableContainer.querySelector('th.user-col');
     if (userHeader) userHeader.classList.toggle('hidden', !isAdmin);
@@ -220,14 +220,14 @@ function renderScheduledJobs() {
     jobs.forEach(job => {
         const startTime = new Date(job.startTime).toLocaleString();
         const endTime = new Date(job.endTime).toLocaleString();
-        
+
         const statusHTML = job.status === 'error' && job.errorMessage
             ? `<button class="status-badge ${job.status} view-error-btn" data-job-id="${job.id}">${job.status}</button>`
             : `<span class="status-badge ${job.status}">${job.status}</span>`;
 
-        const conflictIcon = job.isConflicting ? 
+        const conflictIcon = job.isConflicting ?
             `<svg class="h-5 w-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20" title="This recording conflicts with another scheduled recording."><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.21 3.03-1.742 3.03H4.42c-1.532 0-2.492-1.696-1.742-3.03l5.58-9.92zM10 13a1 1 0 110-2 1 1 0 010 2zm-1.75-5.25a.75.75 0 00-1.5 0v3.5a.75.75 0 001.5 0v-3.5z" clip-rule="evenodd" /></svg>` : '';
-        
+
         const isTimeshiftable = job.filePath && job.filePath.endsWith('.ts');
         const playButtonHTML = (job.status === 'recording' && isTimeshiftable) ? `
             <button class="action-btn timeshift-play-btn text-blue-400 hover:text-blue-300" title="Play Recording (Timeshift)" data-job-id="${job.id}">
@@ -288,17 +288,17 @@ function renderCompletedRecordings() {
     // Toggle visibility of the entire table container vs the message
     UIElements.noDvrRecordingsMessage.classList.toggle('hidden', hasRecordings);
     UIElements.dvrRecordingsTableContainer.classList.toggle('hidden', !hasRecordings);
-    
+
     // Show/hide the "Clear All" button only if user has DVR permission
     const hasDvrPermission = appState.currentUser?.isAdmin || appState.currentUser?.canUseDvr;
     UIElements.clearCompletedDvrBtn.classList.toggle('hidden', !hasRecordings || !hasDvrPermission);
-    
+
     const tbody = UIElements.dvrRecordingsTbody;
     tbody.innerHTML = '';
 
     recordings.forEach(rec => {
         const recordedOn = new Date(rec.startTime).toLocaleString();
-        
+
         // MODIFIED: Admins can see who made the recording
         const userColumn = isAdmin ? `<td class="max-w-xs truncate" title="${rec.username}">${rec.username}</td>` : '';
 
@@ -404,8 +404,8 @@ export function setupDvrEventListeners() {
                 }
             });
         } else if (button.classList.contains('stop-recording-btn')) {
-             const jobId = button.dataset.jobId;
-             showConfirm('Stop Recording?', 'Are you sure?', async () => {
+            const jobId = button.dataset.jobId;
+            showConfirm('Stop Recording?', 'Are you sure?', async () => {
                 if (await apiFetch(`/api/dvr/jobs/${jobId}/stop`, { method: 'POST' })) {
                     showNotification('Recording stopped.');
                     await Promise.all([loadScheduledJobs(), loadCompletedRecordings()]);
@@ -430,8 +430,8 @@ export function setupDvrEventListeners() {
                 openModal(UIElements.dvrEditModal);
             }
         } else if (button.classList.contains('delete-history-btn')) {
-             const jobId = button.dataset.jobId;
-             showConfirm('Remove From History?', 'This will not delete the file.', async () => {
+            const jobId = button.dataset.jobId;
+            showConfirm('Remove From History?', 'This will not delete the file.', async () => {
                 if (await apiFetch(`/api/dvr/jobs/${jobId}/history`, { method: 'DELETE' })) {
                     showNotification('Job removed from history.');
                     await loadScheduledJobs();
@@ -475,7 +475,7 @@ export function setupDvrEventListeners() {
 
     UIElements.dvrErrorModalCloseBtn.addEventListener('click', () => closeModal(UIElements.dvrErrorModal));
     UIElements.dvrEditCancelBtn.addEventListener('click', () => closeModal(UIElements.dvrEditModal));
-    
+
     UIElements.dvrEditForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const jobId = UIElements.dvrEditId.value;
@@ -488,7 +488,7 @@ export function setupDvrEventListeners() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
         });
-        if(res && res.ok) {
+        if (res && res.ok) {
             showNotification('Schedule updated.');
             closeModal(UIElements.dvrEditModal);
             await loadScheduledJobs();
@@ -521,7 +521,7 @@ export function setupDvrEventListeners() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
         });
-        
+
         if (res) {
             if (res.ok) {
                 showNotification('Manual recording scheduled successfully.');
@@ -582,8 +582,8 @@ export function findDvrJobForProgram(program) {
         const jobProgramStart = new Date(job.startTime).getTime() + (job.preBufferMinutes * 60000);
         const jobProgramStop = new Date(job.endTime).getTime() - (job.postBufferMinutes * 60000);
         return job.channelId === program.channelId &&
-               Math.abs(jobProgramStart - programStart) < 60000 &&
-               Math.abs(jobProgramStop - programStop) < 60000;
+            Math.abs(jobProgramStart - programStart) < 60000 &&
+            Math.abs(jobProgramStop - programStop) < 60000;
     });
 }
 
@@ -595,7 +595,7 @@ export async function addOrRemoveDvrJob(programData) {
             if (await apiFetch(`/api/dvr/jobs/${existingJob.id}`, { method: 'DELETE' })) {
                 showNotification('Recording cancelled.');
                 await loadScheduledJobs();
-                handleSearchAndFilter(false);
+                handleSearchAndFilter(false, true);
             }
         });
     } else if (!existingJob) {
@@ -616,7 +616,7 @@ export async function addOrRemoveDvrJob(programData) {
             if (res.ok) {
                 showNotification(`"${programData.title}" scheduled to record.`);
                 await loadScheduledJobs();
-                handleSearchAndFilter(false);
+                handleSearchAndFilter(false, true);
             } else if (res.status === 409) {
                 const conflictData = await res.json();
                 showConflictModal(conflictData);
@@ -647,7 +647,7 @@ function showConflictModal(conflictData) {
     `;
 
     // A simple confirm modal will be used for now. A more complex modal could be added later.
-    showConfirm('Recording Conflict', message, () => {});
+    showConfirm('Recording Conflict', message, () => { });
 }
 
 function formatBytes(bytes) {
