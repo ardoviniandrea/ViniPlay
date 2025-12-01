@@ -10,7 +10,7 @@ import { apiFetch, fetchConfig } from './modules/api.js'; // IMPORTED fetchConfi
 import { checkAuthStatus, setupAuthEventListeners } from './modules/auth.js';
 import { handleGuideLoad, finalizeGuideLoad, setupGuideEventListeners } from './modules/guide.js';
 //-- ENHANCEMENT: Import playChannel to handle the remote channel change event.
-import { setupPlayerEventListeners, playChannel, stopAndCleanupPlayer } from './modules/player.js';
+import { setupPlayerEventListeners, playChannel, stopAndCleanupPlayer, shouldMaintainAspectRatio } from './modules/player.js';
 import { setupSettingsEventListeners, populateTimezoneSelector, updateUIFromSettings } from './modules/settings.js';
 // MODIFIED: Imported showBroadcastMessage
 import { makeModalResizable, handleRouteChange, switchTab, handleConfirm, closeModal, makeColumnResizable, openMobileMenu, closeMobileMenu, showNotification, showBroadcastMessage, updateProcessingStatus, showConfirm, refreshGuideAfterProcessing } from './modules/ui.js';
@@ -43,7 +43,7 @@ function renderIcons() {
             const template = document.createElement('template');
             template.innerHTML = ICONS[iconName].trim();
             const svgElement = template.content.firstChild;
-            
+
             // Copy any existing classes from the placeholder to the SVG
             if (placeholder.className) {
                 svgElement.classList.add(...placeholder.className.split(' '));
@@ -83,10 +83,10 @@ function initializeSse() {
 
         // Show a non-error notification to the user that we are fixing things automatically.
         showNotification('Notification subscription expired. Re-subscribing automatically...', false, 5000);
-        
+
         // Automatically trigger the re-subscription process. The `true` flag forces it to
         // first unsubscribe the bad subscription from the browser before creating a new one.
-        subscribeUserToPush(true); 
+        subscribeUserToPush(true);
     });
 
     // NEW: Listen for real-time processing status updates
@@ -101,7 +101,7 @@ function initializeSse() {
         console.warn('[SSE] Received "force-logout" event from server.');
         const data = JSON.parse(event.data);
         showNotification(`Forced logout: ${data.reason}`, true, 5000);
-        
+
         // Wait a moment for the user to see the notification, then reload the page.
         // This will trigger the auth check, which will fail, showing the login screen.
         setTimeout(() => {
@@ -122,7 +122,7 @@ function initializeSse() {
     eventSource.addEventListener('change-channel', (event) => {
         console.log('[SSE] Received "change-channel" command from admin.');
         const { channel } = JSON.parse(event.data);
-        
+
         // Check which player is active and change its channel
         const currentPage = window.location.pathname;
         if (currentPage.startsWith('/tvguide') || currentPage === '/') {
@@ -179,7 +179,7 @@ export async function initMainApp() {
     try {
         console.log('[MAIN] Fetching initial configuration from server via api.js...');
         // REFACTORED: Use the centralized fetchConfig from api.js
-        const config = await fetchConfig(); 
+        const config = await fetchConfig();
         if (!config) {
             throw new Error(`Could not load configuration from server. Check logs for details.`);
         }
@@ -227,7 +227,7 @@ export async function initMainApp() {
                 loadedFromCache = true;
             }
         }
-        
+
         // If we didn't use the cache or the cache was incomplete, load from server config.
         if (!loadedFromCache) {
             if (config.m3uContent) {
@@ -237,12 +237,12 @@ export async function initMainApp() {
                 await saveDataToDB('sourcesLastUpdated', serverTimestamp);
                 console.log('[MAIN_CACHE] Updated local timestamp to match server.');
             } else {
-                 console.log('[MAIN] No M3U content from server or cache. Displaying no data message.');
-                 UIElements.initialLoadingIndicator.classList.add('hidden');
-                 UIElements.noDataMessage.classList.remove('hidden');
+                console.log('[MAIN] No M3U content from server or cache. Displaying no data message.');
+                UIElements.initialLoadingIndicator.classList.add('hidden');
+                UIElements.noDataMessage.classList.remove('hidden');
             }
         }
-        
+
         // Load the list of scheduled notifications for the UI
         console.log('[MAIN] Loading and scheduling notifications...');
         await loadAndScheduleNotifications();
@@ -386,10 +386,10 @@ function restoreDimensions() {
         UIElements.guideGrid.style.setProperty('--channel-col-width', `${guideState.settings.channelColumnWidth}px`);
         console.log(`[MAIN] Restored channel column width: ${guideState.settings.channelColumnWidth}px`);
     } else if (UIElements.guideGrid) {
-         // Set default if not in settings (or if it's the first run)
-         const defaultChannelWidth = window.innerWidth < 768 ? 64 : 180;
-         UIElements.guideGrid.style.setProperty('--channel-col-width', `${defaultChannelWidth}px`);
-         console.log(`[MAIN] Set default channel column width: ${defaultChannelWidth}px`);
+        // Set default if not in settings (or if it's the first run)
+        const defaultChannelWidth = window.innerWidth < 768 ? 64 : 180;
+        UIElements.guideGrid.style.setProperty('--channel-col-width', `${defaultChannelWidth}px`);
+        console.log(`[MAIN] Set default channel column width: ${defaultChannelWidth}px`);
     }
 }
 
@@ -422,12 +422,12 @@ function setupCoreEventListeners() {
     setupTabListener(UIElements.tabActivity, 'activity', initActivityPage); // NEW
     setupTabListener(UIElements.tabNotifications, 'notifications', loadAndScheduleNotifications);
     setupTabListener(UIElements.tabSettings, 'settings');
-    
+
     // Mobile Navigation
     UIElements.mobileMenuToggle?.addEventListener('click', openMobileMenu);
     UIElements.mobileMenuClose?.addEventListener('click', closeMobileMenu);
     UIElements.mobileMenuOverlay?.addEventListener('click', closeMobileMenu);
-    
+
     UIElements.mobileNavGuide?.addEventListener('click', () => switchTab('guide'));
     UIElements.mobileNavMultiview?.addEventListener('click', () => switchTab('multiview'));
     UIElements.mobileNavPlayer?.addEventListener('click', () => switchTab('player'));
@@ -445,7 +445,7 @@ function setupCoreEventListeners() {
 
     // --- Browser and Document Listeners ---
     window.addEventListener('popstate', () => { console.log('[NAV] Popstate event (browser back/forward).'); handleRouteChange(); });
-    
+
     // NEW: Refresh data when tab becomes visible again
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
@@ -465,14 +465,14 @@ function setupCoreEventListeners() {
     UIElements.confirmCancelBtn?.addEventListener('click', () => closeModal(UIElements.confirmModal));
     UIElements.confirmOkBtn?.addEventListener('click', handleConfirm);
     UIElements.detailsCloseBtn?.addEventListener('click', () => closeModal(UIElements.programDetailsModal));
-    
+
     //-- ENHANCEMENT: Centralized Channel Selector Modal Listeners with Context Switching
     UIElements.multiviewChannelFilter?.addEventListener('change', () => populateChannelSelector());
     UIElements.channelSelectorSearch?.addEventListener('input', () => {
         clearTimeout(appState.searchDebounceTimer);
         appState.searchDebounceTimer = setTimeout(() => populateChannelSelector(), 250);
     });
-    
+
     UIElements.channelSelectorList?.addEventListener('click', (e) => {
         const channelItem = e.target.closest('.channel-item');
         if (!channelItem) return;
@@ -480,7 +480,7 @@ function setupCoreEventListeners() {
         // Use a data attribute on the body to determine which function to call
         const context = document.body.dataset.channelSelectorContext;
         console.log(`[CHANNEL_SELECTOR] Click handled with context: ${context}`);
-        
+
         if (context === 'dvr') {
             handleDvrChannelClick(channelItem);
         } else if (context === 'admin') {
@@ -488,20 +488,37 @@ function setupCoreEventListeners() {
         } else { // Default to multiview
             handleMultiViewChannelClick(channelItem);
         }
-        
+
         // Clean up the context after use
         delete document.body.dataset.channelSelectorContext;
         closeModal(UIElements.multiviewChannelSelectorModal);
     });
-    
+
     UIElements.channelSelectorCancelBtn?.addEventListener('click', () => {
         delete document.body.dataset.channelSelectorContext;
         closeModal(UIElements.multiviewChannelSelectorModal);
     });
 
     // --- Resizable Elements ---
+    // --- Resizable Elements ---
     if (UIElements.videoResizeHandle && UIElements.videoModalContainer) {
-        makeModalResizable(UIElements.videoResizeHandle, UIElements.videoModalContainer, 400, 300, 'playerDimensions');
+        makeModalResizable(UIElements.videoResizeHandle, UIElements.videoModalContainer, 400, 300, 'playerDimensions', (newWidth) => {
+            const isLocked = shouldMaintainAspectRatio();
+
+            if (isLocked && UIElements.videoElement && UIElements.videoElement.videoWidth && UIElements.videoElement.videoHeight) {
+                const videoRatio = UIElements.videoElement.videoWidth / UIElements.videoElement.videoHeight;
+
+                if (!isFinite(videoRatio) || videoRatio === 0) return null;
+
+                // Calculate header height to add to the total height
+                const header = UIElements.videoModalContainer.querySelector('.flex.justify-between');
+                const headerHeight = header ? header.offsetHeight : 0;
+
+                // Calculate target height: (width / ratio) + headerHeight
+                return (newWidth / videoRatio) + headerHeight;
+            }
+            return null;
+        });
     }
     if (UIElements.detailsResizeHandle && UIElements.programDetailsContainer) {
         makeModalResizable(UIElements.detailsResizeHandle, UIElements.programDetailsContainer, 320, 250, 'programDetailsDimensions');
@@ -509,7 +526,7 @@ function setupCoreEventListeners() {
     if (UIElements.channelColumnResizeHandle && UIElements.guideGrid && window.innerWidth >= 768) {
         makeColumnResizable(UIElements.channelColumnResizeHandle, UIElements.guideGrid, 100, 'channelColumnWidth', '--channel-col-width');
     }
-    
+
     // --- Header Resize Observer ---
     if (UIElements.mainHeader && UIElements.unifiedGuideHeader) {
         const mainHeaderObserver = new ResizeObserver(entries => {
@@ -556,7 +573,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 appState.swRegistration = swReg;
                 // The following function is now INSIDE the .then() block
                 // This ensures it only runs after the service worker is ready.
-                return subscribeUserToPush(); 
+                return subscribeUserToPush();
             })
             .then(() => {
                 console.log('[MAIN] Push notification subscription process initiated after SW registration.');
