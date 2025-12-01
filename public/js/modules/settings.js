@@ -5,7 +5,7 @@
  */
 
 import { appState, guideState, UIElements } from './state.js';
-import { apiFetch, saveGlobalSetting, saveUserSetting } from './api.js';
+import { apiFetch, saveGlobalSetting, saveUserSetting, fetchAppVersion } from './api.js';
 // MODIFIED: Import isProcessingRunning for the button logic
 import { showNotification, openModal, closeModal, showConfirm, setButtonLoadingState, showProcessingModal, isProcessingRunning } from './ui.js';
 import { handleGuideLoad } from './guide.js';
@@ -30,6 +30,17 @@ async function fetchAndDisplayPublicIp() {
     } else {
         displayEl.textContent = 'Unavailable';
     }
+}
+
+/**
+ * Fetches the app version and displays it.
+ */
+async function fetchAndDisplayAppVersion() {
+    const displayEl = document.getElementById('app-version-display');
+    if (!displayEl) return;
+
+    const version = await fetchAppVersion();
+    displayEl.textContent = version;
 }
 
 
@@ -362,6 +373,7 @@ export const updateUIFromSettings = async () => {
     // Update dropdowns and inputs
     UIElements.timezoneOffsetSelect.value = settings.timezoneOffset;
     fetchAndDisplayPublicIp();
+    fetchAndDisplayAppVersion();
     UIElements.searchScopeSelect.value = settings.searchScope;
     UIElements.playerLogLevelSelect.value = settings.playerLogLevel;
     UIElements.dvrLogLevelSelect.value = settings.dvrLogLevel;
