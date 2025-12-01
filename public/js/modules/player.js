@@ -9,6 +9,8 @@ import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream } 
 import { showNotification, openModal, closeModal } from './ui.js';
 import { castState, loadMedia, setLocalPlayerState } from './cast.js';
 import { logToPlayerConsole } from './player_direct.js';
+import { ICONS } from './icons.js'; // NEW: Import ICONS
+import { getCodecName } from './codecs.js'; // NEW: Import codec utility
 
 let streamInfoInterval = null; // Interval to update stream stats
 let currentLocalStreamUrl = null; // ADDED: Track the original URL of the currently playing local stream
@@ -173,8 +175,8 @@ function updateStreamInfo() {
     UIElements.streamInfoFps.textContent = `FPS: ${fps}`;
     UIElements.streamInfoDropped.textContent = `Dropped: ${dropped}`;
     UIElements.streamInfoBuffer.textContent = `Buffer: ${buffer}`;
-    UIElements.streamInfoVideo.textContent = `V Codec: ${videoCodec}`;
-    UIElements.streamInfoAudio.textContent = `A Codec: ${audioCodec}`;
+    UIElements.streamInfoVideo.textContent = `V Codec: ${getCodecName(videoCodec)}`;
+    UIElements.streamInfoAudio.textContent = `A Codec: ${getCodecName(audioCodec)}`;
 }
 
 
@@ -303,6 +305,21 @@ export const playChannel = (url, name, channelId) => {
         UIElements.videoTitle.textContent = name;
         appState.player.attachMediaElement(UIElements.videoElement);
         appState.player.load();
+
+        // NEW: Enforce aspect ratio when metadata is loaded to ensure controls are visible
+        UIElements.videoElement.addEventListener('loadedmetadata', () => {
+            if (isAspectRatioLocked && UIElements.videoElement.videoWidth) {
+                const videoRatio = UIElements.videoElement.videoWidth / UIElements.videoElement.videoHeight;
+                const currentWidth = UIElements.videoModalContainer.offsetWidth;
+
+                // Calculate header height
+                const header = UIElements.videoModalContainer.querySelector('.flex.justify-between');
+                const headerHeight = header ? header.offsetHeight : 0;
+
+                const targetHeight = (currentWidth / videoRatio) + headerHeight;
+                UIElements.videoModalContainer.style.height = `${targetHeight}px`;
+            }
+        }, { once: true });
 
         UIElements.videoElement.volume = parseFloat(localStorage.getItem('iptvPlayerVolume') || 0.5);
 
@@ -626,6 +643,16 @@ export function setupPlayerEventListeners() {
         UIElements.streamInfoOverlay.classList.toggle('hidden');
     });
 
+    // REMOVED: Redundant videoModal click listener handled by ui.js openModal
+
+    // NEW: Aspect Ratio Lock Toggle
+    const aspectRatioLockBtn = document.getElementById('aspect-ratio-lock-btn');
+    if (aspectRatioLockBtn) {
+        aspectRatioLockBtn.addEventListener('click', toggleAspectRatioLock);
+        // Initialize button state
+        updateAspectRatioLockButton();
+    }
+
     if (UIElements.castBtn) {
         UIElements.castBtn.addEventListener('click', () => {
             console.log('[PLAYER] Custom cast button clicked. Requesting session...');
@@ -704,3 +731,54 @@ export function setupPlayerEventListeners() {
         updateSubtitleTrackList();
     });
 }
+
+// --- Aspect Ratio Logic ---
+let isAspectRatioLocked = true; // Default to locked
+
+export const toggleAspectRatioLock = () => {
+    isAspectRatioLocked = !isAspectRatioLocked;
+    updateAspectRatioLockButton();
+
+    // Visual feedback
+    const btn = document.getElementById('aspect-ratio-lock-btn');
+    if (btn) {
+        // Optional: Show a toast or tooltip
+        const icon = btn.querySelector('span');
+        if (icon) {
+            // Add a temporary animation class if desired
+        }
+    }
+};
+
+const updateAspectRatioLockButton = () => {
+    const btn = document.getElementById('aspect-ratio-lock-btn');
+    if (!btn) return;
+
+    const iconSpan = btn.querySelector('span');
+    if (isAspectRatioLocked) {
+        btn.classList.add('text-blue-500');
+        btn.classList.remove('text-gray-400');
+        if (iconSpan) {
+            iconSpan.innerHTML = ICONS.lock; // FIXED: Manually set SVG
+            iconSpan.setAttribute('data-icon', 'lock');
+        }
+    } else {
+        btn.classList.add('text-gray-400');
+        btn.classList.remove('text-blue-500');
+        if (iconSpan) {
+            iconSpan.innerHTML = ICONS.unlock; // FIXED: Manually set SVG
+            iconSpan.setAttribute('data-icon', 'unlock');
+        }
+    }
+};
+
+export const shouldMaintainAspectRatio = () => {
+    return isAspectRatioLocked;
+};
+
+export const getVideoAspectRatio = () => {
+    if (UIElements.videoElement && UIElements.videoElement.videoWidth && UIElements.videoElement.videoHeight) {
+        return UIElements.videoElement.videoWidth / UIElements.videoElement.videoHeight;
+    }
+    return 16 / 9; // Default fallback
+};
