@@ -73,6 +73,24 @@ export async function fetchConfig() {
 }
 
 /**
+ * Fetches the application version from the server.
+ * @returns {Promise<string>} The version string (e.g., "1.0.0") or "Unknown" on failure.
+ */
+export async function fetchAppVersion() {
+    console.log('[API] Fetching app version from /api/version.');
+    const response = await apiFetch('/api/version');
+    if (!response) return 'Unknown';
+
+    try {
+        const data = await response.json();
+        return data.version || 'Unknown';
+    } catch (e) {
+        console.error('[API] Error parsing version JSON:', e);
+        return 'Unknown';
+    }
+}
+
+/**
  * Saves a user-specific setting to the backend.
  * @param {string} key - The setting key.
  * @param {*} value - The setting value.
