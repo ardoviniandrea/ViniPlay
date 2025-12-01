@@ -3413,7 +3413,19 @@ app.post('/api/stream/stop', requireAuth, (req, res) => {
     const activeStreamInfo = activeStreamProcesses.get(streamKey);
 
     if (activeStreamInfo) {
-        console.log(`[STREAM_STOP_API] Received request to stop stream for user ${req.session.userId}. Terminating key: ${streamKey}`);
+        console.log(`[STREAM_STOP_API] Received request to stop stream for user ${req.session.userId}. Key: ${streamKey}`);
+
+        // --- NEW: Smart Termination Logic ---
+        // If there are other active references (e.g., another device), DO NOT kill the process.
+        if (activeStreamInfo.references > 1) {
+            console.log(`[STREAM_STOP_API] Stream ${streamKey} has ${activeStreamInfo.references} active references. NOT terminating process.`);
+            // We still return success because from the client's perspective, *their* session is done.
+            // The server just keeps the underlying process alive for the other client(s).
+            return res.json({ success: true, message: 'Stream kept alive for other active clients.' });
+        }
+        // --- END NEW ---
+
+        console.log(`[STREAM_STOP_API] No other references. Terminating process for key: ${streamKey}`);
         try {
             if (activeStreamInfo.historyId) {
                 const endTime = new Date().toISOString();
@@ -3510,6 +3522,22 @@ app.post('/api/activity/stop-redirect', requireAuth, (req, res) => {
             }
         );
     });
+});
+
+// --- NEW: App Version Endpoint ---
+app.get('/api/version', requireAuth, (req, res) => {
+    try {
+        const packageJsonPath = path.join(__dirname, 'package.json');
+        if (fs.existsSync(packageJsonPath)) {
+            const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+            res.json({ version: packageJson.version || 'Unknown' });
+        } else {
+            res.json({ version: 'Unknown' });
+        }
+    } catch (error) {
+        console.error('[API] Error reading package.json:', error);
+        res.status(500).json({ error: 'Could not determine app version.' });
+    }
 });
 
 // --- NEW/MODIFIED: Admin Monitoring Endpoints ---
@@ -3683,8 +3711,8 @@ app.get('/api/admin/system-health', requireAuth, requireAdmin, async (req, res) 
             },
             memory: {
                 total: mem.total,
-                used: mem.used,
-                percent: ((mem.used / mem.total) * 100).toFixed(2)
+                used: mem.active,
+                percent: ((mem.active / mem.total) * 100).toFixed(2)
             },
             disks: {
                 data: {
