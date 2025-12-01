@@ -173,27 +173,42 @@ export const setButtonLoadingState = (buttonEl, isLoading, originalContent) => {
 /**
  * Makes a modal window resizable by dragging a handle.
  */
-export const makeModalResizable = (handleEl, containerEl, minWidth, minHeight, settingKey) => {
+export const makeModalResizable = (handleEl, containerEl, minWidth, minHeight, settingKey, ratioCallback = null) => {
     import('./api.js').then(({ saveUserSetting }) => {
         let resizeDebounceTimer;
-        handleEl.addEventListener('mousedown', e => {
-            e.preventDefault();
+
+        const startResize = (clientX, clientY) => {
             isResizing = true;
-            const startX = e.clientX,
-                startY = e.clientY;
+            const startX = clientX;
+            const startY = clientY;
             const startWidth = containerEl.offsetWidth;
             const startHeight = containerEl.offsetHeight;
 
-            const doResize = (e) => {
-                const newWidth = startWidth + e.clientX - startX;
-                const newHeight = startHeight + e.clientY - startY;
-                containerEl.style.width = `${Math.max(minWidth, newWidth)}px`;
-                containerEl.style.height = `${Math.max(minHeight, newHeight)}px`;
+            const doResize = (moveEvent) => {
+                // Handle both mouse and touch events for coordinates
+                const currentX = moveEvent.touches ? moveEvent.touches[0].clientX : moveEvent.clientX;
+                const currentY = moveEvent.touches ? moveEvent.touches[0].clientY : moveEvent.clientY;
+
+                let newWidth = Math.max(minWidth, startWidth + currentX - startX);
+                let newHeight = Math.max(minHeight, startHeight + currentY - startY);
+
+                // Apply aspect ratio if callback is provided
+                if (ratioCallback) {
+                    const calculatedHeight = ratioCallback(newWidth);
+                    if (calculatedHeight) {
+                        newHeight = calculatedHeight;
+                    }
+                }
+
+                containerEl.style.width = `${newWidth}px`;
+                containerEl.style.height = `${newHeight}px`;
             };
 
             const stopResize = () => {
                 window.removeEventListener('mousemove', doResize);
                 window.removeEventListener('mouseup', stopResize);
+                window.removeEventListener('touchmove', doResize);
+                window.removeEventListener('touchend', stopResize);
                 document.body.style.cursor = '';
 
                 isResizing = false;
@@ -210,7 +225,19 @@ export const makeModalResizable = (handleEl, containerEl, minWidth, minHeight, s
             document.body.style.cursor = 'se-resize';
             window.addEventListener('mousemove', doResize);
             window.addEventListener('mouseup', stopResize);
+            window.addEventListener('touchmove', doResize, { passive: false });
+            window.addEventListener('touchend', stopResize);
+        };
+
+        handleEl.addEventListener('mousedown', e => {
+            e.preventDefault();
+            startResize(e.clientX, e.clientY);
         }, false);
+
+        handleEl.addEventListener('touchstart', e => {
+            e.preventDefault(); // Prevent scrolling while resizing
+            startResize(e.touches[0].clientX, e.touches[0].clientY);
+        }, { passive: false });
     });
 };
 
@@ -231,14 +258,14 @@ export const makeColumnResizable = (handleEl, targetEl, minWidth, settingKey, cs
             return;
         }
 
-        handleEl.addEventListener('mousedown', e => {
-            e.preventDefault();
+        const startResize = (clientX) => {
             isResizing = true;
-            startX = e.clientX;
+            startX = clientX;
             startWidth = parseInt(getComputedStyle(targetEl).getPropertyValue(cssVarName)) || minWidth;
 
-            const doResize = (e) => {
-                const newWidth = startWidth + (e.clientX - startX);
+            const doResize = (moveEvent) => {
+                const currentX = moveEvent.touches ? moveEvent.touches[0].clientX : moveEvent.clientX;
+                const newWidth = startWidth + (currentX - startX);
                 const finalWidth = Math.max(minWidth, newWidth);
                 targetEl.style.setProperty(cssVarName, `${finalWidth}px`);
 
@@ -250,6 +277,8 @@ export const makeColumnResizable = (handleEl, targetEl, minWidth, settingKey, cs
             const stopResize = () => {
                 window.removeEventListener('mousemove', doResize);
                 window.removeEventListener('mouseup', stopResize);
+                window.removeEventListener('touchmove', doResize);
+                window.removeEventListener('touchend', stopResize);
                 document.body.style.cursor = '';
                 isResizing = false;
 
@@ -263,7 +292,19 @@ export const makeColumnResizable = (handleEl, targetEl, minWidth, settingKey, cs
             document.body.style.cursor = 'ew-resize';
             window.addEventListener('mousemove', doResize);
             window.addEventListener('mouseup', stopResize);
+            window.addEventListener('touchmove', doResize, { passive: false });
+            window.addEventListener('touchend', stopResize);
+        };
+
+        handleEl.addEventListener('mousedown', e => {
+            e.preventDefault();
+            startResize(e.clientX);
         }, false);
+
+        handleEl.addEventListener('touchstart', e => {
+            e.preventDefault();
+            startResize(e.touches[0].clientX);
+        }, { passive: false });
     });
 };
 
