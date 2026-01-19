@@ -2202,4 +2202,302 @@ export function setupSettingsEventListeners() {
         console.warn('[SETTINGS] Clear logs button element not found!');
     }
 
+    // --- TIMESHIFT SETTINGS ---
+    setupTimeshiftSettings();
+
 }; // Closing brace for setupSettingsEventListeners (ensure this matches your file structure)
+
+// ============ TIMESHIFT SETTINGS FUNCTIONS ============
+
+/**
+ * Set up timeshift settings UI and event handlers
+ */
+function setupTimeshiftSettings() {
+    const addBtn = document.getElementById('add-timeshift-channel-btn');
+    const modal = document.getElementById('timeshift-channel-modal');
+    const form = document.getElementById('timeshift-channel-form');
+    const cancelBtn = document.getElementById('timeshift-channel-cancel-btn');
+    const channelSelect = document.getElementById('timeshift-channel-select');
+
+    if (!addBtn || !modal) return;
+
+    // Load initial data
+    loadTimeshiftChannels();
+    loadTimeshiftStatus();
+
+    // Add channel button
+    addBtn.addEventListener('click', () => {
+        resetTimeshiftModal();
+        populateTimeshiftChannelSelect();
+        openModal(modal);
+    });
+
+    // Cancel button
+    cancelBtn?.addEventListener('click', () => {
+        closeModal(modal);
+        resetTimeshiftModal();
+    });
+
+    // Form submit
+    form?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const channelId = channelSelect.value;
+        const channelName = channelSelect.options[channelSelect.selectedIndex]?.text;
+        const maxDurationHours = parseFloat(document.getElementById('timeshift-duration-hours').value) || 3;
+        const enabledCheckbox = document.getElementById('timeshift-channel-enabled');
+        const isEnabled = enabledCheckbox ? enabledCheckbox.checked : true;
+
+        if (!channelId) {
+            showNotification('Please select a channel', true);
+            return;
+        }
+
+        try {
+            let res;
+            if (editingTimeshiftChannelId) {
+                // Edit mode - use PUT
+                res = await apiFetch(`/api/timeshift/channels/${encodeURIComponent(editingTimeshiftChannelId)}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ maxDurationHours, isEnabled })
+                });
+
+                if (res.ok) {
+                    showNotification(`Updated timeshift settings for ${channelName}`);
+                    closeModal(modal);
+                    resetTimeshiftModal();
+                    loadTimeshiftChannels();
+                    loadTimeshiftStatus();
+                } else {
+                    const data = await res.json();
+                    showNotification(data.error || 'Failed to update timeshift settings', true);
+                }
+            } else {
+                // Add mode - use POST
+                res = await apiFetch('/api/timeshift/channels', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ channelId, channelName, maxDurationHours })
+                });
+
+                if (res.ok) {
+                    showNotification(`Timeshift enabled for ${channelName}`);
+                    closeModal(modal);
+                    resetTimeshiftModal();
+                    loadTimeshiftChannels();
+                    loadTimeshiftStatus();
+                } else {
+                    const data = await res.json();
+                    showNotification(data.error || 'Failed to enable timeshift', true);
+                }
+            }
+        } catch (err) {
+            showNotification('Error saving timeshift settings', true);
+        }
+    });
+}
+
+/**
+ * Load and display timeshift channels with their status
+ */
+async function loadTimeshiftChannels() {
+    const listEl = document.getElementById('timeshift-channels-list');
+    if (!listEl) return;
+
+    try {
+        // Fetch both channels and status in parallel
+        const [channelsRes, statusRes] = await Promise.all([
+            apiFetch('/api/timeshift/channels'),
+            apiFetch('/api/timeshift/status')
+        ]);
+
+        if (!channelsRes.ok) {
+            listEl.innerHTML = '<p class="text-red-400 text-sm">Failed to load channels</p>';
+            return;
+        }
+
+        const channels = await channelsRes.json();
+        const statusData = statusRes.ok ? await statusRes.json() : [];
+
+        // Create a map of channel status for quick lookup
+        const statusMap = new Map();
+        statusData.forEach(s => statusMap.set(s.channelId, s));
+
+        if (channels.length === 0) {
+            listEl.innerHTML = '<p class="text-gray-500 text-sm">No channels configured for timeshift</p>';
+            return;
+        }
+
+        listEl.innerHTML = channels.map(ch => {
+            const status = statusMap.get(ch.channel_id);
+            const isRecording = status?.isRunning;
+            const segmentCount = status?.segmentCount || 0;
+
+            // Calculate buffer time from segments (assuming 6s segments)
+            const bufferMins = Math.floor((segmentCount * 6) / 60);
+            const bufferHrs = Math.floor(bufferMins / 60);
+            const bufferRemMins = bufferMins % 60;
+            const bufferStr = bufferHrs > 0 ? `${bufferHrs}h ${bufferRemMins}m` : `${bufferMins}m`;
+
+            return `
+                <div class="flex items-center justify-between bg-gray-700 rounded-md px-3 py-2">
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2">
+                            <span class="text-white font-medium truncate">${escapeHtml(ch.channel_name)}</span>
+                            ${ch.is_enabled && isRecording
+                                ? '<span class="text-green-400 text-xs flex items-center gap-1"><span class="animate-pulse">●</span> Recording</span>'
+                                : ch.is_enabled
+                                    ? '<span class="text-yellow-400 text-xs">○ Starting...</span>'
+                                    : '<span class="text-gray-500 text-xs">○ Paused</span>'
+                            }
+                        </div>
+                        <div class="flex items-center gap-3 text-xs text-gray-400 mt-1">
+                            <span>Max: ${ch.max_duration_hours}h</span>
+                            ${isRecording ? `<span>Buffer: ${bufferStr}</span><span>${segmentCount} segments</span>` : ''}
+                        </div>
+                    </div>
+                    <div class="flex gap-2 ml-2">
+                        <button class="text-blue-400 hover:text-blue-300 text-sm" onclick="window.editTimeshiftChannel('${ch.channel_id}', '${escapeHtml(ch.channel_name)}', ${ch.max_duration_hours}, ${ch.is_enabled})">
+                            Edit
+                        </button>
+                        <button class="text-red-400 hover:text-red-300 text-sm" onclick="window.removeTimeshiftChannel('${ch.channel_id}')">
+                            Remove
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch (err) {
+        listEl.innerHTML = '<p class="text-red-400 text-sm">Error loading channels</p>';
+    }
+}
+
+/**
+ * Load and display timeshift status (deprecated - now merged into loadTimeshiftChannels)
+ */
+async function loadTimeshiftStatus() {
+    // This function is now a no-op as status is loaded with channels
+    // Kept for backward compatibility
+}
+
+/**
+ * Populate channel select dropdown
+ */
+function populateTimeshiftChannelSelect() {
+    const select = document.getElementById('timeshift-channel-select');
+    if (!select) return;
+
+    select.innerHTML = '<option value="">-- Select a channel --</option>';
+
+    const channels = guideState.channels || [];
+    channels.forEach(ch => {
+        const option = document.createElement('option');
+        option.value = ch.id;
+        option.textContent = ch.name || ch.displayName || ch.id;
+        select.appendChild(option);
+    });
+}
+
+/**
+ * Remove a timeshift channel
+ */
+function removeTimeshiftChannel(channelId) {
+    showConfirm(
+        'Remove Timeshift',
+        'Are you sure you want to disable timeshift for this channel? All recorded segments will be deleted.',
+        async () => {
+            try {
+                const res = await apiFetch(`/api/timeshift/channels/${encodeURIComponent(channelId)}`, {
+                    method: 'DELETE'
+                });
+
+                if (res.ok) {
+                    showNotification('Timeshift disabled');
+                    loadTimeshiftChannels();
+                } else {
+                    const data = await res.json();
+                    showNotification(data.error || 'Failed to disable timeshift', true);
+                }
+            } catch (err) {
+                showNotification('Error disabling timeshift', true);
+            }
+        }
+    );
+}
+
+// Track if we're in edit mode
+let editingTimeshiftChannelId = null;
+
+/**
+ * Open modal to edit a timeshift channel
+ */
+function editTimeshiftChannel(channelId, channelName, maxDurationHours, isEnabled) {
+    const modal = document.getElementById('timeshift-channel-modal');
+    const channelSelect = document.getElementById('timeshift-channel-select');
+    const durationInput = document.getElementById('timeshift-duration-hours');
+    const enabledCheckbox = document.getElementById('timeshift-channel-enabled');
+    const modalTitle = document.getElementById('timeshift-modal-title');
+    const confirmBtn = document.getElementById('timeshift-channel-confirm-btn');
+
+    if (!modal) return;
+
+    // Set edit mode
+    editingTimeshiftChannelId = channelId;
+
+    // Update modal title and button
+    if (modalTitle) modalTitle.textContent = 'Edit Timeshift Channel';
+    if (confirmBtn) confirmBtn.textContent = 'Save Changes';
+
+    // Disable channel selection in edit mode
+    if (channelSelect) {
+        channelSelect.innerHTML = `<option value="${channelId}" selected>${channelName}</option>`;
+        channelSelect.disabled = true;
+    }
+
+    // Set current values
+    if (durationInput) durationInput.value = maxDurationHours;
+    if (enabledCheckbox) enabledCheckbox.checked = isEnabled === 1;
+
+    // Show enabled checkbox container
+    const enabledContainer = document.getElementById('timeshift-enabled-container');
+    if (enabledContainer) enabledContainer.classList.remove('hidden');
+
+    openModal(modal);
+}
+
+/**
+ * Reset modal to add mode
+ */
+function resetTimeshiftModal() {
+    const channelSelect = document.getElementById('timeshift-channel-select');
+    const durationInput = document.getElementById('timeshift-duration-hours');
+    const enabledCheckbox = document.getElementById('timeshift-channel-enabled');
+    const enabledContainer = document.getElementById('timeshift-enabled-container');
+    const modalTitle = document.getElementById('timeshift-modal-title');
+    const confirmBtn = document.getElementById('timeshift-channel-confirm-btn');
+
+    editingTimeshiftChannelId = null;
+
+    if (modalTitle) modalTitle.textContent = 'Add Timeshift Channel';
+    if (confirmBtn) confirmBtn.textContent = 'Enable';
+    if (channelSelect) channelSelect.disabled = false;
+    if (durationInput) durationInput.value = 3;
+    if (enabledCheckbox) enabledCheckbox.checked = true;
+    if (enabledContainer) enabledContainer.classList.add('hidden');
+}
+
+// Expose to window for onclick handlers
+window.removeTimeshiftChannel = removeTimeshiftChannel;
+window.editTimeshiftChannel = editTimeshiftChannel;
+
+/**
+ * Helper to escape HTML
+ */
+function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#039;');
+}

@@ -8,6 +8,7 @@
     <link rel="icon" type="image/png" href="/viniplay.png">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/mpegts.js/dist/mpegts.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <!-- Shaka Player for VOD playback -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/4.7.0/shaka-player.compiled.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/fuse.js/dist/fuse.min.js"></script>
@@ -137,6 +138,14 @@
 
         body.modal-open {
             overflow: hidden;
+        }
+
+        /* Timeshift badge styles */
+        #timeshift-behind.live {
+            background-color: #dc2626;
+        }
+        #timeshift-behind.behind {
+            background-color: #2563eb;
         }
 
         button:disabled {
@@ -2091,6 +2100,25 @@
                         </div>
                     </div>
 
+                    <!-- Timeshift Settings -->
+                    <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
+                        <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Timeshift Settings</h2>
+                        <p class="text-sm text-gray-400 mb-4">Enable timeshift for specific channels to allow pausing and rewinding live TV.</p>
+
+                        <div class="space-y-4">
+                            <!-- Unified Timeshift Channels List -->
+                            <div>
+                                <div id="timeshift-channels-list" class="space-y-2 mb-4">
+                                    <p class="text-gray-500 text-sm">Loading...</p>
+                                </div>
+                                <button id="add-timeshift-channel-btn"
+                                    class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-2 px-4 rounded-md">
+                                    Add Channel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
                         <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">App Settings</h2>
                         <div class="space-y-4">
@@ -2380,6 +2408,13 @@
                     <p id="stream-info-video"></p>
                     <p id="stream-info-audio"></p>
                 </div>
+
+                <!-- TIMESHIFT UI -->
+                <div id="timeshift-badge" class="hidden absolute top-2 left-2 z-10">
+                    <span id="timeshift-behind" class="px-2 py-1 rounded text-xs font-bold bg-red-600 text-white live">LIVE</span>
+                </div>
+                <!-- END TIMESHIFT UI -->
+
                 <div id="cast-status"
                     class="hidden absolute inset-0 flex-col items-center justify-center bg-black text-white p-4">
                     <span data-icon="cast" class="w-16 h-16 mb-4"></span>
@@ -2522,6 +2557,47 @@
                         class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
                     <button type="submit"
                         class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-md">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Timeshift Channel Modal -->
+    <div id="timeshift-channel-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-lg shadow-xl w-full max-w-md">
+            <form id="timeshift-channel-form">
+                <div class="p-6">
+                    <h3 id="timeshift-modal-title" class="text-xl font-bold text-white mb-4">Add Timeshift Channel</h3>
+                    <div class="space-y-4">
+                        <div>
+                            <label for="timeshift-channel-select" class="block text-sm font-medium text-gray-400 mb-1">Select Channel</label>
+                            <select id="timeshift-channel-select"
+                                class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
+                                <option value="">-- Select a channel --</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="timeshift-duration-hours" class="block text-sm font-medium text-gray-400 mb-1">Buffer Duration (hours)</label>
+                            <input type="number" id="timeshift-duration-hours"
+                                class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                                min="0.5" max="24" step="0.5" value="3">
+                            <p class="text-xs text-gray-500 mt-1">How far back users can rewind (0.5 to 24 hours)</p>
+                        </div>
+                        <div id="timeshift-enabled-container" class="hidden">
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" id="timeshift-channel-enabled" checked
+                                    class="h-4 w-4 rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500">
+                                <span class="text-sm font-medium text-gray-400">Enabled</span>
+                            </label>
+                            <p class="text-xs text-gray-500 mt-1">Uncheck to pause timeshift recording without deleting segments</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-gray-700/50 px-6 py-4 flex justify-end gap-4 rounded-b-lg">
+                    <button type="button" id="timeshift-channel-cancel-btn"
+                        class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
+                    <button type="submit" id="timeshift-channel-confirm-btn"
+                        class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Enable</button>
                 </div>
             </form>
         </div>

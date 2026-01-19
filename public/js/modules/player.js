@@ -23,6 +23,10 @@ let retryCount = 0;
 const MAX_RETRIES = 3;
 let retryTimeout = null;
 
+// --- TIMESHIFT STATE ---
+let currentTimeshiftInfo = null; // Stores timeshift info for current channel
+let timeshiftPositionInterval = null; // Interval for updating position display
+
 /**
  * Handles a catastrophic stream error by attempting to restart the stream.
  */
@@ -87,6 +91,150 @@ export async function forceRefreshStream() {
 }
 
 
+// ============ TIMESHIFT FUNCTIONS ============
+
+/**
+ * Check if timeshift is available for a channel
+ */
+async function checkTimeshiftAvailability(channelId) {
+    try {
+        const response = await fetch(`/api/timeshift/info/${channelId}`);
+        if (!response.ok) return null;
+        return await response.json();
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Seek relative to current position in timeshift buffer
+ */
+export function seekTimeshiftRelative(seconds) {
+    if (!appState.player || !currentTimeshiftInfo) return;
+
+    const video = UIElements.videoElement;
+    const newTime = Math.max(0, Math.min(video.duration, video.currentTime + seconds));
+    video.currentTime = newTime;
+}
+
+/**
+ * Jump to live edge of timeshift stream
+ */
+export function seekToLive() {
+    if (!appState.player || !currentTimeshiftInfo) return;
+
+    const video = UIElements.videoElement;
+
+    // Seek to near the end of the buffer (live edge)
+    if (video.duration && isFinite(video.duration)) {
+        video.currentTime = video.duration - 3;
+        console.log(`[PLAYER] Seeking to live: ${video.currentTime.toFixed(1)}s`);
+    }
+}
+
+/**
+ * Get current position info in timeshift buffer
+ */
+function getTimeshiftPosition() {
+    if (!currentTimeshiftInfo || !appState.player) return null;
+
+    const video = UIElements.videoElement;
+    if (!video.duration || !isFinite(video.duration)) return null;
+
+    // For DVR, the live edge is the end of the buffer (video.duration)
+    const liveEdge = video.duration;
+    const behindLive = liveEdge - video.currentTime;
+
+    return {
+        currentTime: video.currentTime,
+        duration: video.duration,
+        liveEdge: liveEdge,
+        behindLiveSeconds: Math.max(0, behindLive),
+        isLive: behindLive < 15  // Within 15 seconds of live
+    };
+}
+
+/**
+ * Format seconds as hours:minutes:seconds
+ */
+function formatTimeshiftDuration(totalSeconds) {
+    const hours = Math.floor(totalSeconds / 3600);
+    const mins = Math.floor((totalSeconds % 3600) / 60);
+    const secs = Math.floor(totalSeconds % 60);
+
+    if (hours > 0) {
+        return `-${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    } else {
+        return `-${mins}:${secs.toString().padStart(2, '0')}`;
+    }
+}
+
+/**
+ * Update timeshift position display
+ */
+function updateTimeshiftPositionDisplay() {
+    const pos = getTimeshiftPosition();
+    const badge = document.getElementById('timeshift-behind');
+    const seekBar = document.getElementById('timeshift-seek-bar');
+
+    if (!pos || !badge) return;
+
+    if (pos.isLive) {
+        badge.textContent = 'LIVE';
+        badge.classList.remove('behind');
+        badge.classList.add('live');
+    } else {
+        badge.textContent = formatTimeshiftDuration(pos.behindLiveSeconds);
+        badge.classList.add('behind');
+        badge.classList.remove('live');
+    }
+
+    // Update seek bar position
+    if (seekBar && pos.duration > 0) {
+        seekBar.max = pos.duration;
+        seekBar.value = pos.currentTime;
+    }
+}
+
+/**
+ * Show/hide timeshift UI elements
+ */
+function setTimeshiftUIVisible(visible) {
+    const badge = document.getElementById('timeshift-badge');
+    const controls = document.getElementById('timeshift-controls');
+
+    if (badge) {
+        if (visible) {
+            badge.classList.remove('hidden');
+        } else {
+            badge.classList.add('hidden');
+        }
+    }
+
+    if (controls) {
+        if (visible) {
+            controls.classList.remove('hidden');
+        } else {
+            controls.classList.add('hidden');
+        }
+    }
+}
+
+/**
+ * Clean up timeshift state
+ */
+function cleanupTimeshiftState() {
+    currentTimeshiftInfo = null;
+    if (timeshiftPositionInterval) {
+        clearInterval(timeshiftPositionInterval);
+        timeshiftPositionInterval = null;
+    }
+    setTimeshiftUIVisible(false);
+}
+
+// ============ END TIMESHIFT FUNCTIONS ============
+
+
 /**
  * Stops the current local stream, cleans up the mpegts.js player instance, and closes the modal.
  * This does NOT affect an active Google Cast session.
@@ -105,6 +253,9 @@ export const stopAndCleanupPlayer = async () => { // MODIFIED: Made function asy
     }
     retryCount = 0;
     currentChannelInfo = null;
+
+    // Clear timeshift state
+    cleanupTimeshiftState();
 
 
     // Explicitly tell the server to stop the stream process.
@@ -186,7 +337,7 @@ function updateStreamInfo() {
  * @param {string} name - The name of the channel to display.
  * @param {string} channelId - The unique ID of the channel.
  */
-export const playChannel = (url, name, channelId) => {
+export const playChannel = async (url, name, channelId) => {
     // On a fresh play request (not a retry), reset the retry counter
     if (!retryTimeout) {
         retryCount = 0;
@@ -194,6 +345,9 @@ export const playChannel = (url, name, channelId) => {
 
     // Store current channel info for potential retries
     currentChannelInfo = { url, name, channelId };
+
+    // Clear any previous timeshift state
+    cleanupTimeshiftState();
 
     // Update and save recent channels regardless of playback target
     if (channelId) {
@@ -232,6 +386,13 @@ export const playChannel = (url, name, channelId) => {
         return showNotification("Stream profile not found.", true);
     }
 
+    // --- Check for timeshift availability ---
+    let timeshiftInfo = null;
+    if (channelId) {
+        timeshiftInfo = await checkTimeshiftAvailability(channelId);
+    }
+    const hasTimeshift = timeshiftInfo?.enabled && timeshiftInfo?.isRecording;
+
     const streamUrlToPlay = profile.command === 'redirect' ? url : `/stream?url=${encodeURIComponent(url)}&profileId=${profileId}&userAgentId=${userAgentId}`;
     const channel = guideState.channels.find(c => c.id === channelId);
     const logo = channel ? channel.logo : '';
@@ -252,7 +413,10 @@ export const playChannel = (url, name, channelId) => {
     currentProfileId = profileId; // Store the profile ID
     console.log(`[PLAYER] Playing channel "${name}" locally. Tracking URL for cleanup: ${currentLocalStreamUrl}, Profile: ${currentProfileId}`);
 
-    setLocalPlayerState(streamUrlToPlay, name, logo, url, profileId);
+    // Determine final URL to play (timeshift or regular stream)
+    const finalStreamUrl = hasTimeshift ? timeshiftInfo.playlistUrl : streamUrlToPlay;
+
+    setLocalPlayerState(finalStreamUrl, name, logo, url, profileId);
 
     if (appState.player) {
         appState.player.destroy();
@@ -263,18 +427,130 @@ export const playChannel = (url, name, channelId) => {
         streamInfoInterval = null;
     }
 
-    if (mpegts.isSupported()) {
+    // --- TIMESHIFT: Use hls.js for HLS playlist playback ---
+    if (hasTimeshift && typeof Hls !== 'undefined' && Hls.isSupported()) {
+        console.log(`[PLAYER] Timeshift enabled for ${name}, using HLS.js`);
+        console.log(`[PLAYER] Buffer: ${timeshiftInfo.bufferSeconds}s (${(timeshiftInfo.bufferSeconds / 60).toFixed(1)} min), segments: ${timeshiftInfo.segmentCount}`);
+        currentTimeshiftInfo = timeshiftInfo;
+
+        appState.player = new Hls({
+            enableWorker: true,
+            lowLatencyMode: false,
+            // Buffer settings for DVR/timeshift
+            backBufferLength: 300,
+            maxBufferLength: 30,
+            maxMaxBufferLength: 60,
+            startPosition: -1,
+            // DVR settings - don't force catch-up to live
+            liveSyncDurationCount: 3,
+            liveMaxLatencyDurationCount: 99999,
+            // Retry settings
+            fragLoadingMaxRetry: 2,
+            fragLoadingRetryDelay: 1000,
+            levelLoadingMaxRetry: 4,
+            // Handle buffer gaps when seeking
+            maxBufferHole: 2.0,
+            maxSeekHole: 6.0,
+            nudgeOffset: 0.2,
+            nudgeMaxRetry: 5,
+        });
+
+        appState.player.loadSource(finalStreamUrl);
+        appState.player.attachMedia(UIElements.videoElement);
+
+        appState.player.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+            console.log(`[PLAYER] HLS manifest parsed: ${data.levels.length} levels, starting playback`);
+            retryCount = 0;
+            UIElements.videoElement.play().catch(err => {
+                console.warn('[PLAYER] HLS autoplay failed:', err);
+            });
+        });
+
+        appState.player.on(Hls.Events.ERROR, (event, data) => {
+            console.warn(`[PLAYER] HLS Error: ${data.type} - ${data.details}`, data);
+
+            // Handle fragment loading errors (404s) by skipping ahead
+            if (data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR ||
+                data.details === Hls.ErrorDetails.FRAG_LOAD_TIMEOUT) {
+                const frag = data.frag;
+                if (frag) {
+                    console.warn(`[PLAYER] Fragment ${frag.sn} failed to load, skipping ahead...`);
+                    // Skip to the next segment by seeking forward
+                    const video = UIElements.videoElement;
+                    const skipTo = frag.start + frag.duration + 1;
+                    if (skipTo < video.duration) {
+                        console.log(`[PLAYER] Seeking from ${video.currentTime.toFixed(1)}s to ${skipTo.toFixed(1)}s`);
+                        video.currentTime = skipTo;
+                    }
+                }
+                return;
+            }
+
+            // Handle buffer stalls by seeking slightly forward
+            if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
+                console.warn('[PLAYER] Buffer stalled, attempting to unstick...');
+                const video = UIElements.videoElement;
+                video.currentTime += 0.5;
+                return;
+            }
+
+            if (data.fatal) {
+                if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                    console.log('[PLAYER] Fatal network error, trying to recover...');
+                    appState.player.startLoad();
+                } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                    console.log('[PLAYER] Fatal media error, trying to recover...');
+                    appState.player.recoverMediaError();
+                } else {
+                    showNotification(`HLS Error: ${data.details}`, true);
+                    stopAndCleanupPlayer();
+                }
+            }
+        });
+
+        // Debug: Log seeking and buffering to diagnose timeshift issues
+        appState.player.on(Hls.Events.FRAG_BUFFERED, (event, data) => {
+            const frag = data.frag;
+            const video = UIElements.videoElement;
+            const buffered = video.buffered;
+            if (buffered.length > 0) {
+                const bufferStart = buffered.start(0).toFixed(1);
+                const bufferEnd = buffered.end(buffered.length - 1).toFixed(1);
+                console.log(`[TIMESHIFT] Buffered SN:${frag.sn} | Buffer: ${bufferStart}-${bufferEnd}s | Position: ${video.currentTime?.toFixed(1)}s`);
+            }
+        });
+
+        UIElements.videoElement.addEventListener('seeking', () => {
+            console.log(`[TIMESHIFT] Seeking to ${UIElements.videoElement.currentTime?.toFixed(1)}s`);
+        });
+
+        // Show timeshift UI
+        setTimeshiftUIVisible(true);
+
+        // Start position update interval
+        timeshiftPositionInterval = setInterval(updateTimeshiftPositionDisplay, 1000);
+
+        openModal(UIElements.videoModal);
+        UIElements.videoTitle.textContent = name;
+
+    } else if (mpegts.isSupported()) {
+        // Regular live playback with mpegts.js
         const mpegtsConfig = {
             enableStashBuffer: true,
             stashInitialSize: 4096,
             liveBufferLatency: 2.0,
         };
 
-        appState.player = mpegts.createPlayer({
+        const playerConfig = {
             type: 'mse',
             isLive: true,
-            url: streamUrlToPlay
-        }, mpegtsConfig);
+            url: finalStreamUrl
+        };
+
+        // Hide timeshift UI
+        setTimeshiftUIVisible(false);
+
+        appState.player = mpegts.createPlayer(playerConfig, mpegtsConfig);
 
         // --- NEW: Robust Error Handling ---
         appState.player.on(mpegts.Events.ERROR, (errorType, errorDetail) => {
