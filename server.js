@@ -250,6 +250,20 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
                     db.run("ALTER TABLE stream_history ADD COLUMN stream_profile_name TEXT", () => { });
                 }
             });
+
+            // --- Timeshift Configuration Table ---
+            db.run(`CREATE TABLE IF NOT EXISTS timeshift_channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id TEXT UNIQUE NOT NULL,
+                channel_name TEXT NOT NULL,
+                max_duration_hours REAL NOT NULL DEFAULT 3,
+                is_enabled INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )`, (err) => {
+                if (err) console.error("[DB] Error creating 'timeshift_channels' table:", err.message);
+            });
+
             // --- DVR Job Loading and Scheduling (Moved from main execution flow) ---
             console.log('[DVR] Loading and scheduling all pending DVR jobs from database...');
             db.run("UPDATE dvr_jobs SET status = 'error', errorMessage = 'Server restarted during recording.' WHERE status = 'recording'", [], (err) => {
@@ -731,6 +745,13 @@ function getSettings() {
             maxFiles: 5,
             maxFileSizeBytes: 5 * 1024 * 1024, // 5MB
             autoDeleteDays: 7
+        },
+        timeshift: {
+            segmentDurationSeconds: 6,
+            cleanupIntervalMinutes: 5,
+            safetyBufferMinutes: 2,
+            hlsListSize: 0,  // Keep all segments in playlist
+            hlsDeleteThreshold: 0  // Don't auto-delete via FFmpeg (we manage deletion)
         }
     };
 
@@ -859,6 +880,40 @@ function getSettings() {
             if (settings.logs.autoDeleteDays === undefined) {
                 console.log(`[SETTINGS_MIGRATE] Adding missing logs.autoDeleteDays setting.`);
                 settings.logs.autoDeleteDays = defaultSettings.logs.autoDeleteDays;
+                needsSave = true;
+            }
+        }
+
+        // Timeshift settings migration
+        if (!settings.timeshift) {
+            console.log(`[SETTINGS_MIGRATE] Initializing missing timeshift settings block.`);
+            settings.timeshift = defaultSettings.timeshift;
+            needsSave = true;
+        } else {
+            // Ensure all timeshift sub-settings exist
+            if (settings.timeshift.segmentDurationSeconds === undefined) {
+                console.log(`[SETTINGS_MIGRATE] Adding missing timeshift.segmentDurationSeconds setting.`);
+                settings.timeshift.segmentDurationSeconds = defaultSettings.timeshift.segmentDurationSeconds;
+                needsSave = true;
+            }
+            if (settings.timeshift.cleanupIntervalMinutes === undefined) {
+                console.log(`[SETTINGS_MIGRATE] Adding missing timeshift.cleanupIntervalMinutes setting.`);
+                settings.timeshift.cleanupIntervalMinutes = defaultSettings.timeshift.cleanupIntervalMinutes;
+                needsSave = true;
+            }
+            if (settings.timeshift.safetyBufferMinutes === undefined) {
+                console.log(`[SETTINGS_MIGRATE] Adding missing timeshift.safetyBufferMinutes setting.`);
+                settings.timeshift.safetyBufferMinutes = defaultSettings.timeshift.safetyBufferMinutes;
+                needsSave = true;
+            }
+            if (settings.timeshift.hlsListSize === undefined) {
+                console.log(`[SETTINGS_MIGRATE] Adding missing timeshift.hlsListSize setting.`);
+                settings.timeshift.hlsListSize = defaultSettings.timeshift.hlsListSize;
+                needsSave = true;
+            }
+            if (settings.timeshift.hlsDeleteThreshold === undefined) {
+                console.log(`[SETTINGS_MIGRATE] Adding missing timeshift.hlsDeleteThreshold setting.`);
+                settings.timeshift.hlsDeleteThreshold = defaultSettings.timeshift.hlsDeleteThreshold;
                 needsSave = true;
             }
         }
@@ -4383,6 +4438,318 @@ async function autoDeleteOldRecordings() {
         });
     });
 }
+
+// ============ TIMESHIFT ENGINE ============
+
+const activeTimeshiftProcesses = new Map(); // channelId -> { process, startTime, hlsDir }
+const TIMESHIFT_DIR = path.join(DATA_DIR, 'timeshift');
+
+// Ensure timeshift directory exists
+if (!fs.existsSync(TIMESHIFT_DIR)) {
+    fs.mkdirSync(TIMESHIFT_DIR, { recursive: true });
+}
+
+/**
+ * Start timeshift recording for a channel
+ */
+async function startTimeshiftRecording(channelId, channelName) {
+    if (activeTimeshiftProcesses.has(channelId)) {
+        console.log(`[TIMESHIFT] Already recording channel: ${channelId}`);
+        return;
+    }
+
+    const settings = getSettings();
+    const tsSettings = settings.timeshift;
+
+    // Find channel URL from M3U
+    const m3uContent = fs.existsSync(LIVE_CHANNELS_M3U_PATH) ? fs.readFileSync(LIVE_CHANNELS_M3U_PATH, 'utf-8') : '';
+    const channels = parseM3U(m3uContent);
+    const channel = channels.find(c => c.id === channelId);
+
+    if (!channel) {
+        console.error(`[TIMESHIFT] Channel not found: ${channelId}`);
+        return;
+    }
+
+    // Create channel-specific directory
+    const hlsDir = path.join(TIMESHIFT_DIR, channelId);
+    if (!fs.existsSync(hlsDir)) {
+        fs.mkdirSync(hlsDir, { recursive: true });
+    }
+
+    const playlistPath = path.join(hlsDir, 'playlist.m3u8');
+    const segmentPattern = path.join(hlsDir, 'segment_%08d.ts');
+
+    // Build FFmpeg command for HLS output
+    const userAgent = (settings.userAgents || []).find(ua => ua.id === settings.activeUserAgentId);
+    const uaValue = userAgent?.value || 'ViniPlay/1.0';
+
+    const args = [
+        '-v', 'warning',
+        // Input options - must come BEFORE -i
+        '-fflags', '+genpts+discardcorrupt',  // Generate fresh PTS, discard corrupt frames
+        '-user_agent', uaValue,
+        '-i', channel.url,
+        // Output options
+        '-c', 'copy',  // No transcoding
+        '-avoid_negative_ts', 'make_zero',  // CRITICAL: Shift timestamps to start at 0
+        '-f', 'hls',
+        '-hls_time', String(tsSettings.segmentDurationSeconds),
+        '-hls_list_size', '0',  // Keep all segments in playlist
+        '-hls_flags', 'delete_segments+append_list+omit_endlist',
+        '-hls_segment_filename', segmentPattern,
+        playlistPath
+    ];
+
+    console.log(`[TIMESHIFT] Starting recording for ${channelName} (${channelId})`);
+
+    const ffmpegProcess = spawn('ffmpeg', args);
+
+    activeTimeshiftProcesses.set(channelId, {
+        process: ffmpegProcess,
+        pid: ffmpegProcess.pid,
+        startTime: new Date(),
+        hlsDir,
+        channelName
+    });
+
+    ffmpegProcess.stderr.on('data', (data) => {
+        const line = data.toString().trim();
+        // Only log warnings/errors, not routine progress
+        if (line.includes('Warning') || line.includes('Error') || line.includes('error')) {
+            console.log(`[TIMESHIFT][${channelId}] ${line}`);
+        }
+    });
+
+    ffmpegProcess.on('exit', (code, signal) => {
+        console.log(`[TIMESHIFT] Process exited for ${channelId}: code=${code}, signal=${signal}`);
+        activeTimeshiftProcesses.delete(channelId);
+
+        // Auto-restart unless intentionally stopped (SIGINT/SIGTERM)
+        // Stream can end with code 0 when source disconnects, so restart on any exit
+        const wasIntentionallyStopped = signal === 'SIGINT' || signal === 'SIGTERM';
+        if (!wasIntentionallyStopped) {
+            db.get('SELECT * FROM timeshift_channels WHERE channel_id = ? AND is_enabled = 1', [channelId], (err, config) => {
+                if (!err && config) {
+                    console.log(`[TIMESHIFT] Restarting recording for ${channelId} in 5 seconds...`);
+                    setTimeout(() => startTimeshiftRecording(channelId, channelName), 5000);
+                }
+            });
+        }
+    });
+
+    ffmpegProcess.on('error', (err) => {
+        console.error(`[TIMESHIFT] Process error for ${channelId}:`, err);
+        activeTimeshiftProcesses.delete(channelId);
+    });
+}
+
+/**
+ * Stop timeshift recording for a channel
+ */
+function stopTimeshiftRecording(channelId) {
+    const recording = activeTimeshiftProcesses.get(channelId);
+    if (!recording) {
+        return false;
+    }
+
+    console.log(`[TIMESHIFT] Stopping recording for ${channelId}`);
+    recording.process.kill('SIGINT');
+    activeTimeshiftProcesses.delete(channelId);
+    return true;
+}
+
+/**
+ * Get timeshift status for all channels
+ */
+function getTimeshiftStatus() {
+    const status = [];
+    for (const [channelId, info] of activeTimeshiftProcesses) {
+        const segmentCount = countTimeshiftSegments(info.hlsDir);
+        status.push({
+            channelId,
+            channelName: info.channelName,
+            startTime: info.startTime,
+            segmentCount,
+            isRunning: true
+        });
+    }
+    return status;
+}
+
+/**
+ * Count segments in a timeshift directory
+ */
+function countTimeshiftSegments(hlsDir) {
+    try {
+        const files = fs.readdirSync(hlsDir);
+        return files.filter(f => f.endsWith('.ts')).length;
+    } catch {
+        return 0;
+    }
+}
+
+/**
+ * Initialize timeshift recordings for all enabled channels
+ */
+async function initializeTimeshift() {
+    console.log('[TIMESHIFT] Initializing timeshift engine...');
+    db.all(`SELECT channel_id, channel_name FROM timeshift_channels WHERE is_enabled = 1`, [], async (err, channels) => {
+        if (err) {
+            console.error('[TIMESHIFT] Error fetching enabled channels:', err);
+            return;
+        }
+
+        for (const channel of channels) {
+            await startTimeshiftRecording(channel.channel_id, channel.channel_name);
+            // Stagger starts to avoid overwhelming the server
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        console.log(`[TIMESHIFT] Started ${channels.length} timeshift recordings`);
+    });
+}
+
+/**
+ * Graceful shutdown for timeshift processes
+ */
+function shutdownTimeshiftProcesses() {
+    console.log('[TIMESHIFT] Shutting down all recordings...');
+    for (const [channelId] of activeTimeshiftProcesses) {
+        stopTimeshiftRecording(channelId);
+    }
+}
+
+/**
+ * Clean up old timeshift segments for a channel
+ */
+function cleanupTimeshiftSegments(channelId, maxDurationHours, safetyBufferMinutes) {
+    const hlsDir = path.join(TIMESHIFT_DIR, channelId);
+    if (!fs.existsSync(hlsDir)) {
+        return { deleted: 0 };
+    }
+
+    const maxAgeMs = (maxDurationHours * 60 + safetyBufferMinutes) * 60 * 1000;
+    const cutoffTime = Date.now() - maxAgeMs;
+
+    let files;
+    try {
+        files = fs.readdirSync(hlsDir);
+    } catch {
+        return { deleted: 0 };
+    }
+
+    const segments = files.filter(f => f.endsWith('.ts'));
+    let deletedCount = 0;
+    const deletedSegments = [];
+
+    for (const segment of segments) {
+        const segmentPath = path.join(hlsDir, segment);
+        try {
+            const stats = fs.statSync(segmentPath);
+            if (stats.mtimeMs < cutoffTime) {
+                fs.unlinkSync(segmentPath);
+                deletedCount++;
+                deletedSegments.push(segment);
+            }
+        } catch (err) {
+            // Skip files that can't be accessed
+        }
+    }
+
+    if (deletedCount > 0) {
+        const remainingCount = segments.length - deletedCount;
+        console.log(`[TIMESHIFT_CLEANUP] Channel ${channelId}: Deleted ${deletedCount} segments (cutoff: ${maxDurationHours}h + ${safetyBufferMinutes}m buffer), ${remainingCount} remaining`);
+        if (deletedSegments.length <= 10) {
+            console.log(`[TIMESHIFT_CLEANUP] Deleted: ${deletedSegments.join(', ')}`);
+        } else {
+            console.log(`[TIMESHIFT_CLEANUP] Deleted: ${deletedSegments.slice(0, 5).join(', ')} ... ${deletedSegments.slice(-5).join(', ')}`);
+        }
+    }
+
+    return { deleted: deletedCount };
+}
+
+/**
+ * Regenerate playlist.m3u8 based on existing segments
+ */
+function regenerateTimeshiftPlaylist(channelId) {
+    const hlsDir = path.join(TIMESHIFT_DIR, channelId);
+    const playlistPath = path.join(hlsDir, 'playlist.m3u8');
+    const settings = getSettings();
+    const segmentDuration = settings.timeshift.segmentDurationSeconds;
+
+    let files;
+    try {
+        files = fs.readdirSync(hlsDir);
+    } catch {
+        return;
+    }
+
+    const segments = files
+        .filter(f => f.endsWith('.ts'))
+        .sort((a, b) => {
+            // Sort by segment number (segment_00001.ts)
+            const numA = parseInt(a.match(/(\d+)/)?.[1] || '0');
+            const numB = parseInt(b.match(/(\d+)/)?.[1] || '0');
+            return numA - numB;
+        });
+
+    if (segments.length === 0) {
+        return;
+    }
+
+    // Get the first segment number for media sequence
+    const firstSegmentNum = parseInt(segments[0].match(/(\d+)/)?.[1] || '0');
+
+    let playlist = '#EXTM3U\n';
+    playlist += '#EXT-X-VERSION:3\n';
+    playlist += `#EXT-X-TARGETDURATION:${segmentDuration}\n`;
+    playlist += `#EXT-X-MEDIA-SEQUENCE:${firstSegmentNum}\n`;
+
+    for (const segment of segments) {
+        playlist += `#EXTINF:${segmentDuration}.000000,\n`;
+        playlist += `${segment}\n`;
+    }
+
+    // Don't add ENDLIST - this is a live playlist
+
+    try {
+        fs.writeFileSync(playlistPath, playlist);
+    } catch (err) {
+        console.error(`[TIMESHIFT] Error writing playlist for ${channelId}:`, err);
+    }
+}
+
+/**
+ * Run cleanup for all timeshift channels
+ */
+function runTimeshiftCleanup() {
+    const settings = getSettings();
+    const safetyBuffer = settings.timeshift.safetyBufferMinutes;
+
+    db.all(`SELECT channel_id, max_duration_hours FROM timeshift_channels WHERE is_enabled = 1`, [], (err, channels) => {
+        if (err) {
+            console.error('[TIMESHIFT] Error fetching channels for cleanup:', err);
+            return;
+        }
+
+        let totalDeleted = 0;
+        for (const channel of channels) {
+            const result = cleanupTimeshiftSegments(
+                channel.channel_id,
+                channel.max_duration_hours,
+                safetyBuffer
+            );
+            totalDeleted += result.deleted;
+        }
+
+        if (totalDeleted > 0) {
+            console.log(`[TIMESHIFT] Total cleanup: ${totalDeleted} segments deleted`);
+        }
+    });
+}
+
 // --- DVR API Endpoints (MODIFIED & NEW) ---
 // ... existing DVR API Endpoints ...
 
@@ -4716,6 +5083,315 @@ app.delete('/api/dvr/jobs/:id/history', requireAuth, requireDvrAccess, (req, res
         }
     });
 });
+
+// ============ TIMESHIFT API ENDPOINTS ============
+
+// GET /api/timeshift/channels - List all timeshift-enabled channels
+app.get('/api/timeshift/channels', requireAuth, requireAdmin, (req, res) => {
+    db.all(`SELECT * FROM timeshift_channels ORDER BY channel_name`, [], (err, channels) => {
+        if (err) {
+            console.error('[TIMESHIFT_API] Error fetching timeshift channels:', err);
+            return res.status(500).json({ error: 'Failed to retrieve timeshift channels.' });
+        }
+        res.json(channels);
+    });
+});
+
+// POST /api/timeshift/channels - Enable timeshift for a channel
+app.post('/api/timeshift/channels', requireAuth, requireAdmin, (req, res) => {
+    const { channelId, channelName, maxDurationHours } = req.body;
+
+    if (!channelId || !channelName) {
+        return res.status(400).json({ error: 'channelId and channelName are required.' });
+    }
+
+    const duration = parseFloat(maxDurationHours) || 3;
+
+    db.run(`INSERT OR REPLACE INTO timeshift_channels (channel_id, channel_name, max_duration_hours, is_enabled, updated_at)
+            VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)`,
+        [channelId, channelName, duration],
+        function(err) {
+            if (err) {
+                console.error('[TIMESHIFT_API] Error adding timeshift channel:', err);
+                return res.status(500).json({ error: 'Failed to add timeshift channel.' });
+            }
+            console.log(`[TIMESHIFT] Enabled timeshift for channel: ${channelName} (${channelId}) with ${duration}h buffer`);
+
+            // Start recording for this channel
+            startTimeshiftRecording(channelId, channelName);
+
+            res.status(201).json({
+                success: true,
+                id: this.lastID,
+                channelId,
+                channelName,
+                maxDurationHours: duration
+            });
+        }
+    );
+});
+
+// PUT /api/timeshift/channels/:channelId - Update channel config
+app.put('/api/timeshift/channels/:channelId', requireAuth, requireAdmin, (req, res) => {
+    const { channelId } = req.params;
+    const { maxDurationHours, isEnabled } = req.body;
+
+    const updates = [];
+    const params = [];
+
+    if (maxDurationHours !== undefined) {
+        updates.push('max_duration_hours = ?');
+        params.push(parseFloat(maxDurationHours));
+    }
+    if (isEnabled !== undefined) {
+        updates.push('is_enabled = ?');
+        params.push(isEnabled ? 1 : 0);
+    }
+
+    if (updates.length === 0) {
+        return res.status(400).json({ error: 'No valid fields to update.' });
+    }
+
+    updates.push('updated_at = CURRENT_TIMESTAMP');
+    params.push(channelId);
+
+    db.run(`UPDATE timeshift_channels SET ${updates.join(', ')} WHERE channel_id = ?`,
+        params,
+        function(err) {
+            if (err) {
+                console.error('[TIMESHIFT_API] Error updating timeshift channel:', err);
+                return res.status(500).json({ error: 'Failed to update timeshift channel.' });
+            }
+            if (this.changes === 0) {
+                return res.status(404).json({ error: 'Timeshift channel not found.' });
+            }
+            console.log(`[TIMESHIFT] Updated timeshift config for channel: ${channelId}`);
+
+            // Handle start/stop based on isEnabled change
+            if (isEnabled !== undefined) {
+                db.get('SELECT channel_name FROM timeshift_channels WHERE channel_id = ?', [channelId], (err, row) => {
+                    if (!err && row) {
+                        if (isEnabled) {
+                            startTimeshiftRecording(channelId, row.channel_name);
+                        } else {
+                            stopTimeshiftRecording(channelId);
+                        }
+                    }
+                });
+            }
+
+            res.json({ success: true });
+        }
+    );
+});
+
+// DELETE /api/timeshift/channels/:channelId - Disable timeshift
+app.delete('/api/timeshift/channels/:channelId', requireAuth, requireAdmin, (req, res) => {
+    const { channelId } = req.params;
+
+    db.run(`DELETE FROM timeshift_channels WHERE channel_id = ?`, [channelId], function(err) {
+        if (err) {
+            console.error('[TIMESHIFT_API] Error deleting timeshift channel:', err);
+            return res.status(500).json({ error: 'Failed to delete timeshift channel.' });
+        }
+        if (this.changes === 0) {
+            return res.status(404).json({ error: 'Timeshift channel not found.' });
+        }
+        console.log(`[TIMESHIFT] Disabled timeshift for channel: ${channelId}`);
+
+        // Stop recording
+        stopTimeshiftRecording(channelId);
+
+        // Delete segments directory
+        const hlsDir = path.join(TIMESHIFT_DIR, channelId);
+        if (fs.existsSync(hlsDir)) {
+            try {
+                fs.rmSync(hlsDir, { recursive: true, force: true });
+                console.log(`[TIMESHIFT] Deleted segments directory for ${channelId}`);
+            } catch (rmErr) {
+                console.error(`[TIMESHIFT] Error deleting segments directory for ${channelId}:`, rmErr);
+            }
+        }
+
+        res.json({ success: true });
+    });
+});
+
+// GET /api/timeshift/stream/:channelId/playlist.m3u8 - Get HLS playlist (dynamically generated)
+app.get('/api/timeshift/stream/:channelId/playlist.m3u8', requireAuth, (req, res) => {
+    const { channelId } = req.params;
+    const hlsDir = path.join(TIMESHIFT_DIR, channelId);
+
+    // Check if timeshift is enabled for this channel
+    db.get('SELECT * FROM timeshift_channels WHERE channel_id = ? AND is_enabled = 1', [channelId], (err, config) => {
+        if (err) {
+            console.error('[TIMESHIFT_API] Error checking channel config:', err);
+            return res.status(500).json({ error: 'Server error' });
+        }
+        if (!config) {
+            return res.status(404).json({ error: 'Timeshift not enabled for this channel' });
+        }
+
+        if (!fs.existsSync(hlsDir)) {
+            return res.status(404).json({ error: 'Timeshift directory not found' });
+        }
+
+        // Dynamically generate playlist based on existing segments
+        let files;
+        try {
+            files = fs.readdirSync(hlsDir);
+        } catch (e) {
+            return res.status(500).json({ error: 'Failed to read timeshift directory' });
+        }
+
+        const settings = getSettings();
+        const segmentDuration = settings.timeshift.segmentDurationSeconds;
+
+        let segments = files
+            .filter(f => f.endsWith('.ts'))
+            .sort((a, b) => {
+                const numA = parseInt(a.match(/(\d+)/)?.[1] || '0');
+                const numB = parseInt(b.match(/(\d+)/)?.[1] || '0');
+                return numA - numB;
+            });
+
+        if (segments.length === 0) {
+            return res.status(404).json({ error: 'No segments available yet' });
+        }
+
+        // Limit to configured buffer duration
+        const maxDurationSeconds = config.max_duration_hours * 3600;
+        const maxSegments = Math.floor(maxDurationSeconds / segmentDuration);
+
+        if (segments.length > maxSegments) {
+            segments = segments.slice(-maxSegments);
+            console.log(`[TIMESHIFT_PLAYLIST] Channel ${channelId}: Limited to ${segments.length} segments for ${config.max_duration_hours}h buffer`);
+        }
+
+        // Verify segments exist (handle race with cleanup)
+        segments = segments.filter(seg => fs.existsSync(path.join(hlsDir, seg)));
+
+        if (segments.length === 0) {
+            return res.status(404).json({ error: 'No valid segments available' });
+        }
+
+        // Parse segment numbers, get file timestamps, and detect gaps
+        const segmentData = segments.map(seg => {
+            const segPath = path.join(hlsDir, seg);
+            let mtime = null;
+            try {
+                mtime = fs.statSync(segPath).mtime;
+            } catch (e) {
+                // File might have been deleted, skip
+            }
+            return {
+                filename: seg,
+                num: parseInt(seg.match(/(\d+)/)?.[1] || '0'),
+                mtime
+            };
+        }).filter(seg => seg.mtime !== null); // Only include segments we can stat
+
+        if (segmentData.length === 0) {
+            return res.status(404).json({ error: 'No valid segments available' });
+        }
+
+        const firstSegmentNum = segmentData[0].num;
+        const lastSegmentNum = segmentData[segmentData.length - 1].num;
+        console.log(`[TIMESHIFT] Playlist for ${channelId}: ${segmentData.length} segments (${firstSegmentNum}-${lastSegmentNum})`);
+
+        // Use HLS version 6 for EXT-X-PROGRAM-DATE-TIME support
+        let playlist = '#EXTM3U\n';
+        playlist += '#EXT-X-VERSION:6\n';
+        playlist += `#EXT-X-TARGETDURATION:${segmentDuration + 1}\n`;
+        playlist += `#EXT-X-MEDIA-SEQUENCE:${firstSegmentNum}\n`;
+
+        // Build playlist with PROGRAM-DATE-TIME and discontinuity markers
+        let prevNum = firstSegmentNum - 1;
+        for (const seg of segmentData) {
+            // Add discontinuity marker if there's a gap in segment numbers
+            if (seg.num !== prevNum + 1 && prevNum >= firstSegmentNum) {
+                playlist += '#EXT-X-DISCONTINUITY\n';
+            }
+            // Add PROGRAM-DATE-TIME to help player map segments correctly after cleanup
+            playlist += `#EXT-X-PROGRAM-DATE-TIME:${seg.mtime.toISOString()}\n`;
+            playlist += `#EXTINF:${segmentDuration}.000000,\n`;
+            playlist += `${seg.filename}\n`;
+            prevNum = seg.num;
+        }
+
+        // Don't add ENDLIST - this is a live playlist
+
+        res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.send(playlist);
+    });
+});
+
+// GET /api/timeshift/stream/:channelId/:segment - Get segment file
+app.get('/api/timeshift/stream/:channelId/:segment', requireAuth, (req, res) => {
+    const { channelId, segment } = req.params;
+    const hlsDir = path.join(TIMESHIFT_DIR, channelId);
+    const segmentPath = path.join(hlsDir, segment);
+
+    // Validate segment filename (prevent directory traversal)
+    if (!segment.match(/^segment_\d+\.ts$/)) {
+        return res.status(400).json({ error: 'Invalid segment filename' });
+    }
+
+    if (!fs.existsSync(segmentPath)) {
+        console.warn(`[TIMESHIFT_SEGMENT] 404: ${channelId}/${segment} - segment file not found`);
+        return res.status(404).json({ error: 'Segment not found' });
+    }
+
+    res.setHeader('Content-Type', 'video/mp2t');
+    res.setHeader('Cache-Control', 'public, max-age=31536000'); // Segments are immutable
+    res.sendFile(segmentPath);
+});
+
+// GET /api/timeshift/info/:channelId - Get timeshift info for a channel
+app.get('/api/timeshift/info/:channelId', requireAuth, (req, res) => {
+    const { channelId } = req.params;
+
+    db.get('SELECT * FROM timeshift_channels WHERE channel_id = ?', [channelId], (err, config) => {
+        if (err) {
+            console.error('[TIMESHIFT_API] Error fetching channel config:', err);
+            return res.status(500).json({ error: 'Server error' });
+        }
+
+        if (!config) {
+            return res.json({ enabled: false });
+        }
+
+        const recording = activeTimeshiftProcesses.get(channelId);
+        const hlsDir = path.join(TIMESHIFT_DIR, channelId);
+        const segmentCount = countTimeshiftSegments(hlsDir);
+        const settings = getSettings();
+        const segmentDuration = settings.timeshift.segmentDurationSeconds;
+
+        // Calculate effective buffer based on config limit
+        const maxDurationSeconds = config.max_duration_hours * 3600;
+        const maxSegments = Math.floor(maxDurationSeconds / segmentDuration);
+        const effectiveSegmentCount = Math.min(segmentCount, maxSegments);
+        const bufferSeconds = effectiveSegmentCount * segmentDuration;
+
+        res.json({
+            enabled: config.is_enabled === 1,
+            maxDurationHours: config.max_duration_hours,
+            isRecording: !!recording,
+            startTime: recording?.startTime,
+            segmentCount: effectiveSegmentCount,
+            bufferSeconds,
+            playlistUrl: `/api/timeshift/stream/${channelId}/playlist.m3u8`
+        });
+    });
+});
+
+// GET /api/timeshift/status - Get status of all active timeshift recordings
+app.get('/api/timeshift/status', requireAuth, requireAdmin, (req, res) => {
+    const status = getTimeshiftStatus();
+    res.json(status);
+});
+
 // ... existing SSE and other endpoints ...
 app.get('/api/events', requireAuth, (req, res) => {
     const userId = req.session.userId;
@@ -5093,8 +5769,26 @@ detectHardwareAcceleration().then(() => {
         schedule.scheduleJob('0 2 * * *', autoDeleteOldRecordings);
         console.log('[DVR_STORAGE] Scheduled daily cleanup of old recordings.');
 
+        // Initialize timeshift recordings for all enabled channels
+        initializeTimeshift();
+
+        // Schedule timeshift cleanup (every 5 minutes by default)
+        const timeshiftCleanupInterval = getSettings().timeshift.cleanupIntervalMinutes || 5;
+        schedule.scheduleJob(`*/${timeshiftCleanupInterval} * * * *`, runTimeshiftCleanup);
+        console.log(`[TIMESHIFT] Scheduled segment cleanup every ${timeshiftCleanupInterval} minutes.`);
 
     });
+});
+
+// Graceful shutdown handler for timeshift processes
+process.on('SIGTERM', () => {
+    console.log('[SHUTDOWN] Received SIGTERM signal...');
+    shutdownTimeshiftProcesses();
+});
+
+process.on('SIGINT', () => {
+    console.log('[SHUTDOWN] Received SIGINT signal...');
+    shutdownTimeshiftProcesses();
 });
 
 // --- Helper Functions (Full Implementation) ---
