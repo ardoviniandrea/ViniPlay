@@ -330,9 +330,12 @@ export const closeMobileMenu = () => {
     if (UIElements.mobileNavMenu) {
         UIElements.mobileNavMenu.classList.add('-translate-x-full');
         UIElements.mobileNavMenu.classList.remove('translate-x-0');
-        UIElements.mobileNavMenu.addEventListener('transitionend', function handler() {
-            UIElements.mobileNavMenu.classList.add('hidden');
-            UIElements.mobileNavMenu.removeEventListener('transitionend', handler);
+        UIElements.mobileNavMenu.addEventListener('transitionend', function handler(e) {
+            // Only hide after the transform transition ends (not hover background transitions)
+            if (e.propertyName === 'transform' && e.target === UIElements.mobileNavMenu) {
+                UIElements.mobileNavMenu.classList.add('hidden');
+                UIElements.mobileNavMenu.removeEventListener('transitionend', handler);
+            }
         });
     }
     if (UIElements.mobileMenuOverlay) {
