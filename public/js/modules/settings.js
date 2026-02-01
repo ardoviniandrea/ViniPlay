@@ -743,8 +743,10 @@ export const updateUIFromSettings = async () => {
     if (UIElements.logMaxSizeInput) UIElements.logMaxSizeInput.value = Math.round(settings.logs.maxFileSizeBytes / (1024 * 1024));
     if (UIElements.logAutoDeleteDaysInput) UIElements.logAutoDeleteDaysInput.value = settings.logs.autoDeleteDays;
 
-    // Fetch and display log info
-    refreshLogInfo();
+    // Fetch and display log info (admin only)
+    if (appState.currentUser?.isAdmin) {
+        refreshLogInfo();
+    }
 
     // Render tables
     renderSourceTable('m3u');
@@ -864,6 +866,9 @@ export const updateUIFromSettings = async () => {
     const selectedCastProfile = (settings.castProfiles || []).find(p => p.id === UIElements.castProfileSelect.value);
     UIElements.editCastProfileBtn.disabled = !selectedCastProfile;
     UIElements.deleteCastProfileBtn.disabled = !selectedCastProfile || selectedCastProfile?.isDefault;
+
+    // --- OIDC Settings UI ---
+    loadOidcSettingsUI(settings);
 
     // FIX: Only refresh the user list if the current user is an admin.
     // This prevents errors for non-admin users during the initial app load.
@@ -2202,4 +2207,150 @@ export function setupSettingsEventListeners() {
         console.warn('[SETTINGS] Clear logs button element not found!');
     }
 
+    // --- OIDC Settings Event Listeners ---
+    setupOidcSettingsListeners();
+
 }; // Closing brace for setupSettingsEventListeners (ensure this matches your file structure)
+
+// --- OIDC Settings Functions ---
+
+/**
+ * Loads OIDC settings into the UI elements
+ * @param {object} settings - The current settings object
+ */
+function loadOidcSettingsUI(settings) {
+    const oidc = settings.oidc || {};
+    
+    const enabledToggle = document.getElementById('oidc-enabled-toggle');
+    const configFields = document.getElementById('oidc-config-fields');
+    const issuerUrl = document.getElementById('oidc-issuer-url');
+    const clientId = document.getElementById('oidc-client-id');
+    const clientSecret = document.getElementById('oidc-client-secret');
+    const redirectUri = document.getElementById('oidc-redirect-uri');
+    const scopes = document.getElementById('oidc-scopes');
+    const buttonText = document.getElementById('oidc-button-text-input');
+    const usernameClaim = document.getElementById('oidc-username-claim');
+    const autoCreateToggle = document.getElementById('oidc-auto-create-toggle');
+    const defaultAdminToggle = document.getElementById('oidc-default-admin-toggle');
+    const defaultDvrToggle = document.getElementById('oidc-default-dvr-toggle');
+    
+    if (!enabledToggle) return; // OIDC elements not present
+    
+    // Set values - use explicit boolean check for enabled
+    enabledToggle.checked = oidc.enabled === true;
+    if (issuerUrl) issuerUrl.value = oidc.issuerUrl || '';
+    if (clientId) clientId.value = oidc.clientId || '';
+    if (clientSecret) clientSecret.value = oidc.clientSecret || '';
+    if (redirectUri) {
+        // Auto-populate redirect URI if empty
+        if (!oidc.redirectUri) {
+            redirectUri.value = `${window.location.origin}/api/auth/oidc/callback`;
+        } else {
+            redirectUri.value = oidc.redirectUri;
+        }
+    }
+    if (scopes) scopes.value = oidc.scopes || 'openid profile email';
+    if (buttonText) buttonText.value = oidc.buttonText || 'Login with SSO';
+    if (usernameClaim) usernameClaim.value = oidc.claimMapping?.username || 'preferred_username';
+    if (autoCreateToggle) autoCreateToggle.checked = oidc.autoCreateUsers !== false; // Default true
+    if (defaultAdminToggle) defaultAdminToggle.checked = oidc.defaultIsAdmin || false;
+    if (defaultDvrToggle) defaultDvrToggle.checked = oidc.defaultCanUseDvr !== false; // Default true
+    
+    // Show/hide config fields based on enabled state
+    if (configFields) {
+        configFields.classList.toggle('hidden', !enabledToggle.checked);
+    }
+}
+
+/**
+ * Sets up event listeners for OIDC settings
+ */
+function setupOidcSettingsListeners() {
+    const enabledToggle = document.getElementById('oidc-enabled-toggle');
+    const configFields = document.getElementById('oidc-config-fields');
+    const saveBtn = document.getElementById('oidc-save-btn');
+    
+    if (!enabledToggle) return; // OIDC elements not present
+    
+    // Toggle config fields visibility and auto-save when disabling
+    enabledToggle.addEventListener('change', async () => {
+        if (configFields) {
+            configFields.classList.toggle('hidden', !enabledToggle.checked);
+        }
+        
+        // Auto-save when disabling OIDC (no validation needed)
+        if (!enabledToggle.checked) {
+            try {
+                const oidcSettings = {
+                    ...guideState.settings.oidc,
+                    enabled: false
+                };
+                const success = await saveGlobalSetting({ oidc: oidcSettings });
+                if (success) {
+                    showNotification('OIDC disabled.');
+                    guideState.settings.oidc = oidcSettings;
+                }
+            } catch (err) {
+                console.error('[OIDC] Error disabling:', err);
+                showNotification('Failed to disable OIDC.', true);
+                // Revert toggle on error
+                enabledToggle.checked = true;
+                if (configFields) configFields.classList.remove('hidden');
+            }
+        }
+    });
+    
+    // Save OIDC settings
+    if (saveBtn) {
+        saveBtn.addEventListener('click', async () => {
+            const oidcSettings = {
+                enabled: document.getElementById('oidc-enabled-toggle')?.checked === true,
+                issuerUrl: document.getElementById('oidc-issuer-url')?.value?.trim() || '',
+                clientId: document.getElementById('oidc-client-id')?.value?.trim() || '',
+                clientSecret: document.getElementById('oidc-client-secret')?.value || '',
+                redirectUri: document.getElementById('oidc-redirect-uri')?.value?.trim() || '',
+                scopes: document.getElementById('oidc-scopes')?.value?.trim() || 'openid profile email',
+                buttonText: document.getElementById('oidc-button-text-input')?.value?.trim() || 'Login with SSO',
+                autoCreateUsers: document.getElementById('oidc-auto-create-toggle')?.checked === true,
+                defaultIsAdmin: document.getElementById('oidc-default-admin-toggle')?.checked === true,
+                defaultCanUseDvr: document.getElementById('oidc-default-dvr-toggle')?.checked === true,
+                claimMapping: {
+                    username: document.getElementById('oidc-username-claim')?.value || 'preferred_username',
+                    email: 'email'
+                }
+            };
+            
+            // Validation
+            if (oidcSettings.enabled) {
+                if (!oidcSettings.issuerUrl) {
+                    showNotification('Issuer URL is required when OIDC is enabled.', true);
+                    return;
+                }
+                if (!oidcSettings.clientId) {
+                    showNotification('Client ID is required when OIDC is enabled.', true);
+                    return;
+                }
+                if (!oidcSettings.clientSecret) {
+                    showNotification('Client Secret is required when OIDC is enabled.', true);
+                    return;
+                }
+                if (!oidcSettings.redirectUri) {
+                    showNotification('Redirect URI is required when OIDC is enabled.', true);
+                    return;
+                }
+            }
+            
+            try {
+                const success = await saveGlobalSetting({ oidc: oidcSettings });
+                if (success) {
+                    showNotification('OIDC settings saved successfully.');
+                    // Update local state
+                    guideState.settings.oidc = oidcSettings;
+                }
+            } catch (err) {
+                console.error('[OIDC] Error saving settings:', err);
+                showNotification('Failed to save OIDC settings.', true);
+            }
+        });
+    }
+}

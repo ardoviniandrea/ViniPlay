@@ -1211,6 +1211,22 @@
                 </div>
                 <button type="submit"
                     class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition-colors">Login</button>
+                
+                <!-- OIDC SSO Login Button (hidden by default, shown if OIDC is enabled) -->
+                <div id="oidc-login-container" class="hidden">
+                    <div class="relative flex items-center py-2">
+                        <div class="flex-grow border-t border-gray-600"></div>
+                        <span class="flex-shrink mx-4 text-gray-500 text-sm">or</span>
+                        <div class="flex-grow border-t border-gray-600"></div>
+                    </div>
+                    <button type="button" id="oidc-login-btn"
+                        class="w-full flex items-center justify-center gap-2 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-md transition-colors border border-gray-600">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/>
+                        </svg>
+                        <span id="oidc-button-text">Login with SSO</span>
+                    </button>
+                </div>
             </form>
             <form id="setup-form" class="hidden bg-gray-800 p-8 rounded-xl shadow-lg space-y-6">
                 <h2 class="text-2xl font-bold text-center text-white">Create Admin Account</h2>
@@ -2216,6 +2232,142 @@
                             </div>
                             <p class="text-xs text-gray-500">Logs are stored in /data/logs and include all console
                                 output from the server.</p>
+                        </div>
+                    </div>
+
+                    <!-- OIDC/SSO Settings Section (Admin Only) -->
+                    <div id="oidc-settings-section" class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
+                        <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">
+                            <span class="flex items-center gap-2">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/>
+                                </svg>
+                                Single Sign-On (OIDC)
+                            </span>
+                        </h2>
+                        <p class="text-sm text-gray-400 mb-4">Configure OpenID Connect (OIDC) to allow users to login using an external identity provider (Google, Microsoft, Keycloak, Authentik, etc.).</p>
+                        
+                        <div class="space-y-4">
+                            <!-- Enable/Disable Toggle -->
+                            <div class="flex items-center justify-between p-3 bg-gray-700/50 rounded-lg">
+                                <div>
+                                    <label for="oidc-enabled-toggle" class="text-sm font-medium text-white">Enable OIDC Authentication</label>
+                                    <p class="text-xs text-gray-400">Allow users to login with SSO</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="oidc-enabled-toggle" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-gray-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+
+                            <!-- OIDC Configuration Fields (shown when enabled) -->
+                            <div id="oidc-config-fields" class="hidden space-y-4">
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label for="oidc-issuer-url" class="block text-sm font-medium text-gray-400 mb-1">Issuer URL (Discovery URL)</label>
+                                        <input type="url" id="oidc-issuer-url" 
+                                            class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                                            placeholder="https://accounts.google.com">
+                                        <p class="text-xs text-gray-500 mt-1">The OIDC provider's issuer URL (supports auto-discovery)</p>
+                                    </div>
+                                    <div>
+                                        <label for="oidc-client-id" class="block text-sm font-medium text-gray-400 mb-1">Client ID</label>
+                                        <input type="text" id="oidc-client-id" 
+                                            class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                                            placeholder="your-client-id">
+                                    </div>
+                                </div>
+                                
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label for="oidc-client-secret" class="block text-sm font-medium text-gray-400 mb-1">Client Secret</label>
+                                        <input type="password" id="oidc-client-secret" 
+                                            class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                                            placeholder="••••••••••••">
+                                    </div>
+                                    <div>
+                                        <label for="oidc-redirect-uri" class="block text-sm font-medium text-gray-400 mb-1">Redirect URI</label>
+                                        <input type="url" id="oidc-redirect-uri" 
+                                            class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                                            placeholder="http://localhost:8998/api/auth/oidc/callback">
+                                        <p class="text-xs text-gray-500 mt-1">Add this URL to your OIDC provider's allowed redirect URIs</p>
+                                    </div>
+                                </div>
+
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label for="oidc-scopes" class="block text-sm font-medium text-gray-400 mb-1">Scopes</label>
+                                        <input type="text" id="oidc-scopes" 
+                                            class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                                            placeholder="openid profile email" value="openid profile email">
+                                    </div>
+                                    <div>
+                                        <label for="oidc-button-text-input" class="block text-sm font-medium text-gray-400 mb-1">Login Button Text</label>
+                                        <input type="text" id="oidc-button-text-input" 
+                                            class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
+                                            placeholder="Login with SSO" value="Login with SSO">
+                                    </div>
+                                </div>
+
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label for="oidc-username-claim" class="block text-sm font-medium text-gray-400 mb-1">Username Claim</label>
+                                        <select id="oidc-username-claim" 
+                                            class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
+                                            <option value="preferred_username">preferred_username (recommended)</option>
+                                            <option value="email">email</option>
+                                            <option value="sub">sub (subject ID)</option>
+                                            <option value="name">name</option>
+                                        </select>
+                                        <p class="text-xs text-gray-500 mt-1">Which claim to use as the ViniPlay username</p>
+                                    </div>
+                                </div>
+
+                                <!-- User Auto-Creation Settings -->
+                                <div class="border-t border-gray-700 pt-4 mt-4">
+                                    <h3 class="text-sm font-semibold text-gray-300 mb-3">New User Settings</h3>
+                                    <div class="space-y-3">
+                                        <div class="flex items-center justify-between">
+                                            <div>
+                                                <label for="oidc-auto-create-toggle" class="text-sm font-medium text-gray-400">Auto-create users on first login</label>
+                                                <p class="text-xs text-gray-500">Automatically create ViniPlay accounts for new OIDC users</p>
+                                            </div>
+                                            <label class="relative inline-flex items-center cursor-pointer">
+                                                <input type="checkbox" id="oidc-auto-create-toggle" class="sr-only peer" checked>
+                                                <div class="w-11 h-6 bg-gray-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                            </label>
+                                        </div>
+                                        <div class="flex items-center justify-between">
+                                            <div>
+                                                <label for="oidc-default-admin-toggle" class="text-sm font-medium text-gray-400">New users are admins</label>
+                                                <p class="text-xs text-gray-500">Grant admin privileges to new OIDC users (not recommended)</p>
+                                            </div>
+                                            <label class="relative inline-flex items-center cursor-pointer">
+                                                <input type="checkbox" id="oidc-default-admin-toggle" class="sr-only peer">
+                                                <div class="w-11 h-6 bg-gray-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                            </label>
+                                        </div>
+                                        <div class="flex items-center justify-between">
+                                            <div>
+                                                <label for="oidc-default-dvr-toggle" class="text-sm font-medium text-gray-400">New users can use DVR</label>
+                                                <p class="text-xs text-gray-500">Allow new OIDC users to record programs</p>
+                                            </div>
+                                            <label class="relative inline-flex items-center cursor-pointer">
+                                                <input type="checkbox" id="oidc-default-dvr-toggle" class="sr-only peer" checked>
+                                                <div class="w-11 h-6 bg-gray-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Save Button (visible when OIDC is enabled) -->
+                                <div class="flex justify-end pt-4">
+                                    <button id="oidc-save-btn" 
+                                        class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-md transition-colors">
+                                        Save OIDC Settings
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     </div>
 

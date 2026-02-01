@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Data directories (contain user data, credentials, cache)
+data/
+dvr/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Package lock (optional - uncomment if you want to track it)
+# package-lock.json

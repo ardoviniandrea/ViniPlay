@@ -143,6 +143,78 @@ All configuration is done via the web interface in the **Settings** tab.
 -   **User Management (Admin):** Admins can create, edit, and delete user accounts.
 
 ---
+## 🔐 Single Sign-On (OIDC)
+
+ViniPlay supports OpenID Connect (OIDC) authentication, allowing users to log in using external identity providers like Google, Microsoft, Keycloak, Authentik, Okta, and more.
+
+### Enabling OIDC
+
+1. **Navigate to Settings** (Admin only)
+2. **Scroll to "Single Sign-On (OIDC)"** section
+3. **Toggle "Enable OIDC Authentication"** to ON
+4. **Configure the following fields:**
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **Issuer URL** | Your OIDC provider's discovery URL | `https://accounts.google.com` |
+| **Client ID** | The client ID from your provider | `your-app-client-id` |
+| **Client Secret** | The client secret from your provider | `your-app-client-secret` |
+| **Redirect URI** | The callback URL (auto-populated) | `http://your-server:8998/api/auth/oidc/callback` |
+| **Scopes** | OAuth scopes to request | `openid profile email` |
+| **Login Button Text** | Text shown on the SSO button | `Login with Google` |
+| **Username Claim** | Which claim to use as username | `preferred_username` or `email` |
+
+5. **Configure new user defaults:**
+   - **Auto-create users**: Automatically create ViniPlay accounts for new SSO users
+   - **New users are admins**: Grant admin privileges to new users (not recommended)
+   - **New users can use DVR**: Allow new users to record programs
+
+6. **Click "Save OIDC Settings"**
+
+### Setting Up Your Identity Provider
+
+When configuring your OIDC provider, add the following redirect URI to your allowed callback URLs:
+
+```
+http://your-viniplay-server:8998/api/auth/oidc/callback
+```
+
+#### Example: Google OAuth
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project or select existing one
+3. Navigate to **APIs & Services** → **Credentials**
+4. Create **OAuth 2.0 Client ID** (Web application)
+5. Add authorized redirect URI: `http://your-server:8998/api/auth/oidc/callback`
+6. Copy Client ID and Client Secret to ViniPlay settings
+7. Use Issuer URL: `https://accounts.google.com`
+
+#### Example: Keycloak / Authentik
+
+1. Create a new OIDC client in your realm
+2. Set **Access Type** to `confidential`
+3. Add valid redirect URI: `http://your-server:8998/api/auth/oidc/callback`
+4. Copy Client ID and Client Secret to ViniPlay settings
+5. Use your Keycloak/Authentik issuer URL (e.g., `https://auth.example.com/realms/myrealm`)
+
+### Disabling OIDC
+
+To disable OIDC authentication:
+
+1. Navigate to **Settings** → **Single Sign-On (OIDC)**
+2. Toggle **"Enable OIDC Authentication"** to OFF
+3. OIDC is automatically disabled and saved
+
+> **Note:** When OIDC is disabled, the SSO button will be hidden from the login screen. Users created via SSO can still log in using their ViniPlay username and password (if they set one).
+
+### How It Works
+
+- When a user clicks the SSO button, a popup window opens for authentication
+- After successful authentication with your identity provider, the user is redirected back to ViniPlay
+- If **auto-create users** is enabled, new users are automatically created with the configured default permissions
+- The popup closes automatically and the user is logged into ViniPlay
+
+---
 ## 🏗️ Project Structure
 
 The project is organized into a Node.js backend and a modular vanilla JavaScript frontend.

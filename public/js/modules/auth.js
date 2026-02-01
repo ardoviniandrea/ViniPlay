@@ -224,7 +224,7 @@ const initializeUIElements = () => {
  * Shows the login form.
  * @param {string|null} errorMsg - An optional error message to display.
  */
-export const showLoginScreen = (errorMsg = null) => {
+export const showLoginScreen = async (errorMsg = null) => {
     // This is called before the main app is visible, so we only need to find the auth elements here.
     const authContainer = document.getElementById('auth-container');
     const appContainer = document.getElementById('app-container');
@@ -232,6 +232,8 @@ export const showLoginScreen = (errorMsg = null) => {
     const setupForm = document.getElementById('setup-form');
     const authLoader = document.getElementById('auth-loader');
     const loginError = document.getElementById('login-error');
+    const oidcLoginContainer = document.getElementById('oidc-login-container');
+    const oidcButtonText = document.getElementById('oidc-button-text');
 
     console.log('[AUTH_UI] Displaying login screen.');
     authContainer.classList.remove('hidden');
@@ -239,12 +241,116 @@ export const showLoginScreen = (errorMsg = null) => {
     loginForm.classList.remove('hidden');
     setupForm.classList.add('hidden');
     authLoader.classList.add('hidden'); // Hide loader
+
+    // Check for OIDC error in URL params (from failed OIDC login redirect)
+    const urlParams = new URLSearchParams(window.location.search);
+    const oidcError = urlParams.get('error');
+    if (oidcError) {
+        const oidcErrorMessages = {
+            'oidc_init_failed': 'SSO login initialization failed. Please try again.',
+            'oidc_not_configured': 'SSO is not configured on this server.',
+            'oidc_state_mismatch': 'SSO security validation failed. Please try again.',
+            'oidc_no_username': 'Could not retrieve username from SSO provider.',
+            'oidc_user_not_found': 'Your SSO account is not linked to a ViniPlay user. Contact your administrator.',
+            'oidc_db_error': 'Database error during SSO login. Please try again.',
+            'oidc_create_failed': 'Failed to create user account. Please try again.',
+            'oidc_callback_failed': 'SSO authentication failed. Please try again.'
+        };
+        errorMsg = oidcErrorMessages[oidcError] || 'SSO login failed. Please try again.';
+        // Clean up the URL
+        window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
     if (errorMsg) {
         loginError.textContent = errorMsg;
         loginError.classList.remove('hidden');
         console.error(`[AUTH_UI] Login error displayed: ${errorMsg}`);
     } else {
         loginError.classList.add('hidden'); // Ensure error is hidden if no message
+    }
+
+    // Check if OIDC is enabled and show/hide the SSO button
+    try {
+        const oidcConfigRes = await fetch('/api/auth/oidc/config');
+        if (oidcConfigRes.ok) {
+            const oidcConfig = await oidcConfigRes.json();
+            if (oidcConfig.enabled) {
+                console.log('[AUTH_UI] OIDC is enabled, showing SSO button.');
+                oidcLoginContainer.classList.remove('hidden');
+                if (oidcConfig.buttonText) {
+                    oidcButtonText.textContent = oidcConfig.buttonText;
+                }
+                
+                // Set up popup-based OIDC login
+                const oidcLoginBtn = document.getElementById('oidc-login-btn');
+                oidcLoginBtn.addEventListener('click', () => {
+                    // Open OIDC login in a centered popup
+                    const width = 500;
+                    const height = 600;
+                    const left = window.screenX + (window.outerWidth - width) / 2;
+                    const top = window.screenY + (window.outerHeight - height) / 2;
+                    const popup = window.open(
+                        '/api/auth/oidc/login',
+                        'oidc-login',
+                        `width=${width},height=${height},left=${left},top=${top},popup=1`
+                    );
+                    
+                    if (!popup) {
+                        loginError.textContent = 'Popup was blocked. Please allow popups for this site.';
+                        loginError.classList.remove('hidden');
+                        return;
+                    }
+                    
+                    // Disable button while popup is open
+                    oidcLoginBtn.disabled = true;
+                    oidcLoginBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                    
+                    // Check if popup was closed without completing auth
+                    const popupChecker = setInterval(() => {
+                        if (popup.closed) {
+                            clearInterval(popupChecker);
+                            oidcLoginBtn.disabled = false;
+                            oidcLoginBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                        }
+                    }, 500);
+                });
+                
+                // Listen for postMessage from popup
+                window.addEventListener('message', async (event) => {
+                    // Verify origin
+                    if (event.origin !== window.location.origin) return;
+                    if (event.data?.type !== 'oidc-callback') return;
+                    
+                    console.log('[AUTH_UI] Received OIDC callback message:', event.data);
+                    
+                    if (event.data.success) {
+                        // OIDC login successful - reload page to initialize app
+                        console.log('[AUTH_UI] OIDC login successful, reloading...');
+                        window.location.reload();
+                    } else if (event.data.error) {
+                        // Show error message
+                        const oidcErrorMessages = {
+                            'oidc_init_failed': 'SSO login initialization failed. Please try again.',
+                            'oidc_not_configured': 'SSO is not configured on this server.',
+                            'oidc_state_mismatch': 'SSO security validation failed. Please try again.',
+                            'oidc_no_username': 'Could not retrieve username from SSO provider.',
+                            'oidc_user_not_found': 'Your SSO account is not linked to a ViniPlay user. Contact your administrator.',
+                            'oidc_db_error': 'Database error during SSO login. Please try again.',
+                            'oidc_create_failed': 'Failed to create user account. Please try again.',
+                            'oidc_callback_failed': 'SSO authentication failed. Please try again.'
+                        };
+                        loginError.textContent = oidcErrorMessages[event.data.error] || 'SSO login failed. Please try again.';
+                        loginError.classList.remove('hidden');
+                    }
+                });
+            } else {
+                oidcLoginContainer.classList.add('hidden');
+            }
+        }
+    } catch (e) {
+        console.warn('[AUTH_UI] Could not fetch OIDC config:', e.message);
+        // Keep OIDC button hidden if we can't verify config
+        oidcLoginContainer.classList.add('hidden');
     }
 };
 
