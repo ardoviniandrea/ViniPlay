@@ -56,7 +56,10 @@ export function openProgramDetails(progItem) {
     }
 
     const channelName = channelData.displayName || channelData.name;
-    const channelLogo = channelData.logo;
+    // Use image proxy for channel logos
+    const channelLogo = channelData.logo && channelData.logo.startsWith('http')
+        ? `/api/image-proxy?url=${encodeURIComponent(channelData.logo)}`
+        : channelData.logo;
     const channelUrl = channelData.url;
 
     // Get fresh references to buttons inside the modal
@@ -513,10 +516,13 @@ const renderGuide = (channelsToRender, resetScroll = false, shouldCenter = false
                     `data-channel-id="${channel.id}" class="w-6 h-6 text-gray-500 hover:text-yellow-400 favorite-star cursor-pointer ${channel.isFavorite ? 'favorited' : ''}"`
                 );
 
+                const proxiedLogo = channel.logo && channel.logo.startsWith('http')
+                    ? `/api/image-proxy?url=${encodeURIComponent(channel.logo)}`
+                    : channel.logo;
                 const channelInfoHTML = `
                     <div class="channel-info p-2 flex items-center justify-between cursor-pointer" data-url="${channel.url}" data-name="${channelName}" data-id="${channel.id}" data-channel-index="${i}">
                         <div class="flex items-center overflow-hidden flex-grow min-w-0">
-                            <img src="${channel.logo}" onerror="this.onerror=null; this.src='https://placehold.co/48x48/1f2937/d1d5db?text=?';" class="w-12 h-12 object-contain mr-3 flex-shrink-0 rounded-md bg-gray-700">
+                            <img src="${proxiedLogo}" onerror="this.onerror=null; this.src='https://placehold.co/48x48/1f2937/d1d5db?text=?';" class="w-12 h-12 object-contain mr-3 flex-shrink-0 rounded-md bg-gray-700">
                             <div class="flex-grow min-w-0 channel-details">
                                 <span class="font-semibold text-sm truncate block">${channelName}</span>
                                 <div class="flex items-center gap-2 mt-1">
@@ -840,30 +846,40 @@ const renderSearchResults = (channelResults, programResults) => {
 
     if (channelResults.length > 0) {
         html += '<div class="search-results-header">Channels</div>';
-        html += channelResults.map(({ item }) => `
-            <div class="search-result-channel flex items-center p-3 border-b border-gray-700/50 hover:bg-gray-700 cursor-pointer" data-channel-id="${item.id}">
-                <img src="${item.logo}" onerror="this.onerror=null; this.src='https://placehold.co/40x40/1f2937/d1d5db?text=?';" class="w-10 h-10 object-contain mr-3 rounded-md bg-gray-700 flex-shrink-0">
-                <div class="overflow-hidden">
-                    <p class="font-semibold text-white text-sm truncate">${item.chno ? `[${item.chno}] ` : ''}${item.displayName || item.name}</p>
-                    <p class="text-gray-400 text-xs truncate">${item.group} &bull; ${item.source}</p>
+        html += channelResults.map(({ item }) => {
+            const proxiedLogo = item.logo && item.logo.startsWith('http')
+                ? `/api/image-proxy?url=${encodeURIComponent(item.logo)}`
+                : item.logo;
+            return `
+                <div class="search-result-channel flex items-center p-3 border-b border-gray-700/50 hover:bg-gray-700 cursor-pointer" data-channel-id="${item.id}">
+                    <img src="${proxiedLogo}" onerror="this.onerror=null; this.src='https://placehold.co/40x40/1f2937/d1d5db?text=?';" class="w-10 h-10 object-contain mr-3 rounded-md bg-gray-700 flex-shrink-0">
+                    <div class="overflow-hidden">
+                        <p class="font-semibold text-white text-sm truncate">${item.chno ? `[${item.chno}] ` : ''}${item.displayName || item.name}</p>
+                        <p class="text-gray-400 text-xs truncate">${item.group} &bull; ${item.source}</p>
+                    </div>
                 </div>
-            </div>
-        `).join('');
+            `;
+        }).join('');
     }
 
     if (programResults.length > 0) {
         html += '<div class="search-results-header">Programs</div>';
         const timeFormat = { hour: '2-digit', minute: '2-digit' };
-        html += programResults.map(({ item }) => `
-             <div class="search-result-program flex items-center p-3 border-b border-gray-700/50 hover:bg-gray-700 cursor-pointer" data-channel-id="${item.channel.id}" data-prog-start="${item.start}">
-                <img src="${item.channel.logo}" onerror="this.onerror=null; this.src='https://placehold.co/40x40/1f2937/d1d5db?text=?';" class="w-10 h-10 object-contain mr-3 rounded-md bg-gray-700 flex-shrink-0">
-                <div class="overflow-hidden">
-                    <p class="font-semibold text-white text-sm truncate" title="${item.title}">${item.title}</p>
-                    <p class="text-gray-400 text-xs truncate">${item.channel.name} &bull; ${item.channel.source}</p>
-                    <p class="text-blue-400 text-xs">${new Date(item.start).toLocaleTimeString([], timeFormat)} - ${new Date(item.stop).toLocaleTimeString([], timeFormat)}</p>
+        html += programResults.map(({ item }) => {
+            const proxiedLogo = item.channel.logo && item.channel.logo.startsWith('http')
+                ? `/api/image-proxy?url=${encodeURIComponent(item.channel.logo)}`
+                : item.channel.logo;
+            return `
+                 <div class="search-result-program flex items-center p-3 border-b border-gray-700/50 hover:bg-gray-700 cursor-pointer" data-channel-id="${item.channel.id}" data-prog-start="${item.start}">
+                    <img src="${proxiedLogo}" onerror="this.onerror=null; this.src='https://placehold.co/40x40/1f2937/d1d5db?text=?';" class="w-10 h-10 object-contain mr-3 rounded-md bg-gray-700 flex-shrink-0">
+                    <div class="overflow-hidden">
+                        <p class="font-semibold text-white text-sm truncate" title="${item.title}">${item.title}</p>
+                        <p class="text-gray-400 text-xs truncate">${item.channel.name} &bull; ${item.channel.source}</p>
+                        <p class="text-blue-400 text-xs">${new Date(item.start).toLocaleTimeString([], timeFormat)} - ${new Date(item.stop).toLocaleTimeString([], timeFormat)}</p>
+                    </div>
                 </div>
-            </div>
-        `).join('');
+            `;
+        }).join('');
     }
 
     if (html) {

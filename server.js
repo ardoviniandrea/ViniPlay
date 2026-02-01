@@ -60,8 +60,8 @@ const activeStreamProcesses = new Map();
 const STREAM_INACTIVITY_TIMEOUT = 30000; // 30 seconds to kill an inactive stream process
 
 // --- Configuration ---
-const DATA_DIR = '/data';
-const DVR_DIR = '/dvr';
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const DVR_DIR = process.env.DVR_DIR || path.join(__dirname, 'dvr');
 const LOGS_DIR = path.join(DATA_DIR, 'logs'); // NEW: Log management directory
 const VAPID_KEYS_PATH = path.join(DATA_DIR, 'vapid.json');
 const SOURCES_DIR = path.join(DATA_DIR, 'sources');
@@ -4843,53 +4843,87 @@ app.get('/api/image-proxy', allowLocalOrAuth, (req, res) => {
 
     console.log(`[IMAGE_PROXY] Fetching and caching image: ${imageUrl}`);
 
-    // Determine protocol (http or https)
-    const protocol = imageUrl.startsWith('https') ? https : http;
-
-    protocol.get(imageUrl, (imageRes) => {
-        // Check if response is an image
-        const contentType = imageRes.headers['content-type'];
-        if (!contentType || !contentType.startsWith('image/')) {
-            console.error(`[IMAGE_PROXY] Invalid content type: ${contentType}`);
-            return res.status(400).send('URL does not point to an image');
+    // Helper function to fetch image with redirect support
+    const fetchImage = (url, redirectCount = 0) => {
+        if (redirectCount > 5) {
+            console.error(`[IMAGE_PROXY] Too many redirects for: ${imageUrl}`);
+            return res.status(400).send('Too many redirects');
         }
 
-        // Set response headers
-        res.setHeader('Content-Type', contentType);
-        res.setHeader('Cache-Control', 'public, max-age=2592000'); // 30 days
-        res.setHeader('X-Cache', 'MISS');
-
-        // Create write stream to save to cache
-        const fileStream = fs.createWriteStream(cacheFilePath);
-
-        // Pipe to both cache and response
-        imageRes.pipe(fileStream);
-        imageRes.pipe(res);
-
-        // Save metadata when done
-        fileStream.on('finish', () => {
-            const meta = {
-                url: imageUrl,
-                contentType: contentType,
-                cachedAt: new Date().toISOString()
-            };
-            try {
-                fs.writeFileSync(cacheMetaPath, JSON.stringify(meta, null, 2));
-                console.log(`[IMAGE_PROXY] Cached image: ${urlHash}`);
-            } catch (err) {
-                console.error(`[IMAGE_PROXY] Failed to write cache metadata:`, err.message);
+        // Determine protocol (http or https)
+        const protocol = url.startsWith('https') ? https : http;
+        
+        // Parse URL for proper request options
+        const parsedUrl = new URL(url);
+        const requestOptions = {
+            hostname: parsedUrl.hostname,
+            port: parsedUrl.port || (protocol === https ? 443 : 80),
+            path: parsedUrl.pathname + parsedUrl.search,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': parsedUrl.origin + '/'
             }
-        });
+        };
 
-        fileStream.on('error', (err) => {
-            console.error(`[IMAGE_PROXY] Error writing to cache:`, err.message);
-            // Continue serving even if cache write fails
-        });
+        protocol.get(requestOptions, (imageRes) => {
+            // Handle redirects (301, 302, 303, 307, 308)
+            if ([301, 302, 303, 307, 308].includes(imageRes.statusCode) && imageRes.headers.location) {
+                const redirectUrl = imageRes.headers.location.startsWith('http') 
+                    ? imageRes.headers.location 
+                    : new URL(imageRes.headers.location, url).href;
+                console.log(`[IMAGE_PROXY] Following redirect to: ${redirectUrl}`);
+                return fetchImage(redirectUrl, redirectCount + 1);
+            }
 
-    }).on('error', (err) => {
-        console.error(`[IMAGE_PROXY] Error fetching image from ${imageUrl}:`, err.message);
-        res.status(500).send('Failed to fetch image');
-    });
+            // Check if response is an image
+            const contentType = imageRes.headers['content-type'];
+            if (!contentType || !contentType.startsWith('image/')) {
+                console.error(`[IMAGE_PROXY] Invalid content type: ${contentType} (status: ${imageRes.statusCode})`);
+                return res.status(400).send('URL does not point to an image');
+            }
+
+            // Set response headers
+            res.setHeader('Content-Type', contentType);
+            res.setHeader('Cache-Control', 'public, max-age=2592000'); // 30 days
+            res.setHeader('X-Cache', 'MISS');
+
+            // Create write stream to save to cache
+            const fileStream = fs.createWriteStream(cacheFilePath);
+
+            // Pipe to both cache and response
+            imageRes.pipe(fileStream);
+            imageRes.pipe(res);
+
+            // Save metadata when done
+            fileStream.on('finish', () => {
+                const meta = {
+                    url: imageUrl,
+                    contentType: contentType,
+                    cachedAt: new Date().toISOString()
+                };
+                try {
+                    fs.writeFileSync(cacheMetaPath, JSON.stringify(meta, null, 2));
+                    console.log(`[IMAGE_PROXY] Cached image: ${urlHash}`);
+                } catch (err) {
+                    console.error(`[IMAGE_PROXY] Failed to write cache metadata:`, err.message);
+                }
+            });
+
+            fileStream.on('error', (err) => {
+                console.error(`[IMAGE_PROXY] Error writing to cache:`, err.message);
+                // Continue serving even if cache write fails
+            });
+
+        }).on('error', (err) => {
+            console.error(`[IMAGE_PROXY] Error fetching image from ${url}:`, err.message);
+            res.status(500).send('Failed to fetch image');
+        });
+    };
+
+    // Start fetching
+    fetchImage(imageUrl);
 });
 
 
