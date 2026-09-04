@@ -8,6 +8,7 @@ import { appState, guideState, UIElements } from './state.js';
 import { apiFetch, stopStream, startRedirectStream, stopRedirectStream } from './api.js';
 import { showNotification, openModal, closeModal, showConfirm } from './ui.js';
 import { ICONS } from './icons.js';
+import { proxiedImageUrl } from './utils.js';
 
 let grid;
 const players = new Map();
@@ -886,7 +887,7 @@ export function populateChannelSelector() {
              data-name="${channel.displayName || channel.name}" 
              data-url="${channel.url}"
              data-logo="${channel.logo}">
-            <img src="${channel.logo}" onerror="this.onerror=null; this.src='https://placehold.co/40x40/1f2937/d1d5db?text=?';" class="w-10 h-10 object-contain mr-3 rounded-md bg-gray-700 flex-shrink-0">
+            <img src="${proxiedImageUrl(channel.logo)}" onerror="this.onerror=null; this.src='https://placehold.co/40x40/1f2937/d1d5db?text=?';" class="w-10 h-10 object-contain mr-3 rounded-md bg-gray-700 flex-shrink-0">
             <div class="overflow-hidden">
                 <p class="font-semibold text-white text-sm truncate">${channel.displayName || channel.name}</p>
                 <p class="text-gray-400 text-xs truncate">${channel.group || 'Uncategorized'}</p>

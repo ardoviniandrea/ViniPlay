@@ -8,7 +8,7 @@
 
 import { appState, guideState, UIElements, dvrState } from './state.js';
 import { saveUserSetting } from './api.js';
-import { parseM3U, formatTimeWithOffset } from './utils.js';
+import { parseM3U, formatTimeWithOffset, proxiedImageUrl } from './utils.js';
 import { playChannel } from './player.js';
 import { showNotification, openModal, closeModal } from './ui.js';
 import { addOrRemoveNotification, findNotificationForProgram } from './notification.js';
@@ -516,7 +516,7 @@ const renderGuide = (channelsToRender, resetScroll = false, shouldCenter = false
                 const channelInfoHTML = `
                     <div class="channel-info p-2 flex items-center justify-between cursor-pointer" data-url="${channel.url}" data-name="${channelName}" data-id="${channel.id}" data-channel-index="${i}">
                         <div class="flex items-center overflow-hidden flex-grow min-w-0">
-                            <img src="${channel.logo}" onerror="this.onerror=null; this.src='https://placehold.co/48x48/1f2937/d1d5db?text=?';" class="w-12 h-12 object-contain mr-3 flex-shrink-0 rounded-md bg-gray-700">
+                            <img src="${proxiedImageUrl(channel.logo)}" onerror="this.onerror=null; this.src='https://placehold.co/48x48/1f2937/d1d5db?text=?';" class="w-12 h-12 object-contain mr-3 flex-shrink-0 rounded-md bg-gray-700">
                             <div class="flex-grow min-w-0 channel-details">
                                 <span class="font-semibold text-sm truncate block">${channelName}</span>
                                 <div class="flex items-center gap-2 mt-1">
@@ -842,7 +842,7 @@ const renderSearchResults = (channelResults, programResults) => {
         html += '<div class="search-results-header">Channels</div>';
         html += channelResults.map(({ item }) => `
             <div class="search-result-channel flex items-center p-3 border-b border-gray-700/50 hover:bg-gray-700 cursor-pointer" data-channel-id="${item.id}">
-                <img src="${item.logo}" onerror="this.onerror=null; this.src='https://placehold.co/40x40/1f2937/d1d5db?text=?';" class="w-10 h-10 object-contain mr-3 rounded-md bg-gray-700 flex-shrink-0">
+                <img src="${proxiedImageUrl(item.logo)}" onerror="this.onerror=null; this.src='https://placehold.co/40x40/1f2937/d1d5db?text=?';" class="w-10 h-10 object-contain mr-3 rounded-md bg-gray-700 flex-shrink-0">
                 <div class="overflow-hidden">
                     <p class="font-semibold text-white text-sm truncate">${item.chno ? `[${item.chno}] ` : ''}${item.displayName || item.name}</p>
                     <p class="text-gray-400 text-xs truncate">${item.group} &bull; ${item.source}</p>
@@ -856,7 +856,7 @@ const renderSearchResults = (channelResults, programResults) => {
         const timeFormat = { hour: '2-digit', minute: '2-digit' };
         html += programResults.map(({ item }) => `
              <div class="search-result-program flex items-center p-3 border-b border-gray-700/50 hover:bg-gray-700 cursor-pointer" data-channel-id="${item.channel.id}" data-prog-start="${item.start}">
-                <img src="${item.channel.logo}" onerror="this.onerror=null; this.src='https://placehold.co/40x40/1f2937/d1d5db?text=?';" class="w-10 h-10 object-contain mr-3 rounded-md bg-gray-700 flex-shrink-0">
+                <img src="${proxiedImageUrl(item.channel.logo)}" onerror="this.onerror=null; this.src='https://placehold.co/40x40/1f2937/d1d5db?text=?';" class="w-10 h-10 object-contain mr-3 rounded-md bg-gray-700 flex-shrink-0">
                 <div class="overflow-hidden">
                     <p class="font-semibold text-white text-sm truncate" title="${item.title}">${item.title}</p>
                     <p class="text-gray-400 text-xs truncate">${item.channel.name} &bull; ${item.channel.source}</p>

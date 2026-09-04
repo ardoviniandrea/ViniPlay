@@ -4,6 +4,20 @@
  */
 
 /**
+ * Routes an external image URL through the server-side image proxy so that
+ * plain-http images (e.g. provider `tvg-logo` URLs) are not blocked as mixed
+ * content when ViniPlay is served over HTTPS behind a reverse proxy.
+ * Relative/data URLs and empty values are returned unchanged.
+ * @param {string} url - The original image URL.
+ * @returns {string} The proxied URL, or the input unchanged when no proxying is needed.
+ */
+export function proxiedImageUrl(url) {
+    return url && url.startsWith('http')
+        ? `/api/image-proxy?url=${encodeURIComponent(url)}`
+        : (url || '');
+}
+
+/**
  * Parses M3U playlist data into a structured array of channel objects.
  * @param {string} data - The raw M3U content as a string.
  * @returns {Array<object>} - An array of channel objects.

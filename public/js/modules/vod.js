@@ -9,6 +9,7 @@ import { openModal, closeModal, showNotification } from './ui.js';
 import { ICONS } from './icons.js';
 import { saveUserSetting, fetchVodLibrary, fetchSeriesDetails } from './api.js';
 import { playVOD } from './player.js';
+import { proxiedImageUrl } from './utils.js';
 
 // Local state for VOD page
 const vodState = {
@@ -152,7 +153,7 @@ function renderVodGrid() {
             const displayLogo = item.logo || placeholderImageUrl;
 
             // Use image proxy for both HTTP and HTTPS posters to avoid mixed content warnings
-            const proxiedLogo = displayLogo.startsWith('http') ? `/api/image-proxy?url=${encodeURIComponent(displayLogo)}` : displayLogo;
+            const proxiedLogo = proxiedImageUrl(displayLogo);
 
             return `
                 <div class="vod-item" data-id="${itemIdStr}">
@@ -190,7 +191,7 @@ async function openVodDetails(item) { // Make the function async
 
     // Use image proxy for modal posters/backdrops
     const posterUrl = item.logo || `https://placehold.co/400x600/1f2937/d1d5db?text=${encodeURIComponent(item.name)}`;
-    const proxiedPoster = posterUrl.startsWith('http') ? `/api/image-proxy?url=${encodeURIComponent(posterUrl)}` : posterUrl;
+    const proxiedPoster = proxiedImageUrl(posterUrl);
     UIElements.vodDetailsPoster.src = proxiedPoster;
     UIElements.vodDetailsBackdropImg.src = item.logo ? proxiedPoster : '';
 

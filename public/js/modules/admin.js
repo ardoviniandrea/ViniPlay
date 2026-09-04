@@ -9,6 +9,7 @@ import { UIElements, guideState, adminState } from './state.js';
 import { apiFetch, saveUserSetting } from './api.js';
 import { showNotification, showConfirm, openModal } from './ui.js';
 import { ICONS } from './icons.js';
+import { proxiedImageUrl } from './utils.js';
 //-- ENHANCEMENT: Import channel selector functions from multiview.js to reuse the modal.
 import { populateChannelSelector } from './multiview.js';
 
@@ -237,7 +238,7 @@ function renderWatchHistory() {
             <td>${entry.client_ip || 'N/A'}</td>
             <td>
                 <div class="flex items-center gap-3">
-                    <img src="${entry.channel_logo || 'https://placehold.co/40x40/1f2937/d1d5db?text=?'}" 
+                    <img src="${proxiedImageUrl(entry.channel_logo) || 'https://placehold.co/40x40/1f2937/d1d5db?text=?'}"
                          onerror="this.onerror=null; this.src='https://placehold.co/40x40/1f2937/d1d5db?text=?';" 
                          class="w-10 h-10 object-contain rounded-md bg-gray-700 flex-shrink-0" 
                          alt="Channel Logo">
