@@ -1021,6 +1021,7 @@ const openSourceEditor = (sourceType, source = null) => {
                         server: UIElements.sourceEditorXcUrl.value,
                         username: UIElements.sourceEditorXcUsername.value,
                         password: UIElements.sourceEditorXcPassword.value,
+                        liveFormat: UIElements.sourceEditorXcLiveFormat.value,
                     });
                 }
                 // File sources: fetch-groups only works if file is already on server (has ID or path knewn)
@@ -1084,12 +1085,14 @@ const openSourceEditor = (sourceType, source = null) => {
                         UIElements.sourceEditorXcUrl.value = xcData.server || '';
                         UIElements.sourceEditorXcUsername.value = xcData.username || '';
                         UIElements.sourceEditorXcPassword.value = xcData.password || '';
+                        UIElements.sourceEditorXcLiveFormat.value = xcData.liveFormat === 'm3u8' ? 'm3u8' : 'ts';
                     } catch (e) {
                         console.error("Could not parse XC data for editing:", e);
                         // Clear fields if data is corrupt
                         UIElements.sourceEditorXcUrl.value = '';
                         UIElements.sourceEditorXcUsername.value = '';
                         UIElements.sourceEditorXcPassword.value = '';
+                        UIElements.sourceEditorXcLiveFormat.value = 'ts';
                     }
                 }
                 break;
@@ -1337,6 +1340,7 @@ export function setupSettingsEventListeners() {
                 server: UIElements.sourceEditorXcUrl.value,
                 username: UIElements.sourceEditorXcUsername.value,
                 password: UIElements.sourceEditorXcPassword.value,
+                liveFormat: UIElements.sourceEditorXcLiveFormat.value,
             }));
             formData.append('refreshHours', UIElements.sourceEditorRefreshInterval.value);
         }
@@ -2019,6 +2023,7 @@ export function setupSettingsEventListeners() {
                         server: UIElements.sourceEditorXcUrl.value,
                         username: UIElements.sourceEditorXcUsername.value,
                         password: UIElements.sourceEditorXcPassword.value,
+                        liveFormat: UIElements.sourceEditorXcLiveFormat.value,
                     }) : null,
                     sourceId: sourceId // <-- ADD THIS LINE
                 };
@@ -2096,6 +2101,7 @@ export function setupSettingsEventListeners() {
                         server: UIElements.sourceEditorXcUrl.value,
                         username: UIElements.sourceEditorXcUsername.value,
                         password: UIElements.sourceEditorXcPassword.value,
+                        liveFormat: UIElements.sourceEditorXcLiveFormat.value,
                     }) : null,
                     refresh: true, // Tell the backend to force refresh
                     sourceId: sourceId // Pass sourceId for cache update
