@@ -439,8 +439,16 @@ export function setupAuthEventListeners() {
             if (!res.ok) {
                 console.warn(`[AUTH_EVENT] Logout API returned non-OK status: ${res.status}`);
             }
-            console.log('[AUTH_EVENT] Logout request sent. Reloading window.');
-            window.location.reload(); // Full reload to clear client state
+            const data = await res.json().catch(() => ({}));
+            if (data && data.redirect) {
+                // Reverse-proxy auth: go to the proxy sign-out so a plain reload isn't
+                // immediately re-authenticated by the proxy header.
+                console.log('[AUTH_EVENT] Logout request sent. Redirecting to proxy sign-out.');
+                window.location.href = data.redirect;
+            } else {
+                console.log('[AUTH_EVENT] Logout request sent. Reloading window.');
+                window.location.reload(); // Full reload to clear client state
+            }
         } catch (error) {
             console.error('[AUTH_EVENT] Logout fetch error:', error);
             showNotification("Failed to log out. Please try again.", true);

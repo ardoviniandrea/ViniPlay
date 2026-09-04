@@ -374,9 +374,18 @@ if (sessionSecret.includes('replace_this')) {
     console.warn('[SECURITY] Using a weak or default SESSION_SECRET. Please replace it.');
 }
 
+// Give the session store's SQLite connection a busy_timeout so a write waits for a
+// held lock instead of failing immediately with SQLITE_BUSY. This matters when the
+// shared DB is briefly busy (e.g. startup source processing) or when several
+// requests persist a session at nearly the same moment — notably the burst of
+// parallel API calls a client fires on first load when reverse-proxy auth
+// (PROXY_AUTH_ENABLED) logs it in.
+const sessionStore = new SQLiteStore({ db: 'viniplay.db', dir: DATA_DIR, table: 'sessions' });
+sessionStore.db.run('PRAGMA busy_timeout = 8000');
+
 app.use(
     session({
-        store: new SQLiteStore({ db: 'viniplay.db', dir: DATA_DIR, table: 'sessions' }),
+        store: sessionStore,
         secret: sessionSecret,
         resave: false,
         saveUninitialized: false,
@@ -394,6 +403,135 @@ app.use((req, res, next) => {
     const user_info = req.session.userId ? `User ID: ${req.session.userId}, Admin: ${req.session.isAdmin}, DVR: ${req.session.canUseDvr}` : 'No session';
     console.log(`[HTTP_TRACE] ${req.method} ${req.originalUrl} - IP: ${req.clientIp} - Session: [${user_info}]`);
     next();
+});
+
+// --- Reverse-proxy (trusted-header) authentication (opt-in) ---
+// When ViniPlay runs behind an authenticating reverse proxy (oauth2-proxy,
+// Authelia, Authentik, Traefik forward-auth, ...), that proxy has already
+// authenticated the user. With this enabled, ViniPlay trusts an identity header
+// set by the proxy and logs the user in automatically, so the built-in login
+// form is skipped and no parallel password has to be maintained.
+//
+// SECURITY: the identity header is trusted ONLY when the request's real TCP peer
+// (req.socket.remoteAddress) is in PROXY_AUTH_TRUSTED_IPS. This check deliberately
+// uses the socket peer, never X-Forwarded-For, because a forwarded header can be
+// spoofed by any client. If enabled without a trusted-IP list the header is never
+// trusted (fail closed) and a warning is logged. Keep this OFF unless a proxy in
+// front of ViniPlay is the only way in.
+const PROXY_AUTH_ENABLED = String(process.env.PROXY_AUTH_ENABLED).toLowerCase() === 'true';
+const PROXY_AUTH_HEADER = (process.env.PROXY_AUTH_HEADER || 'X-Forwarded-Email').toLowerCase();
+const PROXY_AUTH_TRUSTED_IPS = (process.env.PROXY_AUTH_TRUSTED_IPS || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+const PROXY_AUTH_ADMIN_USERS = (process.env.PROXY_AUTH_ADMIN_USERS || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+// Where to send the browser on logout when proxy auth is active. Without this, the
+// app's logout only clears the ViniPlay session and the very next request is
+// re-authenticated by the proxy header — so the user never actually leaves. Point it
+// at the proxy's sign-out (e.g. "/oauth2/sign_out" for oauth2-proxy) to end the
+// upstream session too.
+const PROXY_AUTH_LOGOUT_URL = (process.env.PROXY_AUTH_LOGOUT_URL || '').trim();
+
+if (PROXY_AUTH_ENABLED) {
+    if (PROXY_AUTH_TRUSTED_IPS.length === 0) {
+        console.warn('[PROXY_AUTH] PROXY_AUTH_ENABLED is set but PROXY_AUTH_TRUSTED_IPS is empty — the identity header will NEVER be trusted (fail closed). Set PROXY_AUTH_TRUSTED_IPS to the reverse-proxy source IP/CIDR.');
+    } else {
+        console.log(`[PROXY_AUTH] Enabled. Header="${PROXY_AUTH_HEADER}", trusted peer IPs: ${PROXY_AUTH_TRUSTED_IPS.join(', ')}`);
+    }
+}
+
+// Normalize an IPv4-mapped IPv6 address ("::ffff:1.2.3.4") to plain IPv4.
+function normalizeIp(ip) {
+    if (!ip) return '';
+    return ip.startsWith('::ffff:') ? ip.slice(7) : ip;
+}
+
+// True if `ip` matches any entry in `list`. Entries may be an exact IP (IPv4 or
+// IPv6) or an IPv4 CIDR ("172.31.0.0/16"). IPv6 is matched only exactly.
+function ipMatchesList(ip, list) {
+    ip = normalizeIp(ip);
+    for (const entry of list) {
+        if (!entry.includes('/')) {
+            if (entry === ip) return true;
+            continue;
+        }
+        const [range, bitsStr] = entry.split('/');
+        const bits = parseInt(bitsStr, 10);
+        const ipParts = ip.split('.');
+        const rangeParts = range.split('.');
+        if (ipParts.length !== 4 || rangeParts.length !== 4 || isNaN(bits) || bits < 0 || bits > 32) continue;
+        const toInt = p => ((parseInt(p[0], 10) << 24) | (parseInt(p[1], 10) << 16) | (parseInt(p[2], 10) << 8) | parseInt(p[3], 10)) >>> 0;
+        const mask = bits === 0 ? 0 : (0xFFFFFFFF << (32 - bits)) >>> 0;
+        if ((toInt(ipParts) & mask) === (toInt(rangeParts) & mask)) return true;
+    }
+    return false;
+}
+
+// Find the ViniPlay user for a proxy-supplied identity, auto-provisioning one on
+// first sight. New users become admin if listed in PROXY_AUTH_ADMIN_USERS, or if
+// no admin exists yet (bootstrap, so the first SSO user can administer). The local
+// password is left NULL — these users authenticate only through the proxy.
+// An identity listed in PROXY_AUTH_ADMIN_USERS is also promoted to admin if its
+// account already exists as non-admin (grant only — the list never removes admin).
+function findOrProvisionProxyUser(identity, callback) {
+    db.get("SELECT * FROM users WHERE username = ?", [identity], (err, user) => {
+        if (err) return callback(err);
+        if (user) {
+            if (PROXY_AUTH_ADMIN_USERS.includes(identity) && user.isAdmin !== 1) {
+                return db.run("UPDATE users SET isAdmin = 1 WHERE id = ?", [user.id], (uerr) => {
+                    if (uerr) return callback(uerr);
+                    console.log(`[PROXY_AUTH] Promoted existing user "${identity}" to admin (in PROXY_AUTH_ADMIN_USERS).`);
+                    user.isAdmin = 1;
+                    callback(null, user);
+                });
+            }
+            return callback(null, user);
+        }
+        db.get("SELECT COUNT(*) as count FROM users WHERE isAdmin = 1", [], (err2, row) => {
+            if (err2) return callback(err2);
+            const isAdmin = (PROXY_AUTH_ADMIN_USERS.includes(identity) || row.count === 0) ? 1 : 0;
+            db.run("INSERT OR IGNORE INTO users (username, password, isAdmin, canUseDvr) VALUES (?, NULL, ?, ?)",
+                [identity, isAdmin, isAdmin], (err3) => {
+                    if (err3) return callback(err3);
+                    // Re-select to get the row, whether we just inserted it or lost an insert race.
+                    db.get("SELECT * FROM users WHERE username = ?", [identity], callback);
+                });
+        });
+    });
+}
+
+app.use((req, res, next) => {
+    if (!PROXY_AUTH_ENABLED) return next();
+    // Already authenticated (local login, or an earlier proxy-auth request) — nothing to do.
+    if (req.session && req.session.userId) return next();
+
+    let identity = req.headers[PROXY_AUTH_HEADER];
+    if (Array.isArray(identity)) identity = identity[0];
+    identity = (identity || '').trim();
+    if (!identity) return next();
+
+    const peerTrusted = PROXY_AUTH_TRUSTED_IPS.length > 0 && ipMatchesList(req.socket.remoteAddress, PROXY_AUTH_TRUSTED_IPS);
+    if (!peerTrusted) {
+        // A header is present but the request did not come from a trusted proxy —
+        // possibly a spoof attempt reaching ViniPlay directly. Never trust it.
+        console.warn(`[PROXY_AUTH] Ignoring "${PROXY_AUTH_HEADER}" header from untrusted peer ${normalizeIp(req.socket.remoteAddress)}.`);
+        return next();
+    }
+
+    findOrProvisionProxyUser(identity, (err, user) => {
+        if (err || !user) {
+            console.error('[PROXY_AUTH] Failed to resolve proxy-authenticated user:', err ? err.message : 'no user');
+            return next(); // fall through to the normal login screen
+        }
+        req.session.userId = user.id;
+        req.session.username = user.username;
+        req.session.isAdmin = user.isAdmin === 1;
+        req.session.canUseDvr = user.canUseDvr === 1;
+        req.session.save(saveErr => {
+            if (saveErr) console.error('[PROXY_AUTH] Session save failed:', saveErr.message);
+            else console.log(`[PROXY_AUTH] Auto-logged in "${user.username}" (ID: ${user.id}, admin: ${user.isAdmin === 1}) from ${normalizeIp(req.socket.remoteAddress)}.`);
+            next();
+        });
+    });
 });
 
 // MODIFIED: requireAuth now checks if the user still exists in the database on every request.
@@ -1702,7 +1840,11 @@ app.post('/api/auth/logout', (req, res) => {
         }
         res.clearCookie('connect.sid');
         console.log(`[AUTH_API] User ${username} logged out. Session destroyed.`);
-        res.json({ success: true });
+        // Under reverse-proxy auth, a plain reload would be re-authenticated by the
+        // proxy header immediately; hand the client the proxy sign-out URL so it can
+        // actually leave (when configured).
+        const redirect = (PROXY_AUTH_ENABLED && PROXY_AUTH_LOGOUT_URL) ? PROXY_AUTH_LOGOUT_URL : null;
+        res.json({ success: true, redirect });
     });
 });
 
