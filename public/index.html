@@ -2592,6 +2592,16 @@
                                 <input type="password" id="source-editor-xc-password"
                                     class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
                             </div>
+                            <div>
+                                <label for="source-editor-xc-live-format"
+                                    class="block text-sm font-medium text-gray-400">Live Stream Format</label>
+                                <select id="source-editor-xc-live-format"
+                                    class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500">
+                                    <option value="ts" selected>MPEG-TS (.ts, default)</option>
+                                    <option value="m3u8">HLS (.m3u8)</option>
+                                </select>
+                                <p class="text-xs text-gray-500 mt-1">Try HLS if live channels stop after a few seconds while VOD works.</p>
+                            </div>
                         </div>
                         <div id="source-editor-refresh-container">
                             <label for="source-editor-refresh-interval"

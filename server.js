@@ -1290,6 +1290,10 @@ async function processAndMergeSources(req) {
                 }
                 const xcInfo = JSON.parse(source.xc_data);
                 const { server, username, password } = xcInfo;
+                // Live stream container: 'ts' (default, raw MPEG-TS) or 'm3u8' (HLS).
+                // Some providers close raw .ts connections after a few seconds but
+                // serve the same channel fine as HLS.
+                const liveExt = xcInfo.liveFormat === 'm3u8' ? 'm3u8' : 'ts';
 
                 if (!server || !username || !password) {
                     throw new Error("XC source is missing server, username, or password.");
@@ -1320,7 +1324,7 @@ async function processAndMergeSources(req) {
                         for (const stream of liveStreams) {
                             if (stream.stream_type === 'live') {
                                 liveStreamCount++;
-                                const streamUrl = `${server}/live/${username}/${password}/${stream.stream_id}.ts`;
+                                const streamUrl = `${server}/live/${username}/${password}/${stream.stream_id}.${liveExt}`;
 
                                 // Find category name from categories array
                                 const categoryName = Array.isArray(liveCategories)
