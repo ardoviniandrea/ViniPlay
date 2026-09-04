@@ -1414,7 +1414,11 @@ async function processAndMergeSources(req) {
                     const name = nameMatch ? nameMatch[1] : ((commaIndex !== -1) ? currentExtInf.substring(commaIndex + 1).trim() : 'Unknown');
 
                     // Consistent Unique Channel ID Generation
-                    const originalTvgId = idMatch ? idMatch[1] : `no-tvg-id-${name.replace(/[^a-zA-Z0-9]/g, '')}`;
+                    // Treat an empty tvg-id="" the same as a missing attribute: otherwise
+                    // every channel with an empty tvg-id collapses to the same generated ID
+                    // (src-<sourceId>_), which breaks favorites and recents (they key on this
+                    // ID). idMatch is truthy for tvg-id="", so guard on the captured value.
+                    const originalTvgId = (idMatch && idMatch[1]) ? idMatch[1] : `no-tvg-id-${name.replace(/[^a-zA-Z0-9]/g, '')}`;
                     const finalUniqueChannelId = `${source.id}_${originalTvgId}`;
 
                     // Inject the *corrected* unique ID into the #EXTINF line
