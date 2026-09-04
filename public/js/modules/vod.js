@@ -52,8 +52,8 @@ export async function initVodPage() {
         showNotification('Could not load VOD library.', true);
     }
 
-    // 2. Populate the category filter dropdown
-    populateVodGroups(library.categories); // Pass fetched categories
+    // 2. Populate the category filter dropdown (for the active type tab)
+    populateVodGroups();
     UIElements.vodGroupFilter.value = 'all'; // Ensure "All Categories" is selected
 
     // 3. Set initial state of the VOD Direct Play checkbox
@@ -70,10 +70,33 @@ export async function initVodPage() {
 
 
 /**
- * Populates the "All Categories" dropdown filter.
+ * Returns the active type tab: 'all', 'movies' or 'series'.
  */
-function populateVodGroups(categories) {
+function getActiveVodTypeFilter() {
+    const activeTypeBtn = document.querySelector('.vod-type-btn.active');
+    return activeTypeBtn ? activeTypeBtn.id.replace('vod-type-', '') : 'all';
+}
+
+/**
+ * Populates the "All Categories" dropdown filter.
+ * Categories are derived from the library entries of the active type tab, so the
+ * Movies tab only offers movie categories and the Series tab only series ones.
+ * The current selection is kept when it still exists for the new type.
+ */
+function populateVodGroups() {
     const selectEl = UIElements.vodGroupFilter;
+    const typeFilter = getActiveVodTypeFilter();
+    const previousValue = selectEl.value;
+
+    const categorySet = new Set();
+    vodState.fullLibrary.forEach(item => {
+        const typeMatch = (typeFilter === 'all')
+            || (typeFilter === 'movies' && item.type === 'movie')
+            || (typeFilter === 'series' && item.type === 'series');
+        if (typeMatch && item.group) categorySet.add(item.group);
+    });
+    const categories = Array.from(categorySet).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+
     selectEl.innerHTML = ''; // Clear existing options
 
     // Always add "All Categories"
@@ -82,17 +105,17 @@ function populateVodGroups(categories) {
     allOption.textContent = 'All Categories';
     selectEl.appendChild(allOption);
 
-    // Add sorted group names
-    if (categories && Array.isArray(categories)) {
-        categories.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })).forEach(group => {
-            const option = document.createElement('option');
-            option.value = group;
-            option.textContent = group;
-            selectEl.appendChild(option);
-        });
-    }
+    categories.forEach(group => {
+        const option = document.createElement('option');
+        option.value = group;
+        option.textContent = group;
+        selectEl.appendChild(option);
+    });
 
-    console.log(`[VOD] Populated group filter with ${categories ? categories.length : 0} categories.`);
+    // Keep the previous choice if it still applies, otherwise fall back to "All"
+    selectEl.value = (previousValue && categorySet.has(previousValue)) ? previousValue : 'all';
+
+    console.log(`[VOD] Populated group filter with ${categories.length} categories for type "${typeFilter}".`);
 }
 
 /**
@@ -104,8 +127,7 @@ function renderVodGrid() {
     if (!gridEl || !noResultsEl) return;
 
     // 1. Get current filter values
-    const activeTypeBtn = document.querySelector('.vod-type-btn.active');
-    const typeFilter = activeTypeBtn ? activeTypeBtn.id.replace('vod-type-', '') : 'all'; // 'all', 'movies', 'series'
+    const typeFilter = getActiveVodTypeFilter(); // 'all', 'movies', 'series'
     const groupFilter = UIElements.vodGroupFilter.value; // 'all' or specific group
     const searchFilter = UIElements.vodSearchInput.value.toLowerCase();
 
@@ -323,18 +345,25 @@ function setupVodEventListeners() {
         UIElements.vodTypeAll.classList.add('active');
         UIElements.vodTypeMovies.classList.remove('active');
         UIElements.vodTypeSeries.classList.remove('active');
+        // Categories depend on the type tab, so rebuild the dropdown first
+        populateVodGroups();
+        vodState.pagination.currentPage = 1;
         renderVodGrid();
     });
     UIElements.vodTypeMovies.addEventListener('click', () => {
         UIElements.vodTypeAll.classList.remove('active');
         UIElements.vodTypeMovies.classList.add('active');
         UIElements.vodTypeSeries.classList.remove('active');
+        populateVodGroups();
+        vodState.pagination.currentPage = 1;
         renderVodGrid();
     });
     UIElements.vodTypeSeries.addEventListener('click', () => {
         UIElements.vodTypeAll.classList.remove('active');
         UIElements.vodTypeMovies.classList.remove('active');
         UIElements.vodTypeSeries.classList.add('active');
+        populateVodGroups();
+        vodState.pagination.currentPage = 1;
         renderVodGrid();
     });
 

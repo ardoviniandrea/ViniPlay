@@ -2206,7 +2206,11 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
                 providerMap.set(p.id, {
                     baseUrl: `${url.protocol}//${url.host}`,
                     username: xcInfo.username,
-                    password: xcInfo.password
+                    password: xcInfo.password,
+                    // Source-level group filter, the same selection the live M3U parser uses.
+                    // Applied here as well as at import time, so content already in the DB
+                    // from before the filter was set is hidden without needing a refresh.
+                    selectedGroups: new Set(Array.isArray(p.selectedGroups) ? p.selectedGroups : [])
                 });
             } catch (e) {
                 console.error(`[API_VOD] Skipping provider ${p.name}, invalid XC data: ${e.message}`);
@@ -2233,6 +2237,11 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
         const processedMovies = movies.map(m => {
             const provider = providerMap.get(m.provider_id);
             if (!provider) return null; // Skip if provider is not active
+
+            // SOURCE GROUP FILTER: skip categories the source's own selection excludes
+            if (provider.selectedGroups.size > 0 && !provider.selectedGroups.has(m.category_name)) {
+                return null;
+            }
 
             // PERMISSION CHECK: Filter by category if strict groups are defined
             if (allowedSources) {
@@ -2277,6 +2286,13 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
 
         // Process series headers with permission checks
         const processedSeries = seriesList.map(series => {
+            // SOURCE GROUP FILTER: skip categories the source's own selection excludes
+            const seriesProvider = providerMap.get(series.provider_id);
+            if (!seriesProvider) return null;
+            if (seriesProvider.selectedGroups.size > 0 && !seriesProvider.selectedGroups.has(series.category_name)) {
+                return null;
+            }
+
             // PERMISSION CHECK: Filter by category if strict groups are defined
             if (allowedSources) {
                 const perms = allowedSources[series.provider_id];
@@ -2523,7 +2539,17 @@ app.get('/api/vod/categories', requireAuth, async (req, res) => {
     console.log('[API_VOD] Request received for /api/vod/categories');
     try {
         const categories = await dbAll(db, "SELECT category_name FROM vod_categories ORDER BY category_name");
-        const categoryNames = categories.map(cat => cat.category_name);
+        let categoryNames = categories.map(cat => cat.category_name);
+
+        // Hide categories excluded by every active source's own group selection.
+        // vod_categories is not per-provider, so a category is kept when at least one
+        // active source either has no filter or lists it.
+        const activeSources = getSettings().m3uSources.filter(s => s.isActive);
+        if (activeSources.length > 0 && activeSources.every(s => Array.isArray(s.selectedGroups) && s.selectedGroups.length > 0)) {
+            const allowed = new Set(activeSources.flatMap(s => s.selectedGroups));
+            categoryNames = categoryNames.filter(name => allowed.has(name));
+        }
+
         res.json({ success: true, categories: categoryNames });
     } catch (error) {
         console.error(`[API_VOD] Error fetching VOD categories: ${error.message}`, error);

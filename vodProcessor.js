@@ -32,6 +32,18 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
     const client = new XtreamClient(server_url, username, password, userAgent);
     const providerId = provider.id;
 
+    // --- Group Filter Logic ---
+    // Same source-level filter the live M3U parser applies: when the user has picked
+    // groups for this source, only import VOD whose category is in that selection.
+    const selectedGroups = Array.isArray(provider.selectedGroups) ? provider.selectedGroups : [];
+    const selectedGroupSet = new Set(selectedGroups);
+    const isGroupFilteringActive = selectedGroupSet.size > 0;
+    if (isGroupFilteringActive) {
+        console.log(`[VOD Processor] Group filter active for ${provider.name}: ${selectedGroupSet.size} groups selected.`);
+        sendStatus(` -> Applying VOD group filter. ${selectedGroupSet.size} groups selected.`, 'info');
+    }
+    // ---
+
     // --- Schema Migration ---
     try {
         await dbRun(db, "ALTER TABLE movies ADD COLUMN provider_unique_id TEXT");
@@ -122,6 +134,9 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
                 }
                 const categoryName = categoryMap.get(String(category_id)) || 'VOD';
 
+                // Skip movies whose category is not in the source's group selection.
+                if (isGroupFilteringActive && !selectedGroupSet.has(categoryName)) continue;
+
                 let movieId = providerUniqueIdMap.get(providerUniqueId);
 
                 if (movieId) {
@@ -182,6 +197,9 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
                     if (yearMatch) year = parseInt(yearMatch[1]);
                 }
                 const categoryName = categoryMap.get(String(category_id)) || 'Series';
+
+                // Skip series whose category is not in the source's group selection.
+                if (isGroupFilteringActive && !selectedGroupSet.has(categoryName)) continue;
 
                 let seriesId = providerUniqueIdMap.get(providerUniqueId);
 
@@ -261,6 +279,12 @@ async function processM3uVod(db, dbGet, dbAll, dbRun, m3uContent, provider, send
     const scanStartTime = new Date().toISOString();
     const providerId = provider.id;
 
+    // --- Group Filter Logic (same selection as the live M3U parser uses) ---
+    const selectedGroups = Array.isArray(provider.selectedGroups) ? provider.selectedGroups : [];
+    const selectedGroupSet = new Set(selectedGroups);
+    const isGroupFilteringActive = selectedGroupSet.size > 0;
+    // ---
+
     try {
         const lines = m3uContent.split('\n');
         let currentExtInf = null;
@@ -283,6 +307,13 @@ async function processM3uVod(db, dbGet, dbAll, dbRun, m3uContent, provider, send
                 const url = line.trim();
                 const isMovie = url.includes('/movie/') || currentExtInf.attributes['tvg-type'] === 'movie';
                 const isSeries = url.includes('/series/') || currentExtInf.attributes['tvg-type'] === 'series';
+
+                // Skip entries whose group is not in the source's group selection.
+                const groupTitle = currentExtInf.attributes['group-title'] || (isSeries ? 'Series' : 'VOD');
+                if (isGroupFilteringActive && !selectedGroupSet.has(groupTitle)) {
+                    currentExtInf = null;
+                    continue;
+                }
 
                 if (isMovie) {
                     movies.push({ ...currentExtInf, url });
