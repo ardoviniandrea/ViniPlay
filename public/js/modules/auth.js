@@ -38,6 +38,8 @@ const initializeUIElements = () => {
 
     // Program Details Modal and its Buttons
     UIElements.programDetailsModal = document.getElementById('program-details-modal');
+    UIElements.programDetailsContainer = document.getElementById('program-details-container');
+    UIElements.detailsResizeHandle = document.getElementById('details-resize-handle');
     UIElements.programDetailsNotifyBtn = document.getElementById('program-details-notify-btn');
     UIElements.programDetailsRecordBtn = document.getElementById('details-record-btn');
 
@@ -106,28 +108,71 @@ const initializeUIElements = () => {
     UIElements.directPlayerContainer = document.getElementById('direct-player-container');
     UIElements.directVideoElement = document.getElementById('direct-video-element');
 
+    // Video Player Modal Elements
+    UIElements.videoModal = document.getElementById('video-modal');
+    UIElements.videoModalContainer = document.getElementById('video-modal-container');
+    UIElements.videoResizeHandle = document.getElementById('video-resize-handle');
+    UIElements.videoElement = document.getElementById('videoElement');
+    UIElements.audioElement = document.getElementById('audioElement');
+    UIElements.videoTitle = document.getElementById('video-title');
+    UIElements.closeModalBtn = document.getElementById('close-modal');
+
     // DVR Elements
     UIElements.pageDvr = document.getElementById('page-dvr');
     UIElements.tabDvr = document.getElementById('tab-dvr');
     UIElements.mobileNavDvr = document.getElementById('mobile-nav-dvr');
+    UIElements.dvrStoragePercentBadge = document.getElementById('dvr-storage-percent-badge');
+    UIElements.dvrStorageText = document.getElementById('dvr-storage-text');
+    UIElements.dvrStorageBar = document.getElementById('dvr-storage-bar');
+
+    UIElements.dvrLiveHeroBanner = document.getElementById('dvr-live-hero-banner');
+    UIElements.dvrLiveStatusBadge = document.getElementById('dvr-live-status-badge');
+    UIElements.dvrLiveChannelBadge = document.getElementById('dvr-live-channel-badge');
+    UIElements.dvrLiveTitle = document.getElementById('dvr-live-title');
+    UIElements.dvrLiveWindow = document.getElementById('dvr-live-window');
+    UIElements.dvrLiveCountdown = document.getElementById('dvr-live-countdown');
+    UIElements.dvrLiveProgressBar = document.getElementById('dvr-live-progress-bar');
+    UIElements.dvrLiveElapsedText = document.getElementById('dvr-live-elapsed-text');
+    UIElements.dvrLiveTimeshiftBtn = document.getElementById('dvr-live-timeshift-btn');
+    UIElements.dvrLiveStopBtn = document.getElementById('dvr-live-stop-btn');
+
+    UIElements.dvrTabBtnRecordings = document.getElementById('dvr-tab-btn-recordings');
+    UIElements.dvrTabBtnScheduled = document.getElementById('dvr-tab-btn-scheduled');
+    UIElements.dvrTabBtnHistory = document.getElementById('dvr-tab-btn-history');
+    UIElements.dvrRecordingsCount = document.getElementById('dvr-recordings-count');
+    UIElements.dvrScheduledCount = document.getElementById('dvr-scheduled-count');
+    UIElements.dvrRecordingsContent = document.getElementById('dvr-recordings-content');
+    UIElements.dvrScheduledContent = document.getElementById('dvr-scheduled-content');
+    UIElements.dvrHistoryContent = document.getElementById('dvr-history-content');
+    UIElements.dvrSearchInput = document.getElementById('dvr-search-input');
+    UIElements.dvrViewSwitcher = document.getElementById('dvr-view-switcher');
+    UIElements.dvrViewTableBtn = document.getElementById('dvr-view-table-btn');
+    UIElements.dvrViewCardsBtn = document.getElementById('dvr-view-cards-btn');
+    UIElements.dvrToggleManualBtn = document.getElementById('dvr-toggle-manual-btn');
+    UIElements.closeManualRecBtn = document.getElementById('close-manual-rec-btn');
+
+    UIElements.manualRecordingSection = document.getElementById('manual-recording-section');
+    UIElements.scheduledRecordingsSection = document.getElementById('scheduled-recordings-section');
     UIElements.dvrJobsTbody = document.getElementById('dvr-jobs-tbody');
     UIElements.noDvrJobsMessage = document.getElementById('no-dvr-jobs-message');
     UIElements.dvrRecordingsTbody = document.getElementById('dvr-recordings-tbody');
+    UIElements.dvrRecordingsCardsContainer = document.getElementById('dvr-recordings-cards-container');
     UIElements.noDvrRecordingsMessage = document.getElementById('no-dvr-recordings-message');
-    UIElements.recordingPlayerModal = document.getElementById('recording-player-modal');
-    UIElements.recordingVideoElement = document.getElementById('recording-video-element');
-    UIElements.recordingTitle = document.getElementById('recording-title');
-    UIElements.closeRecordingPlayerBtn = document.getElementById('close-recording-player-btn');
+    UIElements.dvrJobsTableContainer = document.getElementById('dvr-jobs-table-container');
+    UIElements.dvrRecordingsTableContainer = document.getElementById('dvr-recordings-table-container');
+    UIElements.dvrHistoryTbody = document.getElementById('dvr-history-tbody');
+    UIElements.noDvrHistoryMessage = document.getElementById('no-dvr-history-message');
+    UIElements.dvrHistoryTableContainer = document.getElementById('dvr-history-table-container');
+    UIElements.clearHistoryDvrBtn = document.getElementById('clear-history-dvr-btn');
+
     UIElements.dvrPreBufferInput = document.getElementById('dvr-pre-buffer-input');
     UIElements.dvrPostBufferInput = document.getElementById('dvr-post-buffer-input');
     UIElements.addDvrProfileBtn = document.getElementById('add-dvr-profile-btn');
     UIElements.editDvrProfileBtn = document.getElementById('edit-dvr-profile-btn');
     UIElements.deleteDvrProfileBtn = document.getElementById('delete-dvr-profile-btn');
     UIElements.dvrRecordingProfileSelect = document.getElementById('dvr-recording-profile-select');
-    // FIX: Add explicit references for the clear all buttons
     UIElements.clearScheduledDvrBtn = document.getElementById('clear-scheduled-dvr-btn');
     UIElements.clearCompletedDvrBtn = document.getElementById('clear-completed-dvr-btn');
-    // UX IMPROVEMENT: Add references for profile containers
     UIElements.streamProfileContainer = document.getElementById('stream-profile-container');
     UIElements.dvrProfileContainer = document.getElementById('dvr-profile-container');
 
@@ -178,6 +223,8 @@ const initializeUIElements = () => {
     UIElements.vodPlayMovieBtn = document.getElementById('vod-play-movie-btn');
     UIElements.vodDetailsSeriesActions = document.getElementById('vod-details-series-actions');
     UIElements.vodSeasonSelect = document.getElementById('vod-season-select');
+    UIElements.vodSeasonTabs = document.getElementById('vod-season-tabs');
+    UIElements.vodEpisodesCountBadge = document.getElementById('vod-episodes-count-badge');
     UIElements.vodEpisodeList = document.getElementById('vod-episode-list');
     // --- END VOD Elements ---
 
@@ -217,6 +264,14 @@ const initializeUIElements = () => {
     UIElements.clearLogsBtn = document.getElementById('clear-logs-btn');
     // --- END Log Management Elements ---
 
+    // --- Resume Playback Modal Elements ---
+    UIElements.resumePlaybackModal = document.getElementById('resume-playback-modal');
+    UIElements.resumePlaybackTitle = document.getElementById('resume-playback-title');
+    UIElements.resumePlaybackMessage = document.getElementById('resume-playback-message');
+    UIElements.resumePlaybackConfirmBtn = document.getElementById('resume-playback-confirm-btn');
+    UIElements.resumePlaybackConfirmLabel = document.getElementById('resume-playback-confirm-label');
+    UIElements.resumePlaybackRestartBtn = document.getElementById('resume-playback-restart-btn');
+    UIElements.resumePlaybackCloseBtn = document.getElementById('resume-playback-close-btn');
 };
 
 

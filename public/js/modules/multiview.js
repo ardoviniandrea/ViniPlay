@@ -5,7 +5,7 @@
  */
 
 import { appState, guideState, UIElements } from './state.js';
-import { apiFetch, stopStream, startRedirectStream, stopRedirectStream } from './api.js';
+import { apiFetch, stopStream, startRedirectStream, stopRedirectStream, sendRedirectHeartbeat } from './api.js';
 import { showNotification, openModal, closeModal, showConfirm } from './ui.js';
 import { ICONS } from './icons.js';
 
@@ -19,6 +19,43 @@ let immersiveHeaderTimeout = null; // NEW: Timer for immersive mode header
 
 const MAX_PLAYERS = 9;
 const redirectHistoryIds = new Map(); // To track redirect streams for logging
+let multiviewHeartbeatInterval = null; // NEW: Heartbeat timer for multiview redirect streams
+
+/**
+ * Starts periodic 30s heartbeats for all active redirect streams in MultiView.
+ */
+function startMultiviewHeartbeats() {
+    if (multiviewHeartbeatInterval) return;
+    multiviewHeartbeatInterval = setInterval(async () => {
+        if (redirectHistoryIds.size === 0) {
+            clearInterval(multiviewHeartbeatInterval);
+            multiviewHeartbeatInterval = null;
+            return;
+        }
+        for (const [widgetId, historyId] of redirectHistoryIds.entries()) {
+            await sendRedirectHeartbeat(historyId);
+        }
+    }, 30000);
+}
+
+/**
+ * Stops the multiview heartbeat timer if no redirect streams are active.
+ */
+function checkAndStopMultiviewHeartbeats() {
+    if (redirectHistoryIds.size === 0 && multiviewHeartbeatInterval) {
+        clearInterval(multiviewHeartbeatInterval);
+        multiviewHeartbeatInterval = null;
+    }
+}
+
+// Unload handlers to cleanly stop all active redirect streams in MultiView on tab/browser close
+const handleMultiviewUnload = () => {
+    for (const historyId of redirectHistoryIds.values()) {
+        stopRedirectStream(historyId, true);
+    }
+};
+window.addEventListener('pagehide', handleMultiviewUnload);
+window.addEventListener('beforeunload', handleMultiviewUnload);
 
 /**
  * Detects if a URL is a VOD file by checking for file extensions.
@@ -185,6 +222,7 @@ export async function cleanupMultiView() {
         stopRedirectStream(historyId);
     }
     redirectHistoryIds.clear();
+    checkAndStopMultiviewHeartbeats();
     activePlayerId = null;
     channelSelectorCallback = null;
     lastLayoutBeforeHide = null; // A full cleanup should clear this
@@ -695,6 +733,7 @@ async function playChannelInWidget(widgetId, channel, gridstackItemContentEl) {
             const historyId = await startRedirectStream(channel.url, channel.id, channel.name, channel.logo);
             if (historyId) {
                 redirectHistoryIds.set(widgetId, historyId);
+                startMultiviewHeartbeats();
             }
         }
     }
@@ -787,6 +826,7 @@ async function stopAndCleanupPlayer(widgetId, resetUI = true) {
     if (redirectHistoryIds.has(widgetId)) {
         stopPromises.push(stopRedirectStream(redirectHistoryIds.get(widgetId)));
         redirectHistoryIds.delete(widgetId);
+        checkAndStopMultiviewHeartbeats();
     }
 
     if (playerUrls.has(widgetId)) {

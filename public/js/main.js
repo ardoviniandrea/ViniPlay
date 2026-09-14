@@ -6,7 +6,7 @@
  */
 
 import { appState, guideState, UIElements } from './modules/state.js';
-import { apiFetch, fetchConfig } from './modules/api.js'; // IMPORTED fetchConfig
+import { apiFetch, fetchConfig, getDeviceSetting, saveDeviceSetting } from './modules/api.js'; // IMPORTED fetchConfig & device settings
 import { checkAuthStatus, setupAuthEventListeners } from './modules/auth.js';
 import { handleGuideLoad, finalizeGuideLoad, setupGuideEventListeners } from './modules/guide.js';
 //-- ENHANCEMENT: Import playChannel to handle the remote channel change event.
@@ -23,6 +23,7 @@ import { initVodPage } from './modules/vod.js';
 import { ICONS } from './modules/icons.js'; // MODIFIED: Import the new icon library
 //-- ENHANCEMENT: Import the new handler for channel selector clicks from the admin page.
 import { initActivityPage, setupAdminEventListeners, handleActivityUpdate, handleAdminChannelClick } from './modules/admin.js';
+import { initTelemetry } from './modules/telemetry.js';
 
 // The initializeCastApi function is no longer called directly from here,
 // but the cast.js module will handle its own initialization via the window callback.
@@ -136,11 +137,32 @@ function initializeSse() {
         // This could be extended in the future if needed.
     });
 
+    //-- NEW: Listen for remote stop stream command from admin.
+    eventSource.addEventListener('stop-stream', (event) => {
+        console.log('[SSE] Received "stop-stream" command from admin.');
+        let message = 'An administrator has stopped your stream.';
+        try {
+            const data = JSON.parse(event.data || '{}');
+            if (data.message) message = data.message;
+        } catch (e) {}
+        stopAndCleanupPlayer().then(() => {
+            showNotification(message, true, 5000);
+        });
+    });
+
     // NEW: Listen for admin broadcast messages
     eventSource.addEventListener('broadcast-message', (event) => {
         console.log('[SSE] Received broadcast message from admin.');
         const data = JSON.parse(event.data);
         showBroadcastMessage(data.message);
+    });
+
+    // NEW: Listen for real-time DVR recording updates
+    eventSource.addEventListener('dvr-update', (event) => {
+        console.log('[SSE] Received "dvr-update" event from server.');
+        if (window.location.pathname.startsWith('/dvr')) {
+            initDvrPage();
+        }
     });
 }
 
@@ -377,30 +399,45 @@ async function saveDataToDB(key, value) {
 }
 
 /**
- * Restores the dimensions of resizable modals and the channel column from saved settings.
+ * Restores the dimensions of resizable modals and the channel column from saved device settings.
  */
 function restoreDimensions() {
-    console.log('[MAIN] Restoring UI dimensions from settings.');
-    if (guideState.settings.playerDimensions && UIElements.videoModalContainer) {
-        const { width, height } = guideState.settings.playerDimensions;
-        if (width) UIElements.videoModalContainer.style.width = `${width}px`;
-        if (height) UIElements.videoModalContainer.style.height = `${height}px`;
-        console.log(`[MAIN] Restored player dimensions: ${width}x${height}`);
+    console.log('[MAIN] Restoring UI dimensions from device settings.');
+
+    // 1. Player modal dimensions
+    const playerDims = getDeviceSetting('playerDimensions', guideState.settings?.playerDimensions);
+    if (playerDims && UIElements.videoModalContainer) {
+        const { width, height } = playerDims;
+        const maxWidth = Math.max(200, window.innerWidth - 16);
+        const maxHeight = Math.max(150, window.innerHeight - 16);
+        const safeWidth = Math.min(maxWidth, width);
+        const safeHeight = Math.min(maxHeight, height);
+        if (safeWidth) UIElements.videoModalContainer.style.width = `${safeWidth}px`;
+        if (safeHeight) UIElements.videoModalContainer.style.height = `${safeHeight}px`;
+        console.log(`[MAIN] Restored player dimensions for this device: ${safeWidth}x${safeHeight}`);
     }
-    if (guideState.settings.programDetailsDimensions && UIElements.programDetailsContainer) {
-        const { width, height } = guideState.settings.programDetailsDimensions;
-        if (width) UIElements.programDetailsContainer.style.width = `${width}px`;
-        if (height) UIElements.programDetailsContainer.style.height = `${height}px`;
-        console.log(`[MAIN] Restored program details dimensions: ${width}x${height}`);
+
+    // 2. Program details modal dimensions
+    const detailsDims = getDeviceSetting('programDetailsDimensions', guideState.settings?.programDetailsDimensions);
+    if (detailsDims && UIElements.programDetailsContainer) {
+        const { width, height } = detailsDims;
+        const maxWidth = Math.max(200, window.innerWidth - 16);
+        const maxHeight = Math.max(150, window.innerHeight - 16);
+        const safeWidth = Math.min(maxWidth, width);
+        const safeHeight = Math.min(maxHeight, height);
+        if (safeWidth) UIElements.programDetailsContainer.style.width = `${safeWidth}px`;
+        if (safeHeight) UIElements.programDetailsContainer.style.height = `${safeHeight}px`;
+        console.log(`[MAIN] Restored program details dimensions for this device: ${safeWidth}x${safeHeight}`);
     }
-    if (guideState.settings.channelColumnWidth && UIElements.guideGrid) {
-        UIElements.guideGrid.style.setProperty('--channel-col-width', `${guideState.settings.channelColumnWidth}px`);
-        console.log(`[MAIN] Restored channel column width: ${guideState.settings.channelColumnWidth}px`);
-    } else if (UIElements.guideGrid) {
-        // Set default if not in settings (or if it's the first run)
-        const defaultChannelWidth = window.innerWidth < 768 ? 64 : 180;
-        UIElements.guideGrid.style.setProperty('--channel-col-width', `${defaultChannelWidth}px`);
-        console.log(`[MAIN] Set default channel column width: ${defaultChannelWidth}px`);
+
+    // 3. Channel column width
+    const defaultChannelWidth = window.innerWidth < 768 ? 64 : 180;
+    const channelWidth = getDeviceSetting('channelColumnWidth', guideState.settings?.channelColumnWidth || defaultChannelWidth);
+    if (UIElements.guideGrid) {
+        const safeWidth = Math.min(window.innerWidth - 80, Math.max(50, channelWidth));
+        UIElements.guideGrid.style.setProperty('--channel-col-width', `${safeWidth}px`);
+        if (guideState.settings) guideState.settings.channelColumnWidth = safeWidth;
+        console.log(`[MAIN] Restored channel column width for this device: ${safeWidth}px`);
     }
 }
 
@@ -564,6 +601,7 @@ function setupCoreEventListeners() {
 
 // --- App Start ---
 document.addEventListener('DOMContentLoaded', () => {
+    initTelemetry();
     // NEW: Check for notification deep link parameters on initial load.
     const urlParams = new URLSearchParams(window.location.search);
     const channelId = urlParams.get('channelId');
@@ -573,6 +611,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (channelId && programId && programStart) {
         console.log('[MAIN] Notification deep link detected. Storing target:', { channelId, programId, programStart });
         notificationTarget = { channelId, programId, programStart };
+    }
+
+    // PWA Launch Handler: ensure app focuses without re-navigating or reloading when tapped from home screen
+    if ('launchQueue' in window) {
+        window.launchQueue.setConsumer((launchParams) => {
+            console.log('[PWA_LAUNCH] App focused from OS/launcher without reload:', launchParams?.targetURL);
+        });
     }
 
     // Register Service Worker

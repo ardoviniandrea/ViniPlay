@@ -729,6 +729,9 @@ export const updateUIFromSettings = async () => {
     UIElements.searchScopeSelect.value = settings.searchScope;
     UIElements.playerLogLevelSelect.value = settings.playerLogLevel;
     UIElements.dvrLogLevelSelect.value = settings.dvrLogLevel;
+    if (UIElements.clientTelemetryToggle) {
+        UIElements.clientTelemetryToggle.checked = settings.clientTelemetryEnabled === true;
+    }
     UIElements.notificationLeadTimeInput.value = settings.notificationLeadTime;
 
     // Update DVR inputs
@@ -1434,6 +1437,11 @@ export function setupSettingsEventListeners() {
     UIElements.searchScopeSelect.addEventListener('change', (e) => saveSettingAndNotify(saveGlobalSetting, { searchScope: e.target.value }));
     UIElements.playerLogLevelSelect.addEventListener('change', (e) => saveSettingAndNotify(saveGlobalSetting, { playerLogLevel: e.target.value }));
     UIElements.dvrLogLevelSelect.addEventListener('change', (e) => saveSettingAndNotify(saveGlobalSetting, { dvrLogLevel: e.target.value }));
+    if (UIElements.clientTelemetryToggle) {
+        UIElements.clientTelemetryToggle.addEventListener('change', (e) => {
+            saveSettingAndNotify(saveGlobalSetting, { clientTelemetryEnabled: e.target.checked });
+        });
+    }
     UIElements.notificationLeadTimeInput.addEventListener('change', async (e) => {
         const value = parseInt(e.target.value, 10);
         if (isNaN(value) || value < 1) {

@@ -4,15 +4,14 @@
  */
 
 import { UIElements, dvrState, guideState, appState } from './state.js';
-import { apiFetch } from './api.js';
-import { showNotification, showConfirm, openModal, closeModal } from './ui.js';
+import { apiFetch, getWatchProgress, deleteWatchProgress } from './api.js';
+import { showNotification, showConfirm, openModal, closeModal, showResumePrompt } from './ui.js';
 import { handleSearchAndFilter } from './guide.js';
 // MODIFIED: Import the corrected navigation function from notification.js
 import { navigateToProgramInGuide } from './notification.js';
-// MODIFIED: Import channel selector populator from multiview
 import { populateChannelSelector } from './multiview.js';
-import { ICONS } from './icons.js'; // MODIFIED: Import the new icon library
-import { stopAndCleanupPlayer } from './player.js'; // **NEW: Import main player cleanup function**
+import { ICONS } from './icons.js';
+import { stopAndCleanupPlayer, playRecordingOrDirectVideo, setActiveMediaTracking } from './player.js';
 
 /**
  * Initializes the DVR page by fetching all required data from the backend.
@@ -22,12 +21,19 @@ export async function initDvrPage() {
     console.log('[DVR] Initializing DVR page...');
     const hasDvrPermission = appState.currentUser?.isAdmin || appState.currentUser?.canUseDvr;
 
-    // Toggle visibility of DVR sections based on user permissions
-    const manualRecSection = document.getElementById('manual-recording-section');
-    const scheduledSection = document.getElementById('scheduled-recordings-section');
+    // Toggle visibility of DVR controls based on user permissions
+    const manualRecSection = UIElements.manualRecordingSection || document.getElementById('manual-recording-section');
+    if (manualRecSection) manualRecSection.classList.add('hidden'); // default to collapsed drawer
+    if (UIElements.dvrToggleManualBtn) UIElements.dvrToggleManualBtn.classList.toggle('hidden', !hasDvrPermission);
+    if (UIElements.dvrTabBtnScheduled) UIElements.dvrTabBtnScheduled.classList.toggle('hidden', !hasDvrPermission);
+    if (UIElements.dvrTabBtnHistory) UIElements.dvrTabBtnHistory.classList.toggle('hidden', !hasDvrPermission);
 
-    if (manualRecSection) manualRecSection.classList.toggle('hidden', !hasDvrPermission);
-    if (scheduledSection) scheduledSection.classList.toggle('hidden', !hasDvrPermission);
+    // Initialize active tab (default to 'recordings')
+    switchDvrTab(dvrState.activeTab || 'recordings');
+
+    // Restore view mode (table vs cards)
+    const savedMode = localStorage.getItem('viniplay_dvr_view_mode') || 'table';
+    setRecordingViewMode(savedMode, false);
 
     const promises = [
         loadCompletedRecordings(),
@@ -38,8 +44,8 @@ export async function initDvrPage() {
         promises.push(loadScheduledJobs());
     } else {
         // Explicitly hide these elements if user has no DVR permission
-        UIElements.noDvrJobsMessage.classList.add('hidden');
-        UIElements.dvrJobsTableContainer.classList.add('hidden');
+        if (UIElements.noDvrJobsMessage) UIElements.noDvrJobsMessage.classList.add('hidden');
+        if (UIElements.dvrJobsTableContainer) UIElements.dvrJobsTableContainer.classList.add('hidden');
     }
 
     await Promise.all(promises);
@@ -92,8 +98,51 @@ async function loadStorageInfo() {
  * Plays an in-progress recording using the main mpegts.js player.
  * @param {object} job - The DVR job object that is currently recording.
  */
-async function playTimeshiftStream(job) {
+let timeshiftUpdateInterval = null;
+let timeshiftHideTimeout = null;
+let isUserSeeking = false;
+
+function formatTimeshiftTime(seconds) {
+    if (isNaN(seconds) || seconds < 0) seconds = 0;
+    const totalSecs = Math.floor(seconds);
+    const hrs = Math.floor(totalSecs / 3600);
+    const mins = Math.floor((totalSecs % 3600) / 60);
+    const secs = totalSecs % 60;
+    if (hrs > 0) {
+        return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+}
+
+/**
+ * Plays an in-progress recording using Hls.js with custom timeshift seekbar controls.
+ * @param {object} job - The DVR job object that is currently recording.
+ */
+async function playTimeshiftStream(job, startTime = 0) {
     if (!job) return;
+
+    if (startTime === 0) {
+        try {
+            const prog = await getWatchProgress('dvr_job', job.id);
+            if (prog && prog.progress_seconds >= 15 && (!prog.duration_seconds || prog.progress_seconds < prog.duration_seconds * 0.95)) {
+                showResumePrompt({
+                    title: job.programTitle || 'Live Recording',
+                    progressSeconds: prog.progress_seconds,
+                    durationSeconds: prog.duration_seconds || 0,
+                    onResume: () => playTimeshiftStream(job, prog.progress_seconds),
+                    onStartOver: () => {
+                        deleteWatchProgress('dvr_job', job.id);
+                        playTimeshiftStream(job, -1);
+                    }
+                });
+                return;
+            }
+        } catch (err) {
+            console.warn('[DVR_TIMESHIFT] Error checking watch progress:', err);
+        }
+    }
+
+    const seekTarget = Math.max(0, startTime);
 
     // Use the main player modal for timeshifting
     const playerModal = UIElements.videoModal;
@@ -102,75 +151,315 @@ async function playTimeshiftStream(job) {
 
     // 1. Stop any existing stream in the main player
     await stopAndCleanupPlayer();
+    await new Promise(r => setTimeout(r, 50)); // Short micro-yield to allow browser MSE decoder to flush
 
-    const streamUrl = `/api/dvr/timeshift/${job.id}`;
-    console.log(`[DVR_TIMESHIFT] Starting playback for URL: ${streamUrl}`);
-    videoTitle.textContent = `${job.programTitle} (Recording...)`;
+    const streamUrl = `/api/dvr/timeshift/${job.id}/stream.m3u8?_t=${Date.now()}`;
+    console.log(`[DVR_TIMESHIFT] Starting HLS timeshift playback for URL: ${streamUrl} at ${seekTarget}s`);
+    videoTitle.textContent = `${job.programTitle} (Timeshift)`;
 
-    if (mpegts.isSupported()) {
-        // 2. Create and configure the mpegts.js player
-        const mpegtsConfig = {
-            enableStashBuffer: true,
-            stashInitialSize: 4096,
-            isLive: true, // Treat it as a live stream
-        };
+    appState.activeTimeshiftJobId = job.id;
 
-        appState.player = mpegts.createPlayer({
-            type: 'mse',
-            isLive: true,
-            url: streamUrl
-        }, mpegtsConfig);
+    // Hide native controls so our timeshift overlay takes over without interference
+    videoElement.controls = false;
 
-        // 3. Attach and play
-        appState.player.attachMediaElement(videoElement);
-        appState.player.load();
-        appState.player.play().catch((err) => {
-            console.error("MPEGTS Player Error (Timeshift):", err);
-            showNotification("Could not play timeshift stream.", true);
-            stopAndCleanupPlayer();
+    const overlay = document.getElementById('timeshift-controls-overlay') || UIElements.timeshiftControlsOverlay;
+    if (overlay) {
+        overlay.classList.remove('hidden');
+        overlay.style.opacity = '1';
+    }
+
+    const progressBar = document.getElementById('timeshift-progress-bar') || UIElements.timeshiftProgressBar;
+    const currentTimeEl = document.getElementById('timeshift-current-time') || UIElements.timeshiftCurrentTime;
+    const totalTimeEl = document.getElementById('timeshift-total-time') || UIElements.timeshiftTotalTime;
+    const liveEdgeBtn = document.getElementById('timeshift-live-edge-btn') || UIElements.timeshiftLiveEdgeBtn;
+    const liveDot = document.getElementById('timeshift-live-dot') || UIElements.timeshiftLiveDot;
+    const playPauseBtn = document.getElementById('timeshift-play-pause-btn') || UIElements.timeshiftPlayPauseBtn;
+    const rewind15Btn = document.getElementById('timeshift-rewind-15-btn') || UIElements.timeshiftRewind15Btn;
+    const forward15Btn = document.getElementById('timeshift-forward-15-btn') || UIElements.timeshiftForward15Btn;
+
+    if (progressBar) {
+        progressBar.value = seekTarget;
+        progressBar.max = Math.max(100, seekTarget);
+    }
+    if (currentTimeEl) currentTimeEl.textContent = formatTimeshiftTime(seekTarget);
+    if (totalTimeEl) totalTimeEl.textContent = '00:00';
+
+    const getTotalDuration = (hlsInstance) => {
+        let dur = 0;
+        if (videoElement.seekable && videoElement.seekable.length > 0) {
+            dur = videoElement.seekable.end(videoElement.seekable.length - 1);
+        }
+        if ((!dur || isNaN(dur) || dur === Infinity) && hlsInstance?.levels && hlsInstance.levels[hlsInstance.currentLevel]) {
+            dur = hlsInstance.levels[hlsInstance.currentLevel].details?.totalduration || 0;
+        }
+        return (dur && !isNaN(dur) && dur !== Infinity) ? dur : (videoElement.currentTime || 0);
+    };
+
+    if (window.Hls && Hls.isSupported()) {
+        try {
+            const hls = new Hls({
+                startPosition: seekTarget, // Force playback to start from seekTarget (or 00:00)
+                enableWorker: true,
+                lowLatencyMode: false,
+                backBufferLength: Infinity, // Retain past segments in memory for seamless backward scrubbing
+                maxBufferLength: 60,
+                maxMaxBufferLength: 120,
+            });
+            appState.hlsPlayer = hls;
+
+            hls.loadSource(streamUrl);
+            hls.attachMedia(videoElement);
+
+            // Track watch progress for live timeshift job
+            setActiveMediaTracking({
+                contentType: 'dvr_job',
+                contentId: String(job.id),
+                title: job.programTitle
+            });
+
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                console.log(`[HLS_TIMESHIFT] Manifest parsed, opening player at ${seekTarget}s`);
+                openModal(playerModal);
+                if (seekTarget > 0) {
+                    videoElement.currentTime = seekTarget;
+                } else {
+                    videoElement.currentTime = 0;
+                }
+                videoElement.play().catch(e => console.warn('[TIMESHIFT] Autoplay prevented:', e));
+            });
+
+            hls.on(Hls.Events.ERROR, (event, data) => {
+                if (data.fatal) {
+                    console.error('[HLS_TIMESHIFT] Fatal Hls.js error:', data.type, data.details);
+                    switch (data.type) {
+                        case Hls.ErrorTypes.NETWORK_ERROR:
+                            console.log('[HLS_TIMESHIFT] Attempting network error recovery...');
+                            hls.startLoad();
+                            break;
+                        case Hls.ErrorTypes.MEDIA_ERROR:
+                            console.log('[HLS_TIMESHIFT] Attempting media error recovery...');
+                            hls.recoverMediaError();
+                            break;
+                        default:
+                            showNotification('Could not load timeshift stream. Retrying...', true);
+                            stopAndCleanupPlayer();
+                            break;
+                    }
+                }
+            });
+
+            // Start UI updater
+            if (timeshiftUpdateInterval) clearInterval(timeshiftUpdateInterval);
+            timeshiftUpdateInterval = setInterval(() => {
+                if (!appState.activeTimeshiftJobId) {
+                    clearInterval(timeshiftUpdateInterval);
+                    timeshiftUpdateInterval = null;
+                    return;
+                }
+                const total = getTotalDuration(hls);
+                const cur = videoElement.currentTime || 0;
+
+                if (totalTimeEl) totalTimeEl.textContent = formatTimeshiftTime(total);
+                if (currentTimeEl && !isUserSeeking) currentTimeEl.textContent = formatTimeshiftTime(cur);
+
+                if (progressBar && !isUserSeeking) {
+                    progressBar.max = Math.max(1, total);
+                    progressBar.value = cur;
+                }
+
+                // Check if user is at the live edge (within 8 seconds of latest segment)
+                const isNearLive = total > 5 && (total - cur) < 8;
+                if (liveDot && liveEdgeBtn) {
+                    if (isNearLive) {
+                        liveDot.className = 'w-2 h-2 rounded-full bg-white animate-pulse inline-block';
+                        liveEdgeBtn.className = 'ml-1 px-2.5 py-1 text-xs font-bold rounded-md bg-red-600 text-white transition-colors flex items-center gap-1.5 flex-shrink-0 cursor-pointer';
+                    } else {
+                        liveDot.className = 'w-2 h-2 rounded-full bg-gray-400 inline-block';
+                        liveEdgeBtn.className = 'ml-1 px-2.5 py-1 text-xs font-bold rounded-md bg-gray-700 text-gray-300 hover:bg-red-600 hover:text-white transition-colors flex items-center gap-1.5 flex-shrink-0 cursor-pointer';
+                    }
+                }
+
+                if (playPauseBtn) {
+                    playPauseBtn.innerHTML = videoElement.paused ? ICONS.play : ICONS.pause;
+                }
+            }, 250);
+
+            // Scrubber interaction
+            if (progressBar) {
+                progressBar.oninput = (e) => {
+                    isUserSeeking = true;
+                    if (currentTimeEl) currentTimeEl.textContent = formatTimeshiftTime(parseFloat(e.target.value));
+                };
+                progressBar.onchange = (e) => {
+                    isUserSeeking = false;
+                    const targetSec = parseFloat(e.target.value);
+                    videoElement.currentTime = targetSec;
+                };
+            }
+
+            if (rewind15Btn) {
+                rewind15Btn.onclick = () => {
+                    videoElement.currentTime = Math.max(0, (videoElement.currentTime || 0) - 15);
+                };
+            }
+
+            if (forward15Btn) {
+                forward15Btn.onclick = () => {
+                    const total = getTotalDuration(hls);
+                    videoElement.currentTime = Math.min(total, (videoElement.currentTime || 0) + 15);
+                };
+            }
+
+            if (liveEdgeBtn) {
+                liveEdgeBtn.onclick = () => {
+                    const total = getTotalDuration(hls);
+                    if (total > 2) {
+                        videoElement.currentTime = total - 2;
+                    }
+                };
+            }
+
+            if (playPauseBtn) {
+                playPauseBtn.onclick = () => {
+                    if (videoElement.paused) videoElement.play();
+                    else videoElement.pause();
+                };
+            }
+
+            // Auto-hide controls overlay during active playback
+            const container = UIElements.videoModalContainer || document.getElementById('video-modal-container');
+            const showControls = () => {
+                if (overlay) overlay.style.opacity = '1';
+                if (timeshiftHideTimeout) clearTimeout(timeshiftHideTimeout);
+                timeshiftHideTimeout = setTimeout(() => {
+                    if (!videoElement.paused && !isUserSeeking && overlay && appState.activeTimeshiftJobId) {
+                        overlay.style.opacity = '0';
+                    }
+                }, 3500);
+            };
+            if (container) {
+                container.onmousemove = showControls;
+                container.onmouseleave = () => {
+                    if (!videoElement.paused && !isUserSeeking && overlay && appState.activeTimeshiftJobId) {
+                        overlay.style.opacity = '0';
+                    }
+                };
+            }
+
+        } catch (err) {
+            console.error('[HLS_TIMESHIFT] Setup error:', err);
+            showNotification('Could not start timeshift stream.', true);
+            await stopAndCleanupPlayer();
+        }
+    } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
+        // Native HLS fallback (Safari/iOS)
+        setActiveMediaTracking({
+            contentType: 'dvr_job',
+            contentId: String(job.id),
+            title: job.programTitle
         });
-
-        // 4. Open the main player modal
+        videoElement.src = streamUrl;
         openModal(playerModal);
-
+        videoElement.currentTime = seekTarget;
+        videoElement.play().catch(e => console.warn('[TIMESHIFT] Autoplay prevented:', e));
     } else {
-        showNotification('Your browser does not support MSE, which is required for timeshifting.', true);
+        showNotification('Your browser does not support HLS timeshift playback.', true);
+        await stopAndCleanupPlayer();
     }
 }
 
 /**
- * Plays a completed .ts recording file using the main mpegts.js player.
+ * Plays a completed recording file.
+ * If the recording is in legacy .ts format, automatically requests on-demand remux to .mp4
+ * so the browser can seek instantly via native HTTP 206 Range requests.
+ * @param {object} recording - The completed recording object.
+ * @param {number} [startTime=0] - Starting timestamp offset in seconds for resuming playback.
+ */
+async function playCompletedRecording(recording, startTime = 0) {
+    if (!recording) return;
+
+    if (startTime === 0) {
+        try {
+            const prog = await getWatchProgress('dvr_recording', recording.id);
+            if (prog && prog.progress_seconds >= 15 && (!prog.duration_seconds || prog.progress_seconds < prog.duration_seconds * 0.95)) {
+                showResumePrompt({
+                    title: recording.programTitle || 'Recording',
+                    progressSeconds: prog.progress_seconds,
+                    durationSeconds: prog.duration_seconds || recording.duration || 0,
+                    onResume: () => playCompletedRecording(recording, prog.progress_seconds),
+                    onStartOver: () => {
+                        deleteWatchProgress('dvr_recording', recording.id);
+                        playCompletedRecording(recording, -1);
+                    }
+                });
+                return;
+            }
+        } catch (err) {
+            console.warn('[DVR] Error checking recording watch progress:', err);
+        }
+    }
+
+    const seekTarget = Math.max(0, startTime);
+    const mediaInfo = {
+        contentType: 'dvr_recording',
+        contentId: String(recording.id),
+        title: recording.programTitle,
+        duration: recording.duration || 0
+    };
+
+    // If still in .ts format, trigger fast on-demand remux to .mp4
+    if (recording.filename && recording.filename.endsWith('.ts')) {
+        showNotification('Optimizing recording for seekable playback...', false, 4000);
+        try {
+            const remuxRes = await apiFetch(`/api/dvr/recordings/${recording.id}/remux`, { method: 'POST' });
+            if (remuxRes && remuxRes.success && remuxRes.filename) {
+                recording.filename = remuxRes.filename;
+            }
+        } catch (e) {
+            console.warn('[DVR] On-demand remux failed, attempting fallback play:', e);
+        }
+    }
+
+    // Check if remux resulted in an MP4 (or it was already MP4)
+    if (recording.filename && !recording.filename.endsWith('.ts')) {
+        await playRecordingOrDirectVideo(`/dvr/${recording.filename}`, recording.programTitle, '', false, seekTarget, mediaInfo);
+    } else {
+        // Fallback for raw TS if remux was unsuccessful
+        playCompletedTsFile(recording);
+        setActiveMediaTracking(mediaInfo);
+    }
+}
+
+/**
+ * Stops playback of a completed recording and cleans up video resources.
+ */
+export const stopCompletedRecordingPlayback = async () => {
+    await stopAndCleanupPlayer();
+};
+
+/**
+ * Fallback: Plays a completed .ts recording file using mpegts.js if remux is unavailable.
  * @param {object} recording - The completed recording object.
  */
 async function playCompletedTsFile(recording) {
     if (!recording) return;
 
-    // Use the main player modal for TS files for a consistent experience
     const playerModal = UIElements.videoModal;
     const videoElement = UIElements.videoElement;
     const videoTitle = UIElements.videoTitle;
 
-    await stopAndCleanupPlayer(); // Clean up main player first
+    await stopAndCleanupPlayer();
 
     const streamUrl = `/dvr/${recording.filename}`;
-    console.log(`[DVR_PLAYBACK] Starting playback for completed TS file: ${streamUrl}`);
+    console.log(`[DVR_PLAYBACK] Starting fallback playback for TS file: ${streamUrl}`);
     videoTitle.textContent = recording.programTitle;
 
     if (mpegts.isSupported()) {
-        // --- FIX FOR VOD SEEKING & BUFFERING ---
-        // This configuration is optimized for playing back large, static .ts files (VOD).
         const mpegtsConfig = {
             isLive: false,
-            // Automatically clean up the source buffer as the video plays.
-            // This is the most critical setting to prevent "SourceBuffer is full" errors.
             autoCleanupSourceBuffer: true,
-            // Disable lazy loading to build a complete seek table upfront. This makes seeking reliable.
-            lazyLoad: false,
-            // Use HTTP Range requests for seeking, which is ideal for static files.
+            lazyLoad: true,
             seekType: 'range',
-            // Increase the initial buffer size significantly to handle high-bitrate files
-            // and allow for immediate seeking without buffering issues.
-            stashInitialSize: 128 * 1024 * 1024, // 128MB buffer
         };
 
         appState.player = mpegts.createPlayer({
@@ -194,151 +483,527 @@ async function playCompletedTsFile(recording) {
 }
 
 
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+let liveHeroTicker = null;
+
+function updateLiveHeroTicker(activeJobs) {
+    if (liveHeroTicker) {
+        clearInterval(liveHeroTicker);
+        liveHeroTicker = null;
+    }
+    if (!activeJobs || activeJobs.length === 0) {
+        return;
+    }
+
+    const tick = () => {
+        const nowMs = Date.now();
+        activeJobs.forEach(job => {
+            const startMs = job.startTime ? new Date(job.startTime).getTime() : nowMs;
+            const endMs = job.endTime ? new Date(job.endTime).getTime() : startMs + 3600000;
+
+            const totalSec = Math.max(1, Math.round((endMs - startMs) / 1000));
+            const elapsedSec = Math.max(0, Math.round((nowMs - startMs) / 1000));
+            const remainingSec = Math.max(0, Math.round((endMs - nowMs) / 1000));
+            const progressPct = Math.min(100, Math.max(0, Math.round((elapsedSec / totalSec) * 100)));
+
+            const countdownEl = document.querySelector(`.dvr-live-countdown[data-job-id="${job.id}"]`);
+            if (countdownEl) {
+                const minsLeft = Math.ceil(remainingSec / 60);
+                countdownEl.textContent = remainingSec > 0
+                    ? `Stops in ~${minsLeft} min${minsLeft === 1 ? '' : 's'} (at ${new Date(endMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})`
+                    : 'Finishing...';
+            }
+
+            const progressEl = document.querySelector(`.dvr-live-progress-bar[data-job-id="${job.id}"]`);
+            if (progressEl) {
+                progressEl.style.width = `${progressPct}%`;
+            }
+
+            const elapsedEl = document.querySelector(`.dvr-live-elapsed-text[data-job-id="${job.id}"]`);
+            if (elapsedEl) {
+                elapsedEl.textContent = `${formatDuration(elapsedSec)} / ${formatDuration(totalSec)}`;
+            }
+        });
+    };
+
+    tick();
+    liveHeroTicker = setInterval(tick, 1000);
+}
+
 /**
- * Renders the table of scheduled and in-progress recording jobs.
- * MODIFIED: Now includes a "User" column for admins.
+ * Renders the table of scheduled recording jobs (filtered to upcoming, live banner, and history).
  */
 function renderScheduledJobs() {
-    const jobs = dvrState.scheduledJobs || [];
-    const hasJobs = jobs.length > 0;
+    const allJobs = dvrState.scheduledJobs || [];
     const isAdmin = appState.currentUser?.isAdmin;
 
-    // Toggle visibility of the entire table container vs the message
-    UIElements.noDvrJobsMessage.classList.toggle('hidden', hasJobs);
-    UIElements.dvrJobsTableContainer.classList.toggle('hidden', !hasJobs);
+    // 1. Check for all active recording jobs to display in the Live Hero Banner
+    const activeJobs = allJobs.filter(j => j.status === 'recording' || j.status === 'reconnecting');
+    if (activeJobs.length > 0 && UIElements.dvrLiveHeroBanner) {
+        UIElements.dvrLiveHeroBanner.classList.remove('hidden');
 
-    // Show/hide the "Clear All" button
-    UIElements.clearScheduledDvrBtn.classList.toggle('hidden', !hasJobs);
-
-    // MODIFIED: Show/hide the user column header
-    const userHeader = UIElements.dvrJobsTableContainer.querySelector('th.user-col');
-    if (userHeader) userHeader.classList.toggle('hidden', !isAdmin);
-
-    const tbody = UIElements.dvrJobsTbody;
-    tbody.innerHTML = '';
-
-    jobs.forEach(job => {
-        const startTime = new Date(job.startTime).toLocaleString();
-        const endTime = new Date(job.endTime).toLocaleString();
-
-        const statusHTML = job.status === 'error' && job.errorMessage
-            ? `<button class="status-badge ${job.status} view-error-btn" data-job-id="${job.id}">${job.status}</button>`
-            : `<span class="status-badge ${job.status}">${job.status}</span>`;
-
-        const conflictIcon = job.isConflicting ?
-            `<svg class="h-5 w-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20" title="This recording conflicts with another scheduled recording."><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.21 3.03-1.742 3.03H4.42c-1.532 0-2.492-1.696-1.742-3.03l5.58-9.92zM10 13a1 1 0 110-2 1 1 0 010 2zm-1.75-5.25a.75.75 0 00-1.5 0v3.5a.75.75 0 001.5 0v-3.5z" clip-rule="evenodd" /></svg>` : '';
-
-        const isTimeshiftable = job.filePath && job.filePath.endsWith('.ts');
-        const playButtonHTML = (job.status === 'recording' && isTimeshiftable) ? `
-            <button class="action-btn timeshift-play-btn text-blue-400 hover:text-blue-300" title="Play Recording (Timeshift)" data-job-id="${job.id}">
-                ${ICONS.play}
-            </button>
-        ` : '';
-
-        // MODIFIED: Add user column conditionally for admins
-        const userColumn = isAdmin ? `<td>${job.username || 'N/A'}</td>` : '';
-
-        const tr = document.createElement('tr');
-        tr.dataset.jobId = job.id;
-        tr.innerHTML = `
-            <td class="max-w-xs truncate" title="${job.programTitle}">${job.programTitle}</td>
-            <td class="max-w-xs truncate" title="${job.channelName}">${job.channelName}</td>
-            ${userColumn}
-            <td>${startTime}</td>
-            <td>${endTime}</td>
-            <td>${statusHTML}</td>
-            <td class="text-center">${conflictIcon}</td>
-            <td class="text-right">
-                <div class="flex items-center justify-end gap-3">
-                    ${playButtonHTML}
-                    ${job.status === 'recording' ? `
-                        <button class="action-btn stop-recording-btn text-red-500 hover:text-red-400" title="Stop Recording" data-job-id="${job.id}">
-                            ${ICONS.stopRec}
-                        </button>
-                    ` : ''}
-                     <button class="action-btn go-to-guide-btn" title="View in TV Guide" data-channel-id="${job.channelId}" data-program-start="${job.startTime}">
-                        ${ICONS.goToGuide}
-                    </button>
-                    ${job.status === 'scheduled' ? `
-                        <button class="action-btn edit-job-btn" title="Edit Schedule" data-job-id="${job.id}">
-                            ${ICONS.edit}
-                        </button>
-                    ` : ''}
-                    <button class="action-btn ${['error', 'cancelled', 'completed'].includes(job.status) ? 'delete-history-btn' : 'cancel-job-btn'}" title="${['error', 'cancelled', 'completed'].includes(job.status) ? 'Remove From History' : 'Cancel Recording'}" data-job-id="${job.id}" ${job.status === 'recording' ? 'disabled' : ''}>
-                        ${ICONS.cancel}
-                    </button>
+        let headerHtml = '';
+        if (activeJobs.length > 1) {
+            headerHtml = `
+                <div class="flex items-center justify-between px-1 pb-1">
+                    <div class="flex items-center gap-2">
+                        <span class="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse"></span>
+                        <h2 class="text-xs font-bold uppercase tracking-wider text-red-400">
+                            Active Live Recordings (${activeJobs.length})
+                        </h2>
+                    </div>
+                    <span class="text-xs text-gray-400 font-mono">Multiple Captures Running</span>
                 </div>
-            </td>
-        `;
-        tbody.appendChild(tr);
-    });
+            `;
+        }
+
+        const cardsHtml = activeJobs.map(job => {
+            const isReconnecting = job.status === 'reconnecting';
+            const isTimeshiftable = job.filePath && job.filePath.endsWith('.ts');
+
+            const startMs = job.startTime ? new Date(job.startTime).getTime() : Date.now();
+            const endMs = job.endTime ? new Date(job.endTime).getTime() : startMs + 3600000;
+            const nowMs = Date.now();
+
+            const startTimeStr = new Date(startMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const endTimeStr = new Date(endMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+            const totalSec = Math.max(1, Math.round((endMs - startMs) / 1000));
+            const elapsedSec = Math.max(0, Math.round((nowMs - startMs) / 1000));
+            const remainingSec = Math.max(0, Math.round((endMs - nowMs) / 1000));
+            const progressPct = Math.min(100, Math.max(0, Math.round((elapsedSec / totalSec) * 100)));
+
+            const minsLeft = Math.ceil(remainingSec / 60);
+            const countdownText = remainingSec > 0
+                ? `Stops in ~${minsLeft} min${minsLeft === 1 ? '' : 's'} (at ${new Date(endMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})`
+                : 'Finishing...';
+
+            const playIcon = (ICONS.play || '').replace('class="w-5 h-5"', 'class="w-4 h-4"');
+            const stopIcon = (ICONS.stopRec || '').replace('class="w-5 h-5"', 'class="w-4 h-4"');
+
+            return `
+                <div class="bg-gray-800 border-l-4 ${isReconnecting ? 'border-l-yellow-400' : 'border-l-red-500'} rounded-xl p-4 sm:p-5 shadow-lg border-t border-r border-b border-gray-700/60" data-hero-job-id="${job.id}">
+                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div class="flex items-start gap-3.5 min-w-0 flex-grow">
+                            <div class="mt-1 flex-shrink-0 relative">
+                                <span class="w-3.5 h-3.5 ${isReconnecting ? 'bg-yellow-400' : 'bg-red-500'} rounded-full block animate-pulse"></span>
+                            </div>
+                            <div class="flex-grow min-w-0">
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <span class="dvr-live-status-badge text-xs font-bold uppercase tracking-wider ${isReconnecting ? 'text-yellow-400 bg-yellow-950/60 border border-yellow-800/40' : 'text-red-400 bg-red-950/60 border border-red-800/40'} px-2 py-0.5 rounded">
+                                        ${isReconnecting ? 'Reconnecting...' : 'Recording Live Now'}
+                                    </span>
+                                    <span class="dvr-live-channel-badge text-xs text-gray-200 bg-gray-700 px-2 py-0.5 rounded font-medium border border-gray-600 truncate max-w-xs">
+                                        ${escapeHtml(job.channelName || 'Unknown Channel')}
+                                    </span>
+                                </div>
+                                <h3 class="dvr-live-title text-lg font-bold text-white mt-1 truncate max-w-xl" title="${escapeHtml(job.programTitle || '')}">
+                                    ${escapeHtml(job.programTitle || 'Live Capture')}
+                                </h3>
+                                
+                                <!-- Start & Stop Timestamps + Remaining Countdown -->
+                                <div class="flex flex-wrap items-center gap-3 mt-2 text-xs">
+                                    <div class="dvr-live-window inline-flex items-center gap-1.5 bg-gray-900/80 px-2.5 py-1 rounded border border-gray-700 font-mono text-gray-300">
+                                        <span>Start: ${startTimeStr}</span> <span class="text-gray-500">→</span> <span>Stop: ${endTimeStr}</span>
+                                    </div>
+                                    <span class="dvr-live-countdown text-xs text-amber-400 font-medium font-mono" data-job-id="${job.id}">
+                                        ${countdownText}
+                                    </span>
+                                </div>
+
+                                <!-- Elapsed Progress Bar -->
+                                <div class="flex items-center gap-3 mt-2.5 max-w-md">
+                                    <div class="flex-grow bg-gray-700/80 rounded-full h-1.5 overflow-hidden">
+                                        <div class="dvr-live-progress-bar ${isReconnecting ? 'bg-yellow-500' : 'bg-red-500'} h-full rounded-full transition-all" data-job-id="${job.id}" style="width: ${progressPct}%"></div>
+                                    </div>
+                                    <span class="dvr-live-elapsed-text text-[11px] font-mono text-gray-400 flex-shrink-0" data-job-id="${job.id}">
+                                        ${formatDuration(elapsedSec)} / ${formatDuration(totalSec)}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="flex items-center gap-2.5 self-end md:self-center flex-shrink-0">
+                            ${isTimeshiftable ? `
+                            <button class="dvr-live-timeshift-btn bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-2 px-3.5 rounded-md flex items-center gap-1.5 transition-colors shadow" data-job-id="${job.id}">
+                                ${playIcon}
+                                <span>Watch Live (Chase Play)</span>
+                            </button>` : ''}
+                            <button class="dvr-live-stop-btn bg-red-600 hover:bg-red-700 text-white text-xs font-bold py-2 px-3 rounded-md flex items-center gap-1.5 transition-colors" data-job-id="${job.id}">
+                                ${stopIcon}
+                                <span>Stop</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        UIElements.dvrLiveHeroBanner.innerHTML = headerHtml + cardsHtml;
+        updateLiveHeroTicker(activeJobs);
+    } else {
+        updateLiveHeroTicker([]);
+        if (UIElements.dvrLiveHeroBanner) {
+            UIElements.dvrLiveHeroBanner.classList.add('hidden');
+            UIElements.dvrLiveHeroBanner.innerHTML = '';
+        }
+    }
+
+    // 2. Separate upcoming jobs and history jobs
+    const searchQuery = (dvrState.searchQuery || '').toLowerCase().trim();
+    const upcomingJobs = allJobs.filter(j => j.status === 'scheduled' || j.status === 'recording' || j.status === 'reconnecting');
+    const historyJobs = allJobs.filter(j => ['completed', 'error', 'cancelled'].includes(j.status));
+
+    // Update Scheduled tab count badge
+    if (UIElements.dvrScheduledCount) {
+        UIElements.dvrScheduledCount.textContent = upcomingJobs.length;
+    }
+
+    // Filter by search query if any
+    const filteredUpcoming = searchQuery ? upcomingJobs.filter(j =>
+        (j.programTitle && j.programTitle.toLowerCase().includes(searchQuery)) ||
+        (j.channelName && j.channelName.toLowerCase().includes(searchQuery))
+    ) : upcomingJobs;
+
+    const filteredHistory = searchQuery ? historyJobs.filter(j =>
+        (j.programTitle && j.programTitle.toLowerCase().includes(searchQuery)) ||
+        (j.channelName && j.channelName.toLowerCase().includes(searchQuery))
+    ) : historyJobs;
+
+    // 3. Render Upcoming Jobs (Scheduled Tab)
+    const hasUpcoming = filteredUpcoming.length > 0;
+    if (UIElements.noDvrJobsMessage) UIElements.noDvrJobsMessage.classList.toggle('hidden', hasUpcoming);
+    if (UIElements.dvrJobsTableContainer) UIElements.dvrJobsTableContainer.classList.toggle('hidden', !hasUpcoming);
+    if (UIElements.clearScheduledDvrBtn) UIElements.clearScheduledDvrBtn.classList.toggle('hidden', !hasUpcoming);
+
+    const userHeaderUpcoming = UIElements.dvrJobsTableContainer?.querySelector('th.user-col');
+    if (userHeaderUpcoming) userHeaderUpcoming.classList.toggle('hidden', !isAdmin);
+
+    if (UIElements.dvrJobsTbody) {
+        UIElements.dvrJobsTbody.innerHTML = '';
+        filteredUpcoming.forEach(job => {
+            const startTime = new Date(job.startTime).toLocaleString();
+            const endTime = new Date(job.endTime).toLocaleString();
+            const statusHTML = `<span class="status-badge ${job.status}">${job.status}</span>`;
+            const conflictIcon = job.isConflicting ?
+                `<svg class="h-5 w-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20" title="This recording conflicts with another scheduled recording."><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.21 3.03-1.742 3.03H4.42c-1.532 0-2.492-1.696-1.742-3.03l5.58-9.92zM10 13a1 1 0 110-2 1 1 0 010 2zm-1.75-5.25a.75.75 0 00-1.5 0v3.5a.75.75 0 001.5 0v-3.5z" clip-rule="evenodd" /></svg>` : '';
+            const userColumn = isAdmin ? `<td>${job.username || 'N/A'}</td>` : '';
+
+            const tr = document.createElement('tr');
+            tr.dataset.jobId = job.id;
+            tr.innerHTML = `
+                <td class="max-w-xs truncate font-medium text-white" title="${job.programTitle}">${job.programTitle}</td>
+                <td class="max-w-xs truncate">
+                    <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-gray-700/80 text-gray-200 text-xs font-medium border border-gray-600">
+                        ${job.channelName}
+                    </span>
+                </td>
+                ${userColumn}
+                <td class="font-mono text-xs text-gray-300">${startTime}</td>
+                <td class="font-mono text-xs text-gray-300">${endTime}</td>
+                <td>${statusHTML}</td>
+                <td class="text-center">${conflictIcon}</td>
+                <td class="text-right">
+                    <div class="flex items-center justify-end gap-2">
+                        <button class="action-btn go-to-guide-btn" title="View in TV Guide" data-channel-id="${job.channelId}" data-program-start="${job.programStart || job.startTime}">
+                            ${ICONS.goToGuide}
+                        </button>
+                        ${job.status === 'scheduled' ? `
+                            <button class="action-btn edit-job-btn" title="Edit Schedule" data-job-id="${job.id}">
+                                ${ICONS.edit}
+                            </button>
+                        ` : ''}
+                        <button class="action-btn cancel-job-btn" title="Cancel Recording" data-job-id="${job.id}">
+                            ${ICONS.cancel}
+                        </button>
+                    </div>
+                </td>
+            `;
+            UIElements.dvrJobsTbody.appendChild(tr);
+        });
+    }
+
+    // 4. Render History Jobs (History Tab)
+    const hasHistory = filteredHistory.length > 0;
+    if (UIElements.noDvrHistoryMessage) UIElements.noDvrHistoryMessage.classList.toggle('hidden', hasHistory);
+    if (UIElements.dvrHistoryTableContainer) UIElements.dvrHistoryTableContainer.classList.toggle('hidden', !hasHistory);
+    if (UIElements.clearHistoryDvrBtn) UIElements.clearHistoryDvrBtn.classList.toggle('hidden', !hasHistory);
+
+    const userHeaderHistory = UIElements.dvrHistoryTableContainer?.querySelector('th.user-col');
+    if (userHeaderHistory) userHeaderHistory.classList.toggle('hidden', !isAdmin);
+
+    if (UIElements.dvrHistoryTbody) {
+        UIElements.dvrHistoryTbody.innerHTML = '';
+        filteredHistory.forEach(job => {
+            const startTime = new Date(job.startTime).toLocaleString();
+            const endTime = new Date(job.endTime).toLocaleString();
+            const statusHTML = job.status === 'error' && job.errorMessage
+                ? `<button class="status-badge ${job.status} view-error-btn" data-job-id="${job.id}">${job.status}</button>`
+                : `<span class="status-badge ${job.status}">${job.status}</span>`;
+            const userColumn = isAdmin ? `<td>${job.username || 'N/A'}</td>` : '';
+
+            const tr = document.createElement('tr');
+            tr.dataset.jobId = job.id;
+            tr.innerHTML = `
+                <td class="max-w-xs truncate font-medium text-white" title="${job.programTitle}">${job.programTitle}</td>
+                <td class="max-w-xs truncate">
+                    <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-gray-700/80 text-gray-200 text-xs font-medium border border-gray-600">
+                        ${job.channelName}
+                    </span>
+                </td>
+                ${userColumn}
+                <td class="font-mono text-xs text-gray-300">${startTime}</td>
+                <td class="font-mono text-xs text-gray-300">${endTime}</td>
+                <td>${statusHTML}</td>
+                <td class="text-right">
+                    <div class="flex items-center justify-end gap-2">
+                        <button class="action-btn go-to-guide-btn" title="View in TV Guide" data-channel-id="${job.channelId}" data-program-start="${job.programStart || job.startTime}">
+                            ${ICONS.goToGuide}
+                        </button>
+                        <button class="action-btn delete-history-btn" title="Remove From History" data-job-id="${job.id}">
+                            ${ICONS.cancel}
+                        </button>
+                    </div>
+                </td>
+            `;
+            UIElements.dvrHistoryTbody.appendChild(tr);
+        });
+    }
 }
 
 
-
 /**
- * Renders the table of completed recordings.
- * MODIFIED: Now includes a "User" column visible to everyone.
+ * Renders completed recordings in both Table and Cards views, with instant search filtering.
  */
 function renderCompletedRecordings() {
     const recordings = dvrState.completedRecordings || [];
-    const hasRecordings = recordings.length > 0;
     const isAdmin = appState.currentUser?.isAdmin;
 
-    // Toggle visibility of the entire table container vs the message
-    UIElements.noDvrRecordingsMessage.classList.toggle('hidden', hasRecordings);
-    UIElements.dvrRecordingsTableContainer.classList.toggle('hidden', !hasRecordings);
+    // Update count badge
+    if (UIElements.dvrRecordingsCount) {
+        UIElements.dvrRecordingsCount.textContent = recordings.length;
+    }
 
-    // Show/hide the "Clear All" button only if user has DVR permission
+    const searchQuery = (dvrState.searchQuery || '').toLowerCase().trim();
+    const filteredRecordings = searchQuery ? recordings.filter(rec =>
+        (rec.programTitle && rec.programTitle.toLowerCase().includes(searchQuery)) ||
+        (rec.channelName && rec.channelName.toLowerCase().includes(searchQuery))
+    ) : recordings;
+
+    const hasRecordings = filteredRecordings.length > 0;
+    if (UIElements.noDvrRecordingsMessage) UIElements.noDvrRecordingsMessage.classList.toggle('hidden', hasRecordings);
+
+    // Show/hide clear all button
     const hasDvrPermission = appState.currentUser?.isAdmin || appState.currentUser?.canUseDvr;
-    UIElements.clearCompletedDvrBtn.classList.toggle('hidden', !hasRecordings || !hasDvrPermission);
+    if (UIElements.clearCompletedDvrBtn) {
+        UIElements.clearCompletedDvrBtn.classList.toggle('hidden', !hasRecordings || !hasDvrPermission);
+    }
 
+    // 1. Render Table View
     const tbody = UIElements.dvrRecordingsTbody;
-    tbody.innerHTML = '';
+    if (tbody) {
+        tbody.innerHTML = '';
+        const userHeader = UIElements.dvrRecordingsTableContainer?.querySelector('th.user-col');
+        if (userHeader) userHeader.classList.toggle('hidden', !isAdmin);
 
-    recordings.forEach(rec => {
-        const recordedOn = new Date(rec.startTime).toLocaleString();
+        filteredRecordings.forEach(rec => {
+            const recordedOn = new Date(rec.startTime).toLocaleString();
+            const userColumn = isAdmin ? `<td class="max-w-xs truncate" title="${rec.username}">${rec.username || 'N/A'}</td>` : '';
 
-        // MODIFIED: Admins can see who made the recording
-        const userColumn = isAdmin ? `<td class="max-w-xs truncate" title="${rec.username}">${rec.username}</td>` : '';
+            const tr = document.createElement('tr');
+            tr.dataset.recordingId = rec.id;
+            tr.className = 'hover:bg-gray-700/30 transition-colors';
+            tr.innerHTML = `
+                <td class="max-w-xs truncate font-medium text-white" title="${rec.programTitle}">
+                    <div class="flex items-center gap-3">
+                        <button class="play-recording-btn w-7 h-7 rounded-full bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center transition-colors shadow flex-shrink-0" title="Play Recording">
+                            <svg class="w-3.5 h-3.5 fill-current ml-0.5" viewBox="0 0 20 20"><polygon points="5 3 19 10 5 17 5 3"/></svg>
+                        </button>
+                        <span class="truncate font-semibold">${rec.programTitle}</span>
+                    </div>
+                </td>
+                <td class="max-w-xs truncate">
+                    <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-gray-700/80 text-gray-200 text-xs font-medium border border-gray-600">
+                        ${rec.channelName}
+                    </span>
+                </td>
+                ${userColumn}
+                <td class="font-mono text-xs text-gray-300">${recordedOn}</td>
+                <td class="font-mono text-xs font-medium">${formatDuration(rec.durationSeconds)}</td>
+                <td class="font-mono text-xs text-gray-400">${formatBytes(rec.fileSizeBytes)}</td>
+                <td class="text-right">
+                    <div class="flex items-center justify-end gap-2">
+                        <button class="action-btn play-recording-btn text-blue-400 hover:text-blue-300" title="Play Recording">
+                            ${ICONS.play}
+                        </button>
+                        <button class="action-btn delete-recording-btn text-red-400 hover:text-red-300" title="Delete Recording">
+                            ${ICONS.trash}
+                        </button>
+                    </div>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
 
-        const tr = document.createElement('tr');
-        tr.dataset.recordingId = rec.id;
-        tr.innerHTML = `
-            <td class="max-w-xs truncate" title="${rec.programTitle}">${rec.programTitle}</td>
-            <td class="max-w-xs truncate" title="${rec.channelName}">${rec.channelName}</td>
-            ${userColumn}
-            <td>${recordedOn}</td>
-            <td>${formatDuration(rec.durationSeconds)}</td>
-            <td>${formatBytes(rec.fileSizeBytes)}</td>
-            <td class="text-right">
-                <div class="flex items-center justify-end gap-3">
-                    <button class="action-btn play-recording-btn" title="Play Recording">
-                        ${ICONS.play}
+    // 2. Render Cards View
+    const cardsContainer = UIElements.dvrRecordingsCardsContainer;
+    if (cardsContainer) {
+        cardsContainer.innerHTML = '';
+        filteredRecordings.forEach(rec => {
+            const recordedOn = new Date(rec.startTime).toLocaleString();
+            const card = document.createElement('div');
+            card.dataset.recordingId = rec.id;
+            card.className = 'group bg-gray-900 border border-gray-700/80 hover:border-gray-600 rounded-xl p-4 flex flex-col justify-between transition-all shadow-md';
+            card.innerHTML = `
+                <div>
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="text-xs bg-gray-800 text-gray-200 px-2 py-0.5 rounded font-medium border border-gray-700 truncate max-w-[150px]">${rec.channelName}</span>
+                        <span class="text-[11px] font-mono text-gray-400">${formatBytes(rec.fileSizeBytes)}</span>
+                    </div>
+                    <h4 class="font-bold text-white text-base mt-2.5 line-clamp-2 group-hover:text-blue-400 transition-colors" title="${rec.programTitle}">
+                        ${rec.programTitle}
+                    </h4>
+                    <p class="text-xs text-gray-400 mt-1.5 flex items-center gap-1.5">
+                        <svg class="w-3.5 h-3.5 text-gray-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        <span>${recordedOn}</span>
+                    </p>
+                    <div class="mt-2.5">
+                        <span class="inline-block text-xs font-mono bg-blue-900/40 text-blue-300 px-2 py-0.5 rounded border border-blue-800/30">
+                            Duration: ${formatDuration(rec.durationSeconds)}
+                        </span>
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-between mt-4 pt-3 border-t border-gray-800">
+                    <button class="play-recording-btn bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold py-1.5 px-3 rounded flex items-center gap-1.5 transition-colors shadow">
+                        <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 20 20"><polygon points="5 3 19 10 5 17 5 3"/></svg>
+                        Play
                     </button>
-                    <button class="action-btn delete-recording-btn" title="Delete Recording">
+                    <button class="delete-recording-btn text-gray-400 hover:text-red-400 p-1.5 transition-colors" title="Delete Recording">
                         ${ICONS.trash}
                     </button>
                 </div>
-            </td>
-        `;
-        tbody.appendChild(tr);
-    });
+            `;
+            cardsContainer.appendChild(card);
+        });
+    }
+
+    // Apply active view mode (table vs cards)
+    const savedMode = dvrState.viewMode || localStorage.getItem('viniplay_dvr_view_mode') || 'table';
+    setRecordingViewMode(savedMode, false);
 }
 
 
 /**
- * NEW: Renders the storage usage bar.
- * @param {object} storageData - Object with total, used, and percentage properties.
+ * Renders the storage usage bar.
  */
 function renderStorageBar(storageData) {
+    if (!storageData) return;
     const { total, used, percentage } = storageData;
-    UIElements.dvrStorageText.textContent = `${formatBytes(used)} of ${formatBytes(total)} used`;
-    UIElements.dvrStorageBar.style.width = `${percentage}%`;
-    UIElements.dvrStorageBar.classList.toggle('bg-red-600', percentage > 90);
-    UIElements.dvrStorageBar.classList.toggle('bg-yellow-500', percentage > 75 && percentage <= 90);
-    UIElements.dvrStorageBar.classList.toggle('bg-blue-600', percentage <= 75);
-    UIElements.dvrStorageBarContainer.classList.remove('hidden');
+    const free = Math.max(0, total - used);
+    if (UIElements.dvrStorageText) {
+        UIElements.dvrStorageText.innerHTML = `<strong class="text-white font-mono">${formatBytes(used)}</strong> of <span class="font-mono">${formatBytes(total)}</span> used (<span class="text-emerald-400 font-medium">${formatBytes(free)} free</span>)`;
+    }
+    if (UIElements.dvrStoragePercentBadge) {
+        UIElements.dvrStoragePercentBadge.textContent = `${percentage}% Used`;
+    }
+    if (UIElements.dvrStorageBar) {
+        UIElements.dvrStorageBar.style.width = `${percentage}%`;
+        UIElements.dvrStorageBar.classList.toggle('bg-red-600', percentage > 90);
+        UIElements.dvrStorageBar.classList.toggle('bg-yellow-500', percentage > 75 && percentage <= 90);
+        UIElements.dvrStorageBar.classList.toggle('bg-blue-600', percentage <= 75);
+    }
+    const container = document.getElementById('dvr-storage-bar-container');
+    if (container) container.classList.remove('hidden');
+}
+
+
+/**
+ * Switches the active tab in the main DVR card.
+ */
+export function switchDvrTab(tab) {
+    dvrState.activeTab = tab;
+
+    if (UIElements.dvrRecordingsContent) UIElements.dvrRecordingsContent.classList.toggle('hidden', tab !== 'recordings');
+    if (UIElements.dvrScheduledContent) UIElements.dvrScheduledContent.classList.toggle('hidden', tab !== 'scheduled');
+    if (UIElements.dvrHistoryContent) UIElements.dvrHistoryContent.classList.toggle('hidden', tab !== 'history');
+
+    // Only display Table/Cards switcher on the Recordings tab
+    const viewSwitcher = document.getElementById('dvr-view-switcher') || UIElements.dvrViewSwitcher;
+    if (viewSwitcher) viewSwitcher.classList.toggle('hidden', tab !== 'recordings');
+
+    const activeClasses = ['active', 'bg-blue-600', 'text-white'];
+    const inactiveClasses = ['text-gray-300', 'hover:bg-gray-700'];
+
+    const updateBtn = (btn, isActive) => {
+        if (!btn) return;
+        if (isActive) {
+            btn.classList.add(...activeClasses);
+            btn.classList.remove(...inactiveClasses);
+        } else {
+            btn.classList.remove(...activeClasses);
+            btn.classList.add(...inactiveClasses);
+        }
+    };
+
+    updateBtn(UIElements.dvrTabBtnRecordings, tab === 'recordings');
+    updateBtn(UIElements.dvrTabBtnScheduled, tab === 'scheduled');
+    updateBtn(UIElements.dvrTabBtnHistory, tab === 'history');
+}
+
+
+/**
+ * Sets the view mode (table vs cards) for completed recordings.
+ */
+export function setRecordingViewMode(mode, save = true) {
+    dvrState.viewMode = mode;
+    if (save) localStorage.setItem('viniplay_dvr_view_mode', mode);
+
+    const searchQuery = (dvrState.searchQuery || '').toLowerCase().trim();
+    const recordings = dvrState.completedRecordings || [];
+    const filteredRecordings = searchQuery ? recordings.filter(rec =>
+        (rec.programTitle && rec.programTitle.toLowerCase().includes(searchQuery)) ||
+        (rec.channelName && rec.channelName.toLowerCase().includes(searchQuery))
+    ) : recordings;
+    const hasRecordings = filteredRecordings.length > 0;
+
+    const isTable = mode === 'table';
+    if (UIElements.dvrRecordingsTableContainer) {
+        UIElements.dvrRecordingsTableContainer.classList.toggle('hidden', !hasRecordings || !isTable);
+    }
+    if (UIElements.dvrRecordingsCardsContainer) {
+        UIElements.dvrRecordingsCardsContainer.classList.toggle('hidden', !hasRecordings || isTable);
+    }
+
+    if (UIElements.dvrViewTableBtn && UIElements.dvrViewCardsBtn) {
+        if (isTable) {
+            UIElements.dvrViewTableBtn.className = 'px-2 py-1 rounded text-xs font-medium bg-blue-600 text-white flex items-center gap-1';
+            UIElements.dvrViewCardsBtn.className = 'px-2 py-1 rounded text-xs font-medium text-gray-300 hover:text-white flex items-center gap-1';
+        } else {
+            UIElements.dvrViewTableBtn.className = 'px-2 py-1 rounded text-xs font-medium text-gray-300 hover:text-white flex items-center gap-1';
+            UIElements.dvrViewCardsBtn.className = 'px-2 py-1 rounded text-xs font-medium bg-blue-600 text-white flex items-center gap-1';
+        }
+    }
+}
+
+
+/**
+ * Toggles the collapsible manual timer recording drawer.
+ */
+export function toggleManualRecordingForm(force) {
+    if (!UIElements.manualRecordingSection) return;
+    const shouldShow = typeof force === 'boolean' ? force : UIElements.manualRecordingSection.classList.contains('hidden');
+    UIElements.manualRecordingSection.classList.toggle('hidden', !shouldShow);
 }
 
 const toISOStringLocal = (localDateTimeString) => new Date(localDateTimeString).toISOString();
@@ -366,7 +1031,53 @@ export function handleDvrChannelClick(channelItem) {
 }
 
 export function setupDvrEventListeners() {
-    UIElements.dvrJobsTbody.addEventListener('click', async (e) => {
+    // 1. Tab Switching
+    UIElements.dvrTabBtnRecordings?.addEventListener('click', () => switchDvrTab('recordings'));
+    UIElements.dvrTabBtnScheduled?.addEventListener('click', () => switchDvrTab('scheduled'));
+    UIElements.dvrTabBtnHistory?.addEventListener('click', () => switchDvrTab('history'));
+
+    // 2. View Mode Switcher (Table vs Cards)
+    UIElements.dvrViewTableBtn?.addEventListener('click', () => setRecordingViewMode('table'));
+    UIElements.dvrViewCardsBtn?.addEventListener('click', () => setRecordingViewMode('cards'));
+
+    // 3. Collapsible Manual Recording Form Drawer
+    UIElements.dvrToggleManualBtn?.addEventListener('click', () => toggleManualRecordingForm());
+    UIElements.closeManualRecBtn?.addEventListener('click', () => toggleManualRecordingForm(false));
+
+    // 4. Real-time Search Input
+    UIElements.dvrSearchInput?.addEventListener('input', (e) => {
+        dvrState.searchQuery = e.target.value;
+        renderCompletedRecordings();
+        renderScheduledJobs();
+    });
+
+    // 5. Live Hero Banner Actions (Event delegation for all active live recording cards)
+    UIElements.dvrLiveHeroBanner?.addEventListener('click', async (e) => {
+        const timeshiftBtn = e.target.closest('.dvr-live-timeshift-btn');
+        if (timeshiftBtn) {
+            const jobId = timeshiftBtn.dataset.jobId;
+            const job = dvrState.scheduledJobs?.find(j => j.id == jobId);
+            if (job) playTimeshiftStream(job);
+            return;
+        }
+
+        const stopBtn = e.target.closest('.dvr-live-stop-btn');
+        if (stopBtn) {
+            const jobId = stopBtn.dataset.jobId;
+            const job = dvrState.scheduledJobs?.find(j => j.id == jobId);
+            const title = job ? ` "${job.programTitle}"` : '';
+            showConfirm('Stop Recording?', `Are you sure you want to stop the live capture${title}?`, async () => {
+                if (await apiFetch(`/api/dvr/jobs/${jobId}/stop`, { method: 'POST' })) {
+                    showNotification('Recording stopped.');
+                    await Promise.all([loadScheduledJobs(), loadCompletedRecordings()]);
+                }
+            });
+            return;
+        }
+    });
+
+    // 6. Scheduled Jobs Table click delegation
+    UIElements.dvrJobsTbody?.addEventListener('click', async (e) => {
         const button = e.target.closest('button');
         if (!button) return;
 
@@ -389,9 +1100,12 @@ export function setupDvrEventListeners() {
                 return;
             }
 
-            const preBufferMs = (job.preBufferMinutes || 0) * 60 * 1000;
-            const originalProgramStart = new Date(new Date(bufferedStartIso).getTime() + preBufferMs);
-            const originalProgramStartIso = originalProgramStart.toISOString();
+            let originalProgramStartIso = job.programStart;
+            if (!originalProgramStartIso) {
+                const preBufferMs = (job.preBufferMinutes || 0) * 60 * 1000;
+                const originalProgramStart = new Date(new Date(bufferedStartIso).getTime() + preBufferMs);
+                originalProgramStartIso = originalProgramStart.toISOString();
+            }
 
             navigateToProgramInGuide(channelId, originalProgramStartIso);
 
@@ -440,7 +1154,8 @@ export function setupDvrEventListeners() {
         }
     });
 
-    UIElements.dvrRecordingsTbody.addEventListener('click', async (e) => {
+    // 7. Completed Recordings Table click delegation
+    UIElements.dvrRecordingsTbody?.addEventListener('click', async (e) => {
         const row = e.target.closest('tr');
         if (!row) return;
         const recordingId = row.dataset.recordingId;
@@ -448,15 +1163,7 @@ export function setupDvrEventListeners() {
         if (!recording) return;
 
         if (e.target.closest('.play-recording-btn')) {
-            // **MODIFIED: Check file type and use the appropriate player**
-            if (recording.filename && recording.filename.endsWith('.ts')) {
-                playCompletedTsFile(recording);
-            } else {
-                // Use the original, simpler player for non-ts files like .mp4
-                UIElements.recordingTitle.textContent = recording.programTitle;
-                UIElements.recordingVideoElement.src = `/dvr/${recording.filename}`;
-                openModal(UIElements.recordingPlayerModal);
-            }
+            playCompletedRecording(recording);
         } else if (e.target.closest('.delete-recording-btn')) {
             showConfirm('Delete Recording?', `This will permanently delete the file.`, async () => {
                 if (await apiFetch(`/api/dvr/recordings/${recordingId}`, { method: 'DELETE' })) {
@@ -467,10 +1174,62 @@ export function setupDvrEventListeners() {
         }
     });
 
-    UIElements.closeRecordingPlayerBtn.addEventListener('click', () => {
-        UIElements.recordingVideoElement.pause();
-        UIElements.recordingVideoElement.src = '';
-        closeModal(UIElements.recordingPlayerModal);
+    // 8. Completed Recordings Cards click delegation
+    UIElements.dvrRecordingsCardsContainer?.addEventListener('click', async (e) => {
+        const card = e.target.closest('[data-recording-id]');
+        if (!card) return;
+        const recordingId = card.dataset.recordingId;
+        const recording = dvrState.completedRecordings.find(r => r.id == recordingId);
+        if (!recording) return;
+
+        if (e.target.closest('.play-recording-btn')) {
+            playCompletedRecording(recording);
+        } else if (e.target.closest('.delete-recording-btn')) {
+            showConfirm('Delete Recording?', `This will permanently delete the file.`, async () => {
+                if (await apiFetch(`/api/dvr/recordings/${recordingId}`, { method: 'DELETE' })) {
+                    showNotification('Recording deleted.');
+                    loadCompletedRecordings();
+                }
+            });
+        }
+    });
+
+    // 9. History Table click delegation
+    UIElements.dvrHistoryTbody?.addEventListener('click', async (e) => {
+        const button = e.target.closest('button');
+        if (!button) return;
+
+        if (button.classList.contains('go-to-guide-btn')) {
+            const channelId = button.dataset.channelId;
+            const bufferedStartIso = button.dataset.programStart;
+            const jobId = button.closest('tr')?.dataset.jobId;
+            const job = dvrState.scheduledJobs.find(j => j.id == jobId);
+            if (!job) return;
+
+            let originalProgramStartIso = job.programStart;
+            if (!originalProgramStartIso) {
+                const preBufferMs = (job.preBufferMinutes || 0) * 60 * 1000;
+                const originalProgramStart = new Date(new Date(bufferedStartIso).getTime() + preBufferMs);
+                originalProgramStartIso = originalProgramStart.toISOString();
+            }
+            navigateToProgramInGuide(channelId, originalProgramStartIso);
+        } else if (button.classList.contains('view-error-btn')) {
+            const jobId = button.dataset.jobId;
+            const job = dvrState.scheduledJobs.find(j => j.id == jobId);
+            if (job) {
+                UIElements.dvrErrorModalTitle.textContent = `Error for: ${job.programTitle}`;
+                UIElements.dvrErrorModalContent.textContent = job.errorMessage || 'No details.';
+                openModal(UIElements.dvrErrorModal);
+            }
+        } else if (button.classList.contains('delete-history-btn')) {
+            const jobId = button.dataset.jobId;
+            showConfirm('Remove From History?', 'This will not delete the file.', async () => {
+                if (await apiFetch(`/api/dvr/jobs/${jobId}/history`, { method: 'DELETE' })) {
+                    showNotification('Job removed from history.');
+                    await loadScheduledJobs();
+                }
+            });
+        }
     });
 
     UIElements.dvrErrorModalCloseBtn.addEventListener('click', () => closeModal(UIElements.dvrErrorModal));
@@ -529,6 +1288,7 @@ export function setupDvrEventListeners() {
                 UIElements.manualRecSelectedChannelName.textContent = 'No channel selected';
                 UIElements.manualRecChannelId.value = '';
                 UIElements.manualRecChannelName.value = '';
+                toggleManualRecordingForm(false);
                 await loadScheduledJobs();
             } else if (res.status === 409) {
                 const conflictData = await res.json();
@@ -545,22 +1305,38 @@ export function setupDvrEventListeners() {
         });
     }
 
-    // NEW: Event listeners for the "Clear All" buttons
-    UIElements.clearScheduledDvrBtn.addEventListener('click', () => {
+    // 10. Clear All / History Buttons
+    UIElements.clearScheduledDvrBtn?.addEventListener('click', () => {
         showConfirm(
-            'Clear All Jobs?',
-            'This will delete all scheduled, completed, and error jobs from your history. This action cannot be undone and will not delete recorded files.',
+            'Clear Scheduled Jobs?',
+            'This will cancel all upcoming scheduled recordings. This action cannot be undone.',
             async () => {
-                const res = await apiFetch('/api/dvr/jobs/all', { method: 'DELETE' });
-                if (res && res.ok) {
-                    showNotification('All scheduled jobs have been cleared.');
-                    await loadScheduledJobs();
-                }
+                const upcomingJobs = (dvrState.scheduledJobs || []).filter(j => j.status === 'scheduled');
+                if (upcomingJobs.length === 0) return;
+                const promises = upcomingJobs.map(j => apiFetch(`/api/dvr/jobs/${j.id}`, { method: 'DELETE' }));
+                await Promise.all(promises);
+                showNotification('All upcoming scheduled jobs have been cancelled.');
+                await loadScheduledJobs();
             }
         );
     });
 
-    UIElements.clearCompletedDvrBtn.addEventListener('click', () => {
+    UIElements.clearHistoryDvrBtn?.addEventListener('click', () => {
+        showConfirm(
+            'Clear History?',
+            'This will delete all completed, error, and cancelled jobs from your history log. This action cannot be undone and will not delete recorded files.',
+            async () => {
+                const historyJobs = (dvrState.scheduledJobs || []).filter(j => ['completed', 'error', 'cancelled'].includes(j.status));
+                if (historyJobs.length === 0) return;
+                const promises = historyJobs.map(j => apiFetch(`/api/dvr/jobs/${j.id}/history`, { method: 'DELETE' }));
+                await Promise.all(promises);
+                showNotification('DVR history has been cleared.');
+                await loadScheduledJobs();
+            }
+        );
+    });
+
+    UIElements.clearCompletedDvrBtn?.addEventListener('click', () => {
         showConfirm(
             'Clear All Recordings?',
             'This will permanently delete all completed recording files and remove them from your history. This action cannot be undone.',
@@ -579,10 +1355,13 @@ export function findDvrJobForProgram(program) {
     const programStart = new Date(program.start).getTime();
     const programStop = new Date(program.stop).getTime();
     return dvrState.scheduledJobs.find(job => {
-        const jobProgramStart = new Date(job.startTime).getTime() + (job.preBufferMinutes * 60000);
-        const jobProgramStop = new Date(job.endTime).getTime() - (job.postBufferMinutes * 60000);
-        return job.channelId === program.channelId &&
-            Math.abs(jobProgramStart - programStart) < 60000 &&
+        if (job.channelId !== program.channelId) return false;
+        if (job.programStart) {
+            return Math.abs(new Date(job.programStart).getTime() - programStart) < 60000;
+        }
+        const jobProgramStart = new Date(job.startTime).getTime() + ((job.preBufferMinutes || 0) * 60000);
+        const jobProgramStop = new Date(job.endTime).getTime() - ((job.postBufferMinutes || 0) * 60000);
+        return Math.abs(jobProgramStart - programStart) < 60000 &&
             Math.abs(jobProgramStop - programStop) < 60000;
     });
 }
@@ -659,11 +1438,13 @@ function formatBytes(bytes) {
 }
 
 function formatDuration(totalSeconds) {
-    if (!totalSeconds) return '0m';
+    if (!totalSeconds || totalSeconds <= 0) return '0s';
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = Math.floor(totalSeconds % 60);
     let result = '';
     if (hours > 0) result += `${hours}h `;
-    if (minutes > 0) result += `${minutes}m`;
-    return result.trim() || '0m';
+    if (minutes > 0) result += `${minutes}m `;
+    if (seconds > 0 && hours === 0) result += `${seconds}s`;
+    return result.trim() || '0s';
 }

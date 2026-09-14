@@ -7,7 +7,7 @@
  */
 
 import { appState, guideState, UIElements, dvrState } from './state.js';
-import { saveUserSetting } from './api.js';
+import { saveUserSetting, getDeviceSetting, saveDeviceSetting } from './api.js';
 import { parseM3U, formatTimeWithOffset } from './utils.js';
 import { playChannel } from './player.js';
 import { showNotification, openModal, closeModal } from './ui.js';
@@ -303,8 +303,8 @@ export function finalizeGuideLoad(shouldCenter = false) {
         if (ch.group) guideState.channelGroups.add(ch.group);
         if (ch.source) guideState.channelSources.add(ch.source);
     });
-    populateGroupFilter();
     populateSourceFilter();
+    populateGroupFilter();
 
     appState.fuseChannels = new Fuse(guideState.channels, {
         keys: ['name', 'displayName', 'source', 'chno'],
@@ -703,48 +703,74 @@ export const updateNowLinePosition = () => {
 };
 
 // --- Filtering and Searching ---
-
-/**
- * Populates the "group" filter dropdown.
- */
-const populateGroupFilter = () => {
-    const savedFilter = guideState.settings.activeGroupFilter;
-    UIElements.groupFilter.innerHTML = `<option value="all">All Groups</option><option value="recents">Recents</option><option value="favorites">Favorites</option>`;
-    [...guideState.channelGroups].sort((a, b) => a.localeCompare(b)).forEach(group => {
-        const cleanGroup = group.replace(/"/g, '&quot;');
-        UIElements.groupFilter.innerHTML += `<option value="${cleanGroup}">${group}</option>`;
-    });
-
-    // Set the value based on saved setting, falling back to 'all'
-    if (savedFilter && UIElements.groupFilter.querySelector(`option[value="${savedFilter.replace(/"/g, '&quot;')}"]`)) {
-        UIElements.groupFilter.value = savedFilter;
-    } else {
-        UIElements.groupFilter.value = 'all';
-    }
-
-    UIElements.groupFilter.classList.remove('hidden');
-};
-
-
+ 
 /**
  * Populates the "source" filter dropdown.
  */
 const populateSourceFilter = () => {
-    const savedFilter = guideState.settings.activeSourceFilter;
-    UIElements.sourceFilter.innerHTML = `<option value="all">All Sources</option>`;
+    const savedFilter = getDeviceSetting('activeSourceFilter', guideState.settings.activeSourceFilter);
+    UIElements.sourceFilter.innerHTML = '';
+    UIElements.sourceFilter.appendChild(new Option('All Sources', 'all'));
     [...guideState.channelSources].sort((a, b) => a.localeCompare(b)).forEach(source => {
-        const cleanSource = source.replace(/"/g, '&quot;');
-        UIElements.sourceFilter.innerHTML += `<option value="${cleanSource}">${source}</option>`;
+        UIElements.sourceFilter.appendChild(new Option(source, source));
     });
 
-    if (savedFilter && UIElements.sourceFilter.querySelector(`option[value="${savedFilter.replace(/"/g, '&quot;')}"]`)) {
+    const optionExists = Array.from(UIElements.sourceFilter.options).some(opt => opt.value === savedFilter);
+    if (savedFilter && optionExists) {
         UIElements.sourceFilter.value = savedFilter;
     } else {
         UIElements.sourceFilter.value = 'all';
     }
 
+    // Keep state in sync
+    guideState.settings.activeSourceFilter = UIElements.sourceFilter.value;
+
     UIElements.sourceFilter.classList.remove('hidden');
     UIElements.sourceFilter.style.display = guideState.channelSources.size <= 1 ? 'none' : 'block';
+};
+
+/**
+ * Populates the "group" filter dropdown based on the currently selected source.
+ */
+const populateGroupFilter = () => {
+    const selectedSource = UIElements.sourceFilter ? UIElements.sourceFilter.value : 'all';
+    const savedFilter = getDeviceSetting('activeGroupFilter', guideState.settings.activeGroupFilter);
+    const currentFilter = UIElements.groupFilter.value || savedFilter;
+
+    let availableGroups;
+    if (selectedSource === 'all') {
+        availableGroups = guideState.channelGroups;
+    } else {
+        availableGroups = new Set();
+        guideState.channels.forEach(ch => {
+            if (ch.source === selectedSource && ch.group) {
+                availableGroups.add(ch.group);
+            }
+        });
+    }
+
+    UIElements.groupFilter.innerHTML = '';
+    UIElements.groupFilter.appendChild(new Option('All Groups', 'all'));
+    UIElements.groupFilter.appendChild(new Option('Recents', 'recents'));
+    UIElements.groupFilter.appendChild(new Option('Favorites', 'favorites'));
+    [...availableGroups].sort((a, b) => a.localeCompare(b)).forEach(group => {
+        UIElements.groupFilter.appendChild(new Option(group, group));
+    });
+
+    const optionExists = Array.from(UIElements.groupFilter.options).some(opt => opt.value === currentFilter);
+    if (currentFilter && optionExists) {
+        UIElements.groupFilter.value = currentFilter;
+    } else {
+        UIElements.groupFilter.value = 'all';
+    }
+
+    // Keep guideState and settings in sync if group was reset
+    if (guideState.settings.activeGroupFilter !== UIElements.groupFilter.value) {
+        guideState.settings.activeGroupFilter = UIElements.groupFilter.value;
+        saveDeviceSetting('activeGroupFilter', UIElements.groupFilter.value);
+    }
+
+    UIElements.groupFilter.classList.remove('hidden');
 };
 
 /**
@@ -944,16 +970,18 @@ export const scrollToChannel = (channelId) => {
 export function setupGuideEventListeners() {
     UIElements.groupFilter.addEventListener('change', () => {
         const selectedGroup = UIElements.groupFilter.value;
-        // Save the setting for the user
-        saveUserSetting('activeGroupFilter', selectedGroup);
+        // Save the setting for this device
+        saveDeviceSetting('activeGroupFilter', selectedGroup);
         // Update local state immediately for responsiveness
         guideState.settings.activeGroupFilter = selectedGroup;
         handleSearchAndFilter(true); // Auto-center when filter changes
     });
     UIElements.sourceFilter.addEventListener('change', () => {
         const selectedSource = UIElements.sourceFilter.value;
-        saveUserSetting('activeSourceFilter', selectedSource);
+        // Save the setting for this device
+        saveDeviceSetting('activeSourceFilter', selectedSource);
         guideState.settings.activeSourceFilter = selectedSource;
+        populateGroupFilter();
         handleSearchAndFilter(true); // Auto-center when filter changes
     });
     UIElements.searchInput.addEventListener('keydown', (event) => {
