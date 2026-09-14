@@ -8,12 +8,65 @@
 import { UIElements, guideState, appState } from './state.js';
 import { showNotification } from './ui.js';
 // MODIFIED: Import stopStream to explicitly kill the server process.
-import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream } from './api.js';
+import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream, sendRedirectHeartbeat } from './api.js';
 
 const MAX_RECENT_LINKS = 10;
 let currentStreamUrl = null; // NEW: Track the URL of the current stream
 let statisticsInterval = null; // NEW: Interval for logging stream statistics.
 let currentRedirectHistoryId = null; // To track redirect streams for logging
+let redirectHeartbeatInterval = null; // NEW: Heartbeat timer for direct player redirect
+let currentRedirectToken = 0; // NEW: Guard against race conditions
+
+/**
+ * Starts periodic 30s heartbeat pings for an active redirect stream.
+ * @param {number} historyId
+ */
+function startRedirectHeartbeat(historyId) {
+    stopRedirectHeartbeat();
+    if (!historyId) return;
+    redirectHeartbeatInterval = setInterval(async () => {
+        if (currentRedirectHistoryId === historyId) {
+            await sendRedirectHeartbeat(historyId);
+        } else {
+            stopRedirectHeartbeat();
+        }
+    }, 30000);
+}
+
+/**
+ * Stops the redirect stream heartbeat interval.
+ */
+function stopRedirectHeartbeat() {
+    if (redirectHeartbeatInterval) {
+        clearInterval(redirectHeartbeatInterval);
+        redirectHeartbeatInterval = null;
+    }
+}
+
+/**
+ * Starts a redirect logging session with heartbeat and race condition guarding.
+ */
+function beginRedirectLogging(url, channelId, channelName, channelLogo) {
+    if (currentRedirectHistoryId) {
+        stopRedirectStream(currentRedirectHistoryId);
+        currentRedirectHistoryId = null;
+    }
+    stopRedirectHeartbeat();
+
+    const token = ++currentRedirectToken;
+
+    startRedirectStream(url, channelId, channelName, channelLogo)
+        .then(historyId => {
+            if (!historyId) return;
+            if (token !== currentRedirectToken) {
+                stopRedirectStream(historyId);
+                return;
+            }
+            currentRedirectHistoryId = historyId;
+            startRedirectHeartbeat(historyId);
+        })
+        .catch(err => console.error('[DIRECT_PLAYER] Error logging redirect stream start:', err));
+}
 
 // --- Helper Functions ---
 
@@ -165,6 +218,10 @@ export function initDirectPlayer() {
 async function stopAndCleanupDirectPlayer() {
     console.log('[DEBUG] stopAndCleanupDirectPlayer: Function called.');
 
+    // NEW: Stop redirect heartbeat and invalidate token
+    stopRedirectHeartbeat();
+    currentRedirectToken++;
+
     // If we were logging a redirect stream, tell the server it has stopped.
     if (currentRedirectHistoryId) {
         stopRedirectStream(currentRedirectHistoryId);
@@ -300,17 +357,8 @@ function playVODStream(url, streamType) {
         logToPlayerConsole('Direct Play is ON. Using native HTML5 <video> element.');
         console.log('[DEBUG] playVODStream: Using native HTML5 video element for direct playback.');
 
-        // Start activity logging for redirect streams
-        if (currentRedirectHistoryId) {
-            stopRedirectStream(currentRedirectHistoryId);
-            currentRedirectHistoryId = null;
-        }
-        startRedirectStream(url, null, 'Direct Player Video', null)
-            .then(historyId => {
-                if (historyId) {
-                    currentRedirectHistoryId = historyId;
-                }
-            });
+        // Start activity logging for redirect streams with heartbeat
+        beginRedirectLogging(url, null, 'Direct Player Video', null);
 
         // Show player container
         UIElements.directPlayerContainer.classList.remove('hidden');
@@ -500,23 +548,13 @@ function playLiveStream(url, streamType) {
     } else {
         logToPlayerConsole('Direct Play is ON. Connecting directly to stream.');
 
-        // Activity Logging for Redirect Streams
-        if (currentRedirectHistoryId) {
-            stopRedirectStream(currentRedirectHistoryId);
-            currentRedirectHistoryId = null;
-        }
+        // Activity Logging for Redirect Streams with heartbeat
         const allChannels = guideState.channels || [];
         const channel = allChannels.find(c => c.url === url);
         const channelId = channel ? channel.id : null;
         const channelName = channel ? (channel.displayName || channel.name) : 'Direct Stream';
         const channelLogo = channel ? channel.logo : null;
-
-        startRedirectStream(url, channelId, channelName, channelLogo)
-            .then(historyId => {
-                if (historyId) {
-                    currentRedirectHistoryId = historyId;
-                }
-            });
+        beginRedirectLogging(url, channelId, channelName, channelLogo);
     }
 
     if (mpegts.isSupported()) {
@@ -640,4 +678,23 @@ export function setupDirectPlayerEventListeners() {
             showNotification('Link removed from recents.');
         }
     });
+
+    // Unload handlers to cleanly stop redirect stream when closing tab/browser
+    const handleUnload = (e) => {
+        if (e && e.persisted) {
+            return;
+        }
+        const hasActiveStream = !!(appState.player || currentStreamUrl || currentRedirectHistoryId);
+        if (hasActiveStream && document.visibilityState === 'hidden') {
+            return;
+        }
+        if (UIElements.directVideoElement && (!UIElements.directVideoElement.paused || document.pictureInPictureElement)) {
+            return;
+        }
+        if (currentRedirectHistoryId) {
+            stopRedirectStream(currentRedirectHistoryId, true);
+        }
+    };
+    window.addEventListener('pagehide', handleUnload);
+    window.addEventListener('beforeunload', handleUnload);
 }

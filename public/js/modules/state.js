@@ -9,6 +9,8 @@ export const appState = {
     currentUser: null, // { username, isAdmin }
     appInitialized: false,
     player: null, // mpegts.js player instance
+    hlsPlayer: null, // Hls.js player instance for timeshift/DVR
+    activeTimeshiftJobId: null, // Currently active timeshift job ID
     searchDebounceTimer: null,
     confirmCallback: null,
     db: null, // IndexedDB instance
@@ -31,7 +33,7 @@ export const guideState = {
         notificationLeadTime: 10, // Default notification lead time in minutes
         multiviewLayouts: [], // To store saved layouts for the user
         adminPageSize: 25, // NEW: Default page size for the admin history table
-        vodDirectPlayEnabled: false, // Default to false (use mpegts.js/profiles)
+        vodDirectPlayEnabled: true, // Default to true (native <video> playback with full seeking)
         // Default timezone offset based on browser's timezone (will be overridden by server settings)
         timezoneOffset: Math.round(-(new Date().getTimezoneOffset() / 60)),
     }, // This will hold both GLOBAL and USER settings, merged.
@@ -77,6 +79,89 @@ export const UIElements = {
     mainHeader: document.getElementById('main-header'),
     unifiedGuideHeader: document.getElementById('unified-guide-header'),
 
+    // --- Video Player Elements ---
+    videoModal: null,
+    videoModalContainer: null,
+    videoResizeHandle: null,
+    videoElement: null,
+    audioElement: null,
+    videoTitle: null,
+    closeModalBtn: null,
+
+
+    // --- Timeshift Controls Overlay Elements ---
+    timeshiftControlsOverlay: null,
+    timeshiftProgressBar: null,
+    timeshiftCurrentTime: null,
+    timeshiftTotalTime: null,
+    timeshiftLiveEdgeBtn: null,
+    timeshiftLiveDot: null,
+    timeshiftPlayPauseBtn: null,
+    timeshiftRewind15Btn: null,
+    timeshiftForward15Btn: null,
+    timeshiftStatusText: null,
+
+    // --- Program Details Modal Elements ---
+    programDetailsContainer: null,
+    detailsResizeHandle: null,
+
+    // --- DVR Page Elements ---
+    pageDvr: null,
+    tabDvr: null,
+    mobileNavDvr: null,
+    dvrStoragePercentBadge: null,
+    dvrStorageText: null,
+    dvrStorageBar: null,
+
+    // Live Hero Banner
+    dvrLiveHeroBanner: null,
+    dvrLiveStatusBadge: null,
+    dvrLiveChannelBadge: null,
+    dvrLiveTitle: null,
+    dvrLiveWindow: null,
+    dvrLiveCountdown: null,
+    dvrLiveProgressBar: null,
+    dvrLiveElapsedText: null,
+    dvrLiveTimeshiftBtn: null,
+    dvrLiveStopBtn: null,
+
+    // Tabs & Toolbar
+    dvrTabBtnRecordings: null,
+    dvrTabBtnScheduled: null,
+    dvrTabBtnHistory: null,
+    dvrRecordingsCount: null,
+    dvrScheduledCount: null,
+    dvrRecordingsContent: null,
+    dvrScheduledContent: null,
+    dvrHistoryContent: null,
+    dvrSearchInput: null,
+    dvrViewSwitcher: null,
+    dvrViewTableBtn: null,
+    dvrViewCardsBtn: null,
+    dvrToggleManualBtn: null,
+    closeManualRecBtn: null,
+
+    manualRecordingSection: null,
+    scheduledRecordingsSection: null,
+    dvrJobsTbody: null,
+    noDvrJobsMessage: null,
+    dvrRecordingsTbody: null,
+    dvrRecordingsCardsContainer: null,
+    noDvrRecordingsMessage: null,
+    dvrJobsTableContainer: null,
+    dvrRecordingsTableContainer: null,
+    dvrHistoryTbody: null,
+    noDvrHistoryMessage: null,
+    dvrHistoryTableContainer: null,
+    clearHistoryDvrBtn: null,
+
+    dvrErrorModal: null,
+    dvrErrorModalTitle: null,
+    dvrErrorModalContent: null,
+    dvrErrorModalCloseBtn: null,
+    clearScheduledDvrBtn: null,
+    clearCompletedDvrBtn: null,
+
     // --- NEW: VOD Page Elements ---
     tabVod: null,
     mobileNavVod: null,
@@ -114,6 +199,8 @@ export const UIElements = {
     vodPlayMovieBtn: null,
     vodDetailsSeriesActions: null,
     vodSeasonSelect: null,
+    vodSeasonTabs: null,
+    vodEpisodesCountBadge: null,
     vodEpisodeList: null,
 
     // --- NEW: Group Filter Modal ---
@@ -133,6 +220,16 @@ export const UIElements = {
     logFileCount: null,
     logTotalSize: null,
     logOldestDate: null,
+
+    // --- Resume Playback Modal Elements ---
+    resumePlaybackModal: null,
+    resumePlaybackTitle: null,
+    resumePlaybackMessage: null,
+    resumePlaybackConfirmBtn: null,
+    resumePlaybackConfirmLabel: null,
+    resumePlaybackRestartBtn: null,
+    resumePlaybackCloseBtn: null,
+
     logMaxFilesInput: null,
     logMaxSizeInput: null,
     logAutoDeleteDaysInput: null,

@@ -6,6 +6,7 @@
 
 import { showLoginScreen } from './auth.js';
 import { showNotification } from './ui.js';
+import { guideState } from './state.js';
 
 /**
  * A wrapper for the fetch API to handle common tasks like error handling and auth failures.
@@ -128,6 +129,94 @@ export async function saveUserSetting(key, value) {
         showNotification('Could not parse server response after saving setting.', true);
         return null;
     }
+}
+
+let deviceSettingsSyncDebounce = null;
+
+/**
+ * Retrieves or creates a persistent unique identifier for the current browser/device.
+ * @returns {string} The persistent device identifier.
+ */
+export function getDeviceId() {
+    let deviceId = localStorage.getItem('viniplay_device_id');
+    if (!deviceId) {
+        const rand = (Math.random().toString(36).substring(2, 10) + Date.now().toString(36)).substring(0, 16);
+        deviceId = `dev_${rand}`;
+        try {
+            localStorage.setItem('viniplay_device_id', deviceId);
+        } catch (e) {
+            console.warn('[API] Could not save deviceId to localStorage:', e);
+        }
+    }
+    return deviceId;
+}
+
+/**
+ * Retrieves a device-specific setting.
+ * Checks localStorage first for instant 0ms access, then falls back to server-synced
+ * guideState.settings.deviceSettings[deviceId], then the provided fallback.
+ * @param {string} key - Setting key
+ * @param {*} fallback - Default value if not set
+ * @returns {*}
+ */
+export function getDeviceSetting(key, fallback = null) {
+    const deviceId = getDeviceId();
+    const localKey = `viniplay_device_${deviceId}_${key}`;
+    try {
+        const localVal = localStorage.getItem(localKey);
+        if (localVal !== null) {
+            return JSON.parse(localVal);
+        }
+    } catch (e) {
+        const raw = localStorage.getItem(localKey);
+        if (raw !== null) return raw;
+    }
+
+    // Check server-synced deviceSettings from guideState if available
+    if (guideState?.settings?.deviceSettings) {
+        const devSettings = guideState.settings.deviceSettings[deviceId];
+        if (devSettings && devSettings[key] !== undefined) {
+            try {
+                localStorage.setItem(localKey, JSON.stringify(devSettings[key]));
+            } catch (e) {}
+            return devSettings[key];
+        }
+    }
+
+    return fallback;
+}
+
+/**
+ * Saves a device-specific setting both locally (immediate synchronous persistence)
+ * and syncs to the backend user settings debounced under guideState.settings.deviceSettings[deviceId].
+ * @param {string} key - Setting key
+ * @param {*} value - Setting value
+ */
+export function saveDeviceSetting(key, value) {
+    const deviceId = getDeviceId();
+    const localKey = `viniplay_device_${deviceId}_${key}`;
+    try {
+        localStorage.setItem(localKey, JSON.stringify(value));
+    } catch (e) {
+        console.warn('[API] Could not save device setting to localStorage:', e);
+    }
+
+    if (guideState?.settings) {
+        if (!guideState.settings.deviceSettings) {
+            guideState.settings.deviceSettings = {};
+        }
+        if (!guideState.settings.deviceSettings[deviceId]) {
+            guideState.settings.deviceSettings[deviceId] = {};
+        }
+        guideState.settings.deviceSettings[deviceId][key] = value;
+    }
+
+    clearTimeout(deviceSettingsSyncDebounce);
+    deviceSettingsSyncDebounce = setTimeout(() => {
+        if (guideState?.settings?.deviceSettings) {
+            saveUserSetting('deviceSettings', guideState.settings.deviceSettings);
+        }
+    }, 600);
 }
 
 
@@ -336,12 +425,48 @@ export async function startRedirectStream(streamUrl, channelId, channelName, cha
 }
 
 /**
+ * Sends a periodic heartbeat for an active redirect stream.
+ * @param {number} historyId - The history ID of the active redirect session.
+ * @returns {Promise<boolean>}
+ */
+export async function sendRedirectHeartbeat(historyId) {
+    if (!historyId) return false;
+    try {
+        const res = await fetch('/api/activity/heartbeat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ historyId })
+        });
+        return res && res.ok;
+    } catch (e) {
+        console.warn(`[API] Failed to send heartbeat for history ID ${historyId}:`, e);
+        return false;
+    }
+}
+
+/**
  * NEW: Notifies the server that a "Redirect" stream has stopped.
+ * Supports keepalive: true so browser delivers request even during page unload.
  * @param {number} historyId - The history ID of the stream session to stop.
+ * @param {boolean} useKeepalive - If true, uses keepalive: true for unload/pagehide.
  * @returns {Promise<boolean>} - True on success, false on failure.
  */
-export async function stopRedirectStream(historyId) {
-    console.log(`[API] Notifying server of REDIRECT stream stop for history ID: ${historyId}.`);
+export async function stopRedirectStream(historyId, useKeepalive = false) {
+    if (!historyId) return false;
+    console.log(`[API] Notifying server of REDIRECT stream stop for history ID: ${historyId} (keepalive=${useKeepalive}).`);
+    if (useKeepalive) {
+        try {
+            fetch('/api/activity/stop-redirect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ historyId }),
+                keepalive: true
+            }).catch(() => {});
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
     const res = await apiFetch('/api/activity/stop-redirect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -412,5 +537,65 @@ export async function fetchSeriesDetails(seriesId) {
         console.error(`[API] Error parsing series details JSON for ID ${seriesId}:`, e);
         showNotification('Failed to parse series details.', true); // Use showNotification
         return null;
+    }
+}
+
+/**
+ * Fetches stored watch progress for a given media content.
+ * @param {string} contentType - 'vod_movie', 'vod_episode', 'dvr_recording', 'dvr_job'
+ * @param {string|number} contentId
+ * @returns {Promise<{progress_seconds: number, duration_seconds: number, updated_at: string}|null>}
+ */
+export async function getWatchProgress(contentType, contentId) {
+    if (!contentType || !contentId) return null;
+    try {
+        const response = await apiFetch(`/api/progress/${encodeURIComponent(contentType)}/${encodeURIComponent(contentId)}?_t=${Date.now()}`);
+        if (response && response.ok) {
+            return await response.json();
+        }
+    } catch (e) {
+        console.warn(`[WATCH_PROGRESS] Error fetching progress for ${contentType}/${contentId}:`, e);
+    }
+    return null;
+}
+
+/**
+ * Saves current watch progress for a given media content.
+ * @param {string} contentType
+ * @param {string|number} contentId
+ * @param {number} progressSeconds
+ * @param {number} durationSeconds
+ */
+export async function saveWatchProgressApi(contentType, contentId, progressSeconds, durationSeconds) {
+    if (!contentType || !contentId) return null;
+    try {
+        await apiFetch('/api/progress', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contentType,
+                contentId: String(contentId),
+                progressSeconds: Math.floor(progressSeconds),
+                durationSeconds: Math.floor(durationSeconds)
+            })
+        });
+    } catch (e) {
+        console.warn(`[WATCH_PROGRESS] Error saving progress for ${contentType}/${contentId}:`, e);
+    }
+}
+
+/**
+ * Deletes stored watch progress for a given media content.
+ * @param {string} contentType
+ * @param {string|number} contentId
+ */
+export async function deleteWatchProgress(contentType, contentId) {
+    if (!contentType || !contentId) return;
+    try {
+        await apiFetch(`/api/progress/${encodeURIComponent(contentType)}/${encodeURIComponent(contentId)}`, {
+            method: 'DELETE'
+        });
+    } catch (e) {
+        console.warn(`[WATCH_PROGRESS] Error deleting progress for ${contentType}/${contentId}:`, e);
     }
 }

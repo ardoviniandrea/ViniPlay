@@ -11,11 +11,11 @@ import { initMultiView, isMultiViewActive, cleanupMultiView } from './multiview.
 import { initDvrPage } from './dvr.js';
 import { stopAndCleanupPlayer } from './player.js';
 import { initDirectPlayer, isDirectPlayerActive, cleanupDirectPlayer } from './player_direct.js';
-// MODIFIED: Import handleGuideLoad and fetchConfig for the refresh logic
 import { finalizeGuideLoad, handleGuideLoad } from './guide.js';
-import { fetchConfig } from './api.js';
+import { fetchConfig, saveUserSetting, saveDeviceSetting } from './api.js';
 import { initActivityPage } from './admin.js';
 import { initVodPage } from './vod.js';
+import { sendTelemetry } from './telemetry.js';
 
 
 let confirmCallback = null;
@@ -62,25 +62,77 @@ export const openModal = (modal) => {
 
     const handleBackdropClick = (e) => {
         if (e.target === modal) {
-            const onMouseUp = (upEvent) => {
-                if (upEvent.target === modal && !isResizing) {
-                    if (modal === UIElements.videoModal) {
+            // If the player is locked or in PiP, ignore taps/clicks on backdrop to prevent closing
+            if (modal.classList.contains('player-locked') || modal.classList.contains('pip-active') || document.pictureInPictureElement) {
+                return;
+            }
+
+            const startTouch = e.touches ? e.touches[0] : null;
+            const startX = startTouch ? startTouch.clientX : e.clientX;
+            const startY = startTouch ? startTouch.clientY : e.clientY;
+            const startTime = Date.now();
+
+            // Bottom 36px exclusion zone: home gesture swipe area on modern iOS / Android
+            if (startY > window.innerHeight - 36) {
+                sendTelemetry('BACKDROP_TOUCH', 'Touch in bottom 36px exclusion zone -> ignored', { startX, startY, exclusionZone: window.innerHeight - 36 });
+                return;
+            }
+
+            const handleRelease = (upEvent) => {
+                const touch = upEvent.changedTouches ? upEvent.changedTouches[0] : null;
+                const endX = touch ? touch.clientX : upEvent.clientX;
+                const endY = touch ? touch.clientY : upEvent.clientY;
+                const duration = Date.now() - startTime;
+                const distance = Math.hypot(endX - startX, endY - startY);
+
+                // Ignore if it was a drag, swipe, or long press (>10px movement or >400ms duration)
+                if (distance > 10 || duration > 400) {
+                    sendTelemetry('BACKDROP_TOUCH', `Backdrop swipe/drag ignored (distance: ${distance.toFixed(1)}px, duration: ${duration}ms)`, {
+                        startX, startY, endX, endY, distance, duration
+                    });
+                    cleanupListeners();
+                    return;
+                }
+
+                const target = upEvent.target || (touch ? document.elementFromPoint(touch.clientX, touch.clientY) : null);
+                if ((target === modal || upEvent.target === modal) && !isResizing) {
+                    if (modal.classList.contains('player-locked')) {
+                        cleanupListeners();
+                        return;
+                    }
+                    sendTelemetry('BACKDROP_TOUCH', `Backdrop tap detected -> triggering ${modal === UIElements.videoModal || modal.id === 'video-modal' ? 'stopAndCleanupPlayer()' : 'closeModal()'}`, {
+                        modalId: modal.id,
+                        startX, startY, endX, endY, distance, duration,
+                        targetId: target?.id || target?.tagName
+                    }, true);
+                    if (modal === UIElements.videoModal || modal.id === 'video-modal') {
                         stopAndCleanupPlayer();
                     } else {
                         closeModal(modal);
                     }
                 }
-                document.removeEventListener('mouseup', onMouseUp);
+                cleanupListeners();
             };
-            document.addEventListener('mouseup', onMouseUp, { once: true });
+
+            const cleanupListeners = () => {
+                document.removeEventListener('mouseup', handleRelease);
+                document.removeEventListener('touchend', handleRelease);
+                document.removeEventListener('touchcancel', cleanupListeners);
+            };
+
+            document.addEventListener('mouseup', handleRelease, { once: true });
+            document.addEventListener('touchend', handleRelease, { once: true });
+            document.addEventListener('touchcancel', cleanupListeners, { once: true });
         }
     };
 
     if (activeModalCloseListener && activeModalCloseListener.element) {
         activeModalCloseListener.element.removeEventListener('mousedown', activeModalCloseListener.handler);
+        activeModalCloseListener.element.removeEventListener('touchstart', activeModalCloseListener.handler);
     }
 
     modal.addEventListener('mousedown', handleBackdropClick);
+    modal.addEventListener('touchstart', handleBackdropClick, { passive: true });
     activeModalCloseListener = { element: modal, handler: handleBackdropClick };
 };
 
@@ -93,6 +145,7 @@ export const closeModal = (modal) => {
 
     if (activeModalCloseListener && activeModalCloseListener.element === modal) {
         activeModalCloseListener.element.removeEventListener('mousedown', activeModalCloseListener.handler);
+        activeModalCloseListener.element.removeEventListener('touchstart', activeModalCloseListener.handler);
         activeModalCloseListener = null;
     }
 
@@ -153,6 +206,85 @@ export function handleConfirm() {
     closeModal(UIElements.confirmModal);
 }
 
+export function formatPlaybackTime(seconds) {
+    const s = Math.max(0, Math.floor(seconds));
+    const hrs = Math.floor(s / 3600);
+    const mins = Math.floor((s % 3600) / 60);
+    const secs = s % 60;
+    if (hrs > 0) {
+        return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+/**
+ * Shows the Resume Playback modal dialog.
+ * @param {object} options
+ * @param {string} options.title - The title of the program / movie / episode.
+ * @param {number} options.progressSeconds - Stored progress timestamp in seconds.
+ * @param {number} [options.durationSeconds=0] - Total duration in seconds (if known).
+ * @param {Function} options.onResume - Callback when user chooses to resume.
+ * @param {Function} options.onStartOver - Callback when user chooses to start over from 0.
+ * @param {Function} [options.onCancel] - Optional callback when user cancels without playing.
+ */
+export const showResumePrompt = ({ title, progressSeconds, durationSeconds = 0, onResume, onStartOver, onCancel = null }) => {
+    const modal = UIElements.resumePlaybackModal || document.getElementById('resume-playback-modal');
+    if (!modal) {
+        if (typeof onResume === 'function') onResume();
+        return;
+    }
+
+    const titleEl = UIElements.resumePlaybackTitle || document.getElementById('resume-playback-title');
+    const msgEl = UIElements.resumePlaybackMessage || document.getElementById('resume-playback-message');
+    const confirmBtn = UIElements.resumePlaybackConfirmBtn || document.getElementById('resume-playback-confirm-btn');
+    const labelEl = UIElements.resumePlaybackConfirmLabel || document.getElementById('resume-playback-confirm-label');
+    const restartBtn = UIElements.resumePlaybackRestartBtn || document.getElementById('resume-playback-restart-btn');
+    const closeBtn = UIElements.resumePlaybackCloseBtn || document.getElementById('resume-playback-close-btn');
+
+    const formattedProgress = formatPlaybackTime(progressSeconds);
+    const formattedDuration = durationSeconds > 0 ? formatPlaybackTime(durationSeconds) : null;
+
+    if (titleEl) titleEl.textContent = title || 'Playback';
+    if (labelEl) labelEl.textContent = `Resume (${formattedProgress})`;
+
+    let messageText = `You were watching at <span class="font-bold text-blue-400">${formattedProgress}</span>`;
+    if (formattedDuration) {
+        messageText += ` (total: ${formattedDuration})`;
+    }
+    messageText += `. Would you like to resume where you left off or start over from the beginning?`;
+    if (msgEl) msgEl.innerHTML = messageText;
+
+    const cleanup = () => {
+        closeModal(modal);
+        if (confirmBtn) confirmBtn.onclick = null;
+        if (restartBtn) restartBtn.onclick = null;
+        if (closeBtn) closeBtn.onclick = null;
+    };
+
+    if (confirmBtn) {
+        confirmBtn.onclick = () => {
+            cleanup();
+            if (typeof onResume === 'function') onResume();
+        };
+    }
+
+    if (restartBtn) {
+        restartBtn.onclick = () => {
+            cleanup();
+            if (typeof onStartOver === 'function') onStartOver();
+        };
+    }
+
+    if (closeBtn) {
+        closeBtn.onclick = () => {
+            cleanup();
+            if (typeof onCancel === 'function') onCancel();
+        };
+    }
+
+    openModal(modal);
+};
+
 /**
  * Sets the loading state of a button, showing a spinner.
  * @param {HTMLElement} buttonEl - The button element.
@@ -174,71 +306,92 @@ export const setButtonLoadingState = (buttonEl, isLoading, originalContent) => {
  * Makes a modal window resizable by dragging a handle.
  */
 export const makeModalResizable = (handleEl, containerEl, minWidth, minHeight, settingKey, ratioCallback = null) => {
-    import('./api.js').then(({ saveUserSetting }) => {
-        let resizeDebounceTimer;
+    if (!handleEl || !containerEl) return;
 
-        const startResize = (clientX, clientY) => {
-            isResizing = true;
-            const startX = clientX;
-            const startY = clientY;
-            const startWidth = containerEl.offsetWidth;
-            const startHeight = containerEl.offsetHeight;
+    let resizeDebounceTimer;
 
-            const doResize = (moveEvent) => {
-                // Handle both mouse and touch events for coordinates
-                const currentX = moveEvent.touches ? moveEvent.touches[0].clientX : moveEvent.clientX;
-                const currentY = moveEvent.touches ? moveEvent.touches[0].clientY : moveEvent.clientY;
+    const startResize = (clientX, clientY) => {
+        isResizing = true;
+        const startX = clientX;
+        const startY = clientY;
+        const startWidth = containerEl.offsetWidth;
+        const startHeight = containerEl.offsetHeight;
 
-                let newWidth = Math.max(minWidth, startWidth + currentX - startX);
-                let newHeight = Math.max(minHeight, startHeight + currentY - startY);
+        // Ensure inline maxWidth/maxHeight do not artificially constrain resizing
+        containerEl.style.maxWidth = '98vw';
+        containerEl.style.maxHeight = '95vh';
+        document.body.style.userSelect = 'none';
 
-                // Apply aspect ratio if callback is provided
-                if (ratioCallback) {
-                    const calculatedHeight = ratioCallback(newWidth);
-                    if (calculatedHeight) {
-                        newHeight = calculatedHeight;
-                    }
+        // Temporarily disable pointer events on media/iframes so dragging is responsive
+        const nestedMedia = containerEl.querySelectorAll('video, iframe');
+        nestedMedia.forEach(el => el.style.pointerEvents = 'none');
+
+        const doResize = (moveEvent) => {
+            // Handle both mouse and touch events for coordinates
+            const currentX = moveEvent.touches ? moveEvent.touches[0].clientX : moveEvent.clientX;
+            const currentY = moveEvent.touches ? moveEvent.touches[0].clientY : moveEvent.clientY;
+
+            const isMobile = window.innerWidth < 768;
+            const effectiveMinWidth = isMobile ? Math.min(minWidth, Math.max(200, window.innerWidth - 32)) : minWidth;
+            const effectiveMinHeight = isMobile ? Math.min(minHeight, Math.max(150, window.innerHeight - 32)) : minHeight;
+            const maxAllowedWidth = Math.max(effectiveMinWidth, window.innerWidth - 16);
+            const maxAllowedHeight = Math.max(effectiveMinHeight, window.innerHeight - 16);
+
+            let newWidth = Math.min(maxAllowedWidth, Math.max(isMobile ? 200 : effectiveMinWidth, startWidth + currentX - startX));
+            let newHeight = Math.min(maxAllowedHeight, Math.max(isMobile ? 150 : effectiveMinHeight, startHeight + currentY - startY));
+
+            // Apply aspect ratio if callback is provided
+            if (ratioCallback) {
+                const calculatedHeight = ratioCallback(newWidth);
+                if (calculatedHeight) {
+                    newHeight = Math.min(maxAllowedHeight, calculatedHeight);
                 }
+            }
 
-                containerEl.style.width = `${newWidth}px`;
-                containerEl.style.height = `${newHeight}px`;
-            };
+            containerEl.style.width = `${newWidth}px`;
+            containerEl.style.height = `${newHeight}px`;
+        };
 
-            const stopResize = () => {
-                window.removeEventListener('mousemove', doResize);
-                window.removeEventListener('mouseup', stopResize);
-                window.removeEventListener('touchmove', doResize);
-                window.removeEventListener('touchend', stopResize);
-                document.body.style.cursor = '';
+        const stopResize = () => {
+            window.removeEventListener('mousemove', doResize);
+            window.removeEventListener('mouseup', stopResize);
+            window.removeEventListener('touchmove', doResize);
+            window.removeEventListener('touchend', stopResize);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            nestedMedia.forEach(el => el.style.pointerEvents = '');
 
-                isResizing = false;
+            isResizing = false;
 
+            if (settingKey) {
                 clearTimeout(resizeDebounceTimer);
                 resizeDebounceTimer = setTimeout(() => {
-                    saveUserSetting(settingKey, {
+                    saveDeviceSetting(settingKey, {
                         width: containerEl.offsetWidth,
                         height: containerEl.offsetHeight,
                     });
                 }, 500);
-            };
-
-            document.body.style.cursor = 'se-resize';
-            window.addEventListener('mousemove', doResize);
-            window.addEventListener('mouseup', stopResize);
-            window.addEventListener('touchmove', doResize, { passive: false });
-            window.addEventListener('touchend', stopResize);
+            }
         };
 
-        handleEl.addEventListener('mousedown', e => {
-            e.preventDefault();
-            startResize(e.clientX, e.clientY);
-        }, false);
+        document.body.style.cursor = 'se-resize';
+        window.addEventListener('mousemove', doResize);
+        window.addEventListener('mouseup', stopResize);
+        window.addEventListener('touchmove', doResize, { passive: false });
+        window.addEventListener('touchend', stopResize);
+    };
 
-        handleEl.addEventListener('touchstart', e => {
-            e.preventDefault(); // Prevent scrolling while resizing
-            startResize(e.touches[0].clientX, e.touches[0].clientY);
-        }, { passive: false });
-    });
+    handleEl.addEventListener('mousedown', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        startResize(e.clientX, e.clientY);
+    }, false);
+
+    handleEl.addEventListener('touchstart', e => {
+        e.preventDefault(); // Prevent scrolling while resizing
+        e.stopPropagation();
+        startResize(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: false });
 };
 
 /**
@@ -248,7 +401,7 @@ export const makeColumnResizable = (handleEl, targetEl, minWidth, settingKey, cs
     Promise.all([
         import('./api.js'),
         import('./guide.js')
-    ]).then(([{ saveUserSetting }, { updateNowLinePosition }]) => {
+    ]).then(([{ saveDeviceSetting }, { updateNowLinePosition }]) => {
         let resizeDebounceTimer;
         let startWidth;
         let startX;
@@ -285,7 +438,7 @@ export const makeColumnResizable = (handleEl, targetEl, minWidth, settingKey, cs
                 clearTimeout(resizeDebounceTimer);
                 resizeDebounceTimer = setTimeout(() => {
                     const currentWidth = parseInt(getComputedStyle(targetEl).getPropertyValue(cssVarName));
-                    saveUserSetting(settingKey, currentWidth);
+                    saveDeviceSetting(settingKey, currentWidth);
                 }, 500);
             };
 

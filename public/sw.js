@@ -7,6 +7,15 @@
  * web page is not open.
  */
 
+// Instant Service Worker activation
+self.addEventListener('install', () => {
+    self.skipWaiting();
+});
+
+self.addEventListener('activate', event => {
+    event.waitUntil(clients.claim());
+});
+
 // NEW: Initialize BroadcastChannel for cross-page communication
 const notificationChannel = new BroadcastChannel('viniplay-notifications');
 
@@ -98,13 +107,10 @@ self.addEventListener('notificationclick', event => {
             // Check if there's already a window open for the app
             for (let i = 0; i < clientList.length; i++) {
                 const client = clientList[i];
-                // If a client is found that matches our origin, navigate it to the specific URL
-                if (client.url.startsWith(self.location.origin) && 'navigate' in client) {
-                    return client.navigate(urlToOpen).then(navigatedClient => {
-                        // After navigating and focusing, also send a refresh signal
-                        notificationChannel.postMessage({ type: 'refresh-notifications' });
-                        return navigatedClient.focus();
-                    });
+                // If a client is found that matches our origin, focus it without hard-reloading the page
+                if (client.url.startsWith(self.location.origin)) {
+                    notificationChannel.postMessage({ type: 'refresh-notifications' });
+                    return client.focus();
                 }
             }
             // If no client is found or no suitable client to navigate, open a new tab/window.

@@ -6,10 +6,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VINI PLAY</title>
     <link rel="icon" type="image/png" href="/viniplay.png">
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#111827">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/mpegts.js/dist/mpegts.js"></script>
-    <!-- Shaka Player for VOD playback -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/4.7.0/shaka-player.compiled.js"></script>
+    <!-- Hls.js for Live DVR Timeshift / Chase Play -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/fuse.js/dist/fuse.min.js"></script>
     <!-- NEW: Google Cast Framework -->
     <script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
@@ -18,6 +23,10 @@
     <script src="https://cdn.jsdelivr.net/npm/gridstack@10.1.2/dist/gridstack-all.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        html, body {
+            overscroll-behavior-y: contain;
+        }
+
         body {
             font-family: 'Inter', sans-serif;
             background-color: #111827;
@@ -167,38 +176,38 @@
             position: absolute;
             bottom: 0;
             right: 0;
-            width: 20px;
-            height: 20px;
+            width: 28px;
+            height: 28px;
             cursor: se-resize;
-            z-index: 10;
+            z-index: 50;
+            touch-action: none;
         }
 
         .resize-handle::after {
             content: '';
             position: absolute;
             display: block;
-            width: 12px;
-            height: 12px;
-            bottom: 2px;
-            right: 2px;
+            width: 14px;
+            height: 14px;
+            bottom: 3px;
+            right: 3px;
             background-image: linear-gradient(45deg, #9ca3af 25%, transparent 25%, transparent 75%, #9ca3af 75%), linear-gradient(45deg, #9ca3af 25%, transparent 25%, transparent 75%, #9ca3af 75%);
             background-size: 6px 6px;
             background-position: 0 0, 3px 3px;
-            opacity: 0.6;
+            opacity: 0.8;
+            transition: opacity 0.2s, transform 0.2s;
         }
 
         .resize-handle:hover::after {
             opacity: 1;
-        }
-
-        #video-modal-container {
-            overflow: hidden;
+            transform: scale(1.15);
         }
 
         #video-modal-container {
             min-width: 400px;
             min-height: 300px;
             position: relative;
+            overflow: visible;
         }
 
         #program-details-container {
@@ -236,15 +245,21 @@
         }
 
         .sources-table th,
-        .dvr-table th,
         .admin-table th {
             @apply px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider;
         }
 
+        .dvr-table th {
+            @apply px-6 py-3.5 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider bg-gray-800/80;
+        }
+
         .sources-table td,
-        .dvr-table td,
         .admin-table td {
             @apply px-4 py-3 whitespace-nowrap text-sm text-gray-300;
+        }
+
+        .dvr-table td {
+            @apply px-6 py-4 whitespace-nowrap text-sm text-gray-300;
         }
 
         .sources-table tbody tr,
@@ -706,6 +721,17 @@
             color: white;
         }
 
+        .status-badge.reconnecting {
+            background-color: #d97706;
+            color: white;
+            animation: pulse-badge 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        @keyframes pulse-badge {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
         .status-badge.scheduled {
             background-color: #3b82f6;
             color: white;
@@ -885,21 +911,53 @@
         }
 
         .pagination-btn {
-            @apply flex items-center justify-center px-3 h-8 leading-tight text-gray-400 bg-gray-800 border border-gray-700 hover:bg-gray-700 hover:text-white;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.375rem 0.75rem;
+            min-width: 2.25rem;
+            height: 2.25rem;
+            font-size: 0.875rem;
+            line-height: 1.25rem;
+            font-weight: 500;
+            color: #9ca3af;
+            background-color: #1f2937;
+            border: 1px solid #374151;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            transition: all 0.15s ease-in-out;
+            user-select: none;
+        }
+
+        .pagination-btn:hover:not(:disabled):not(.active) {
+            background-color: #374151;
+            color: #ffffff;
+            border-color: #4b5563;
         }
 
         .pagination-btn.active {
-            @apply z-10 text-white font-bold border-blue-600 bg-blue-600;
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.5);
-            /* blue-500 with 50% opacity */
+            color: #ffffff;
+            font-weight: 700;
+            background-color: #2563eb;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.4);
+            cursor: default;
         }
 
-        .pagination-btn:first-child {
-            @apply rounded-l-lg;
+        .pagination-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
         }
 
-        .pagination-btn:last-child {
-            @apply rounded-r-lg;
+        .pagination-ellipsis {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 2rem;
+            height: 2.25rem;
+            font-size: 0.875rem;
+            color: #6b7280;
+            user-select: none;
         }
 
         .transcode-indicator {
@@ -1078,84 +1136,101 @@
         }
 
         .episode-item-epnum {
-            color: #9ca3af;
-            /* Replaces @apply text-gray-400 */
-            font-size: 0.875rem;
-            /* Replaces @apply text-sm */
-            width: 2rem;
-            /* Replaces @apply w-8 */
-            text-align: center;
-            /* Replaces @apply text-center */
+            color: #93c5fd;
+            font-size: 0.75rem;
+            font-weight: 600;
+            width: 1.75rem;
+            height: 1.75rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             flex-shrink: 0;
-            /* Replaces @apply flex-shrink-0 */
-            margin-right: 1rem;
-            /* Replaces @apply mr-4 */
+            margin-right: 0.75rem;
             border-radius: 9999px;
-            /* Replaces @apply rounded-full */
-            background-color: #374151;
-            /* Replaces @apply bg-gray-700 */
-            line-height: 1.5rem;
-            /* Replaces @apply leading-6 */
+            background-color: rgba(30, 58, 138, 0.35);
+            border: 1px solid rgba(59, 130, 246, 0.3);
         }
 
         .episode-item-title {
-            color: white;
-            /* Replaces @apply text-white */
+            color: #f3f4f6;
             font-size: 0.875rem;
-            /* Replaces @apply text-sm */
             font-weight: 500;
-            /* Replaces @apply font-medium */
-            flex-grow: 1;
-            /* Replaces @apply flex-grow */
-            margin-right: 1rem;
-            /* Replaces @apply mr-4 */
+            flex: 1 1 0%;
+            min-width: 0;
+            margin-right: 0.75rem;
             overflow: hidden;
-            /* Replaces @apply truncate (part 1) */
             text-overflow: ellipsis;
-            /* Replaces @apply truncate (part 2) */
             white-space: nowrap;
-            /* Replaces @apply truncate (part 3) */
         }
 
-        .episode-item-duration,
+        .episode-item-duration {
+            color: #9ca3af;
+            font-size: 0.75rem;
+            width: 4.5rem;
+            text-align: right;
+            flex-shrink: 0;
+            white-space: nowrap;
+            margin-right: 0.75rem;
+        }
+
         .episode-item-date {
             color: #9ca3af;
-            /* Replaces @apply text-gray-400 */
             font-size: 0.75rem;
-            /* Replaces @apply text-xs */
-            width: 5rem;
-            /* Replaces @apply w-20 */
+            width: 5.5rem;
             text-align: right;
-            /* Replaces @apply text-right */
             flex-shrink: 0;
-            /* Replaces @apply flex-shrink-0 */
-            margin-right: 1rem;
-            /* Replaces @apply mr-4 */
+            white-space: nowrap;
+            margin-right: 0.75rem;
+        }
+
+        @media (max-width: 640px) {
+            .episode-item-date {
+                display: none;
+            }
+            .episode-item-duration {
+                width: auto;
+                min-width: 3.25rem;
+                margin-right: 0.375rem;
+                font-size: 0.6875rem;
+            }
+            .episode-item-title {
+                font-size: 0.8125rem;
+                margin-right: 0.375rem;
+            }
+            .episode-item-epnum {
+                width: 1.5rem;
+                height: 1.5rem;
+                font-size: 0.6875rem;
+                margin-right: 0.5rem;
+            }
         }
 
         .episode-item-play-btn {
             color: #60a5fa;
-            /* Replaces @apply text-blue-400 */
-            padding: 0.25rem;
-            /* Replaces @apply p-1 */
+            width: 1.75rem;
+            height: 1.75rem;
             border-radius: 9999px;
-            /* Replaces @apply rounded-full */
+            background-color: rgba(37, 99, 235, 0.15);
+            border: 1px solid rgba(59, 130, 246, 0.25);
             flex-shrink: 0;
-            /* Replaces @apply flex-shrink-0 */
             margin-left: auto;
-            /* Replaces @apply ml-auto */
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s ease-in-out;
         }
 
         .episode-item-play-btn:hover {
-            color: #93c5fd;
-            /* Replaces @apply hover:text-blue-300 */
+            color: #ffffff;
+            background-color: #2563eb;
+            border-color: #3b82f6;
+            transform: scale(1.05);
         }
 
         .episode-item-play-btn svg {
-            width: 1.25rem;
-            /* Replaces @apply w-5 */
-            height: 1.25rem;
-            /* Replaces @apply h-5 */
+            width: 0.875rem;
+            height: 0.875rem;
+            fill: currentColor;
         }
 
 
@@ -1183,6 +1258,99 @@
             -webkit-backdrop-filter: blur(5px);
             z-index: 50;
             /* Ensure it's on top of the grid */
+        }
+
+        /* --- Video Modal Custom & Fullscreen Styles --- */
+        #video-modal-container:fullscreen,
+        #video-modal-container:-webkit-full-screen {
+            width: 100vw !important;
+            height: 100vh !important;
+            max-height: 100vh !important;
+            max-width: 100vw !important;
+            border-radius: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+
+        #video-modal-container:fullscreen #video-resize-handle,
+        #video-modal-container:-webkit-full-screen #video-resize-handle {
+            display: none !important;
+        }
+
+        /* Locked state styling */
+        #video-modal.player-locked #video-modal-header {
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+
+        #video-modal.player-locked #video-resize-handle {
+            display: none !important;
+        }
+
+        /* Audio wave animation */
+        @keyframes audioWavePulse {
+            0%, 100% { height: 6px; }
+            50% { height: 24px; }
+        }
+
+        .audio-wave-bar {
+            transform-origin: bottom;
+            animation: audioWavePulse 1.2s ease-in-out infinite;
+        }
+
+        /* PiP active state styling: invisible on screen, active in DOM */
+        #video-modal.pip-active {
+            opacity: 0 !important;
+            pointer-events: none !important;
+        }
+
+        /* Video modal header button optimizations for touch & desktop */
+        #video-modal-header button {
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
+            cursor: pointer;
+        }
+
+        #video-modal-header button svg,
+        #video-modal-header button span {
+            pointer-events: none;
+        }
+
+        /* Hide scrollbars for the header buttons container if overflowing on narrow mobile screens */
+        #video-modal-header > div:last-child {
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        #video-modal-header > div:last-child::-webkit-scrollbar {
+            display: none;
+        }
+
+        @media (max-width: 767px) {
+            .resize-handle {
+                width: 36px !important;
+                height: 36px !important;
+            }
+            .resize-handle::after {
+                width: 16px !important;
+                height: 16px !important;
+                bottom: 4px !important;
+                right: 4px !important;
+            }
+            #video-modal-container {
+                min-width: 0 !important;
+                min-height: 0 !important;
+                overflow: visible !important;
+            }
+            #video-modal-header {
+                padding: 0.5rem !important;
+            }
+            #video-modal-header h3#video-title {
+                font-size: 0.875rem !important;
+            }
+            #video-modal-header button {
+                padding: 0.35rem !important;
+            }
         }
     </style>
 </head>
@@ -1301,9 +1469,9 @@
 
                     <div
                         class="relative w-full sm:w-auto grid grid-cols-1 sm:flex sm:items-center sm:justify-end gap-2 filter-search-controls">
-                        <select id="group-filter"
-                            class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500"></select>
                         <select id="source-filter"
+                            class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500"></select>
+                        <select id="group-filter"
                             class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500"></select>
                         <input type="search" id="search-input" placeholder="Search..."
                             class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:ring-blue-500 focus:border-blue-500 sm:w-48">
@@ -1483,113 +1651,207 @@
 
             <!-- DVR Page -->
             <div id="page-dvr" class="hidden flex-grow flex-col items-center p-4 overflow-y-auto custom-scrollbar">
-                <div class="w-full max-w-6xl xl:max-w-screen-xl mx-auto space-y-8 pb-16">
-                    <div id="dvr-storage-bar-container" class="bg-gray-800 p-4 rounded-xl shadow-lg">
-                        <div class="flex justify-between items-center mb-1 text-sm">
-                            <span class="font-medium text-white">Storage Usage</span>
-                            <span id="dvr-storage-text" class="text-gray-400">Loading...</span>
+                <div class="w-full max-w-6xl xl:max-w-screen-xl mx-auto space-y-6 pb-16">
+                    
+                    <!-- DVR Storage Usage Card -->
+                    <div id="dvr-storage-bar-container" class="bg-gray-800 p-4 sm:p-5 rounded-xl shadow-lg border border-gray-700/60">
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2 text-sm">
+                            <div class="flex items-center gap-2">
+                                <span class="font-bold text-white">DVR Storage</span>
+                                <span id="dvr-storage-percent-badge" class="text-xs bg-gray-700 text-gray-300 px-2 py-0.5 rounded font-mono">Loading...</span>
+                            </div>
+                            <span id="dvr-storage-text" class="text-xs text-gray-400">Loading...</span>
                         </div>
-                        <div class="w-full bg-gray-700 rounded-full h-2.5">
-                            <div id="dvr-storage-bar" class="bg-blue-600 h-2.5 rounded-full" style="width: 0%"></div>
+                        <div class="w-full bg-gray-700 rounded-full h-2.5 overflow-hidden">
+                            <div id="dvr-storage-bar" class="bg-blue-600 h-2.5 rounded-full transition-all" style="width: 0%"></div>
                         </div>
                     </div>
 
-                    <!-- MODIFIED: Wrapped manual recording in a div -->
-                    <div id="manual-recording-section" class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
-                        <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Manual Recording
-                        </h2>
-                        <form id="manual-recording-form" class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-                            <div class="md:col-span-2">
-                                <label class="block text-sm font-medium text-gray-400 mb-1">Channel</label>
-                                <div class="flex items-center gap-3">
-                                    <button type="button" id="manual-rec-channel-select-btn"
-                                        class="flex-shrink-0 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-md transition-colors">Select
-                                        Channel</button>
-                                    <span id="manual-rec-selected-channel-name" class="text-gray-300 truncate">No
-                                        channel selected</span>
+                    <!-- Live Capture Hero Banner Container (Dynamically populated with active recording cards) -->
+                    <div id="dvr-live-hero-banner" class="hidden space-y-3"></div>
+
+                    <!-- Main Unified DVR Card -->
+                    <div class="bg-gray-800 rounded-xl shadow-lg border border-gray-700/60 overflow-hidden">
+                        
+                        <!-- Tab & Action Header Bar (Styled matching VOD filter bar) -->
+                        <div class="px-6 py-4 border-b border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gray-800/90">
+                            <!-- Left: Tab Buttons -->
+                            <div class="flex items-center gap-2">
+                                <button id="dvr-tab-btn-recordings" class="tab-button active text-sm font-medium py-1.5 px-3.5 rounded-md transition-colors shadow">
+                                    Recordings <span id="dvr-recordings-count" class="ml-1 px-1.5 py-0.2 bg-blue-700 rounded-full text-xs font-mono">0</span>
+                                </button>
+                                <button id="dvr-tab-btn-scheduled" class="tab-button text-sm font-medium py-1.5 px-3.5 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">
+                                    Scheduled <span id="dvr-scheduled-count" class="ml-1 px-1.5 py-0.2 bg-gray-700 rounded-full text-xs font-mono">0</span>
+                                </button>
+                                <button id="dvr-tab-btn-history" class="tab-button text-sm font-medium py-1.5 px-3.5 text-gray-300 hover:bg-gray-700 rounded-md transition-colors">
+                                    History & Logs
+                                </button>
+                            </div>
+
+                            <!-- Right: Search, View Mode Toggle, and Manual Timer Button -->
+                            <div class="flex items-center gap-2.5 flex-wrap sm:flex-nowrap justify-end">
+                                <!-- Realtime Search -->
+                                <div class="relative">
+                                    <input type="search" id="dvr-search-input" placeholder="Search recordings..." class="bg-gray-700 border border-gray-600 rounded-md px-3 py-1.5 pl-8 text-xs text-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 w-40 sm:w-52">
+                                    <svg class="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-2.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
                                 </div>
-                                <input type="hidden" id="manual-rec-channel-id" required>
-                                <input type="hidden" id="manual-rec-channel-name">
+
+                                <!-- View Mode Switcher (Table vs Cards) -->
+                                <div id="dvr-view-switcher" class="flex items-center bg-gray-700 rounded-md p-0.5 border border-gray-600">
+                                    <button id="dvr-view-table-btn" title="Table View" class="px-2 py-1 rounded text-xs font-medium bg-blue-600 text-white flex items-center gap-1">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                                        Table
+                                    </button>
+                                    <button id="dvr-view-cards-btn" title="Cards View" class="px-2 py-1 rounded text-xs font-medium text-gray-300 hover:text-white flex items-center gap-1">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                                        Cards
+                                    </button>
+                                </div>
+
+                                <!-- Manual Timer Toggle Button -->
+                                <button id="dvr-toggle-manual-btn" class="bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold py-1.5 px-3 rounded-md flex items-center gap-1.5 border border-gray-600 transition-colors">
+                                    <span data-icon="add"></span>
+                                    Manual Timer
+                                </button>
                             </div>
-                            <div>
-                                <label for="manual-rec-start" class="block text-sm font-medium text-gray-400 mb-1">Start
-                                    Time</label>
-                                <input type="datetime-local" id="manual-rec-start"
-                                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
-                                    required>
+                        </div>
+
+                        <!-- Collapsible Manual Recording Drawer -->
+                        <div id="manual-recording-section" class="hidden bg-gray-900/70 p-4 sm:p-5 border-b border-gray-700 transition-all">
+                            <div class="flex justify-between items-center mb-3">
+                                <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                                    <span>⏱️</span> Schedule Manual Timer Recording
+                                </h3>
+                                <button type="button" id="close-manual-rec-btn" class="text-gray-400 hover:text-white text-xs font-medium">✕ Close</button>
                             </div>
-                            <div>
-                                <label for="manual-rec-end" class="block text-sm font-medium text-gray-400 mb-1">End
-                                    Time</label>
-                                <input type="datetime-local" id="manual-rec-end"
-                                    class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"
-                                    required>
+                            <form id="manual-recording-form" class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                                <div class="md:col-span-2">
+                                    <label class="block text-xs font-medium text-gray-400 mb-1">Channel</label>
+                                    <div class="flex items-center gap-3">
+                                        <button type="button" id="manual-rec-channel-select-btn"
+                                            class="flex-shrink-0 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold py-2 px-3 rounded-md transition-colors border border-gray-600">Select Channel</button>
+                                        <span id="manual-rec-selected-channel-name" class="text-xs text-gray-300 truncate">No channel selected</span>
+                                    </div>
+                                    <input type="hidden" id="manual-rec-channel-id" required>
+                                    <input type="hidden" id="manual-rec-channel-name">
+                                </div>
+                                <div>
+                                    <label for="manual-rec-start" class="block text-xs font-medium text-gray-400 mb-1">Start Time</label>
+                                    <input type="datetime-local" id="manual-rec-start"
+                                        class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-1.5 text-xs text-white focus:ring-blue-500 focus:border-blue-500"
+                                        required>
+                                </div>
+                                <div>
+                                    <label for="manual-rec-end" class="block text-xs font-medium text-gray-400 mb-1">End Time</label>
+                                    <input type="datetime-local" id="manual-rec-end"
+                                        class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-1.5 text-xs text-white focus:ring-blue-500 focus:border-blue-500"
+                                        required>
+                                </div>
+                                <div class="md:col-start-4 flex justify-end gap-2">
+                                    <button type="submit"
+                                        class="w-full bg-green-600 hover:bg-green-700 text-white text-xs font-bold py-2 px-4 rounded-md transition-colors shadow">Schedule Recording</button>
+                                </div>
+                            </form>
+                        </div>
+
+                        <!-- TAB 1: COMPLETED RECORDINGS -->
+                        <div id="dvr-recordings-content" class="pb-6">
+                            <div class="flex justify-between items-center px-6 py-3.5 border-b border-gray-700/60 bg-gray-800/50">
+                                <span class="text-xs text-gray-400">Manage and play your captured recordings</span>
+                                <button id="clear-completed-dvr-btn"
+                                    class="hidden bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-bold py-1 px-3 rounded-md transition-colors">Clear All</button>
                             </div>
-                            <button type="submit"
-                                class="w-full md:col-start-4 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md transition-colors">Schedule</button>
-                        </form>
+
+                            <div id="no-dvr-recordings-message" class="hidden text-center text-gray-400 py-16 px-6">
+                                <p class="text-sm font-medium">No recordings found.</p>
+                            </div>
+
+                            <!-- Table View -->
+                            <div id="dvr-recordings-table-container" class="overflow-x-auto px-4 sm:px-6 pt-3">
+                                <table class="min-w-full dvr-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Program Title</th>
+                                            <th>Channel</th>
+                                            <th class="user-col hidden">User</th>
+                                            <th>Recorded On</th>
+                                            <th>Duration</th>
+                                            <th>File Size</th>
+                                            <th class="text-right">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="dvr-recordings-tbody"></tbody>
+                                </table>
+                            </div>
+
+                            <!-- Cards View -->
+                            <div id="dvr-recordings-cards-container" class="hidden p-4 sm:p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                            </div>
+                        </div>
+
+                        <!-- TAB 2: SCHEDULED RECORDINGS (Upcoming Broadcasts) -->
+                        <div id="dvr-scheduled-content" class="hidden pb-6">
+                            <div class="flex justify-between items-center px-6 py-3.5 border-b border-gray-700/60 bg-gray-800/50">
+                                <span class="text-xs text-gray-400">Upcoming capture timers scheduled from the TV Guide or Manual Timer</span>
+                                <button id="clear-scheduled-dvr-btn"
+                                    class="hidden bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-bold py-1 px-3 rounded-md transition-colors">Clear All</button>
+                            </div>
+
+                            <div id="no-dvr-jobs-message" class="hidden text-center text-gray-400 py-16 px-6">
+                                <p class="text-sm font-medium">No upcoming recordings scheduled. Find a program in the TV Guide to record it.</p>
+                            </div>
+
+                            <div id="dvr-jobs-table-container" class="overflow-x-auto px-4 sm:px-6 pt-3">
+                                <table class="min-w-full dvr-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Program Title</th>
+                                            <th>Channel</th>
+                                            <th class="user-col hidden">User</th>
+                                            <th>Start Time</th>
+                                            <th>End Time</th>
+                                            <th>Status</th>
+                                            <th>Conflict</th>
+                                            <th class="text-right">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="dvr-jobs-tbody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- TAB 3: HISTORY & LOGS -->
+                        <div id="dvr-history-content" class="hidden pb-6">
+                            <div class="flex justify-between items-center px-6 py-3.5 border-b border-gray-700/60 bg-gray-800/50">
+                                <span class="text-xs text-gray-400">Log of past completed, stopped, or cancelled recording runs</span>
+                                <button id="clear-history-dvr-btn"
+                                    class="hidden bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-bold py-1 px-3 rounded-md transition-colors">Clear History</button>
+                            </div>
+
+                            <div id="no-dvr-history-message" class="hidden text-center text-gray-400 py-16 px-6">
+                                <p class="text-sm font-medium">No recording history found.</p>
+                            </div>
+
+                            <div id="dvr-history-table-container" class="overflow-x-auto px-4 sm:px-6 pt-3">
+                                <table class="min-w-full dvr-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Program Title</th>
+                                            <th>Channel</th>
+                                            <th class="user-col hidden">User</th>
+                                            <th>Start Time</th>
+                                            <th>End Time</th>
+                                            <th>Status</th>
+                                            <th class="text-right">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="dvr-history-tbody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
                     </div>
 
-                    <!-- MODIFIED: Wrapped scheduled recordings in a div -->
-                    <div id="scheduled-recordings-section" class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
-                        <div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2">
-                            <h2 class="text-xl font-bold text-white">Scheduled Recordings</h2>
-                            <button id="clear-scheduled-dvr-btn"
-                                class="hidden bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-1 px-3 rounded-md">Clear
-                                All</button>
-                        </div>
-                        <div id="no-dvr-jobs-message" class="hidden text-center text-gray-500 p-4">
-                            <p class="mt-1 text-sm">No upcoming recordings scheduled. Find a program in the TV Guide to
-                                record it.</p>
-                        </div>
-                        <div id="dvr-jobs-table-container" class="overflow-x-auto">
-                            <table class="min-w-full dvr-table">
-                                <thead>
-                                    <tr>
-                                        <th>Program Title</th>
-                                        <th>Channel</th>
-                                        <!-- MODIFIED: Added user column -->
-                                        <th class="user-col hidden">User</th>
-                                        <th>Start Time</th>
-                                        <th>End Time</th>
-                                        <th>Status</th>
-                                        <th>Conflict</th>
-                                        <th class="text-right">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="dvr-jobs-tbody"></tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
-                        <div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2">
-                            <h2 class="text-xl font-bold text-white">Completed Recordings</h2>
-                            <button id="clear-completed-dvr-btn"
-                                class="hidden bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-1 px-3 rounded-md">Clear
-                                All</button>
-                        </div>
-                        <div id="no-dvr-recordings-message" class="hidden text-center text-gray-500 p-4">
-                            <p class="mt-1 text-sm">No recordings have been completed yet.</p>
-                        </div>
-                        <div id="dvr-recordings-table-container" class="overflow-x-auto">
-                            <table class="min-w-full dvr-table">
-                                <thead>
-                                    <tr>
-                                        <th>Program Title</th>
-                                        <th>Channel</th>
-                                        <!-- MODIFIED: Added user column, visible to admins -->
-                                        <th class="user-col hidden">User</th>
-                                        <th>Recorded On</th>
-                                        <th>Duration</th>
-                                        <th>File Size</th>
-                                        <th class="text-right">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="dvr-recordings-tbody"></tbody>
-                            </table>
-                        </div>
-                    </div>
                 </div>
             </div>
 
@@ -2071,6 +2333,18 @@
                                 </select>
                             </div>
                         </div>
+
+                        <!-- Client Debug Telemetry Toggle -->
+                        <div class="mt-6 pt-6 border-t border-gray-700/80 flex items-center justify-between gap-4">
+                            <div>
+                                <label for="client-telemetry-toggle" class="block text-sm font-medium text-white cursor-pointer">Client Debug Telemetry</label>
+                                <p class="text-xs text-gray-400 mt-0.5">Stream client-side player lifecycle events, mobile touch diagnostics, and caller stack traces to the server log for troubleshooting.</p>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
+                                <input type="checkbox" id="client-telemetry-toggle" class="sr-only peer">
+                                <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                            </label>
+                        </div>
                     </div>
 
                     <div class="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-lg">
@@ -2311,47 +2585,142 @@
 
     <!-- Modals -->
     <div id="video-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-        <div id="video-modal-container" class="bg-gray-900 rounded-lg shadow-xl max-h-[90vh] flex flex-col"
-            style="width: 896px; height: 504px;">
-            <div class="flex justify-between items-center p-3 border-b border-gray-700 flex-shrink-0">
-                <h3 id="video-title" class="text-lg font-semibold text-white truncate"></h3>
-                <div class="flex items-center gap-2">
-                    <!-- NEW: Stream Info Toggle Button -->
-                    <button id="stream-info-toggle-btn"
-                        class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700"
-                        title="Toggle Stream Info">
-                        <span data-icon="info"></span>
-                    </button>
-                    <!-- NEW: Aspect Ratio Lock Toggle -->
-                    <button id="aspect-ratio-lock-btn"
-                        class="text-blue-500 hover:text-white p-2 rounded-md hover:bg-gray-700"
-                        title="Toggle Aspect Ratio Lock">
-                        <span data-icon="lock"></span>
-                    </button>
+        <div id="video-modal-container" class="bg-gray-900 rounded-lg shadow-xl max-h-[90vh] flex flex-col w-full md:w-[896px] md:h-[504px]">
+            <div id="video-modal-header" class="relative flex justify-between items-center p-2 sm:p-3 border-b border-gray-700 flex-shrink-0 gap-2 rounded-t-lg">
+                <h3 id="video-title" class="text-xs sm:text-base md:text-lg font-semibold text-white truncate min-w-0 flex-1"></h3>
+                <div class="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+                    <!-- 1. Refresh Stream -->
                     <button id="refresh-stream-btn"
-                        class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700" title="Refresh Stream">
+                        class="text-gray-400 hover:text-white p-1.5 sm:p-2 rounded-md hover:bg-gray-700 flex-shrink-0 transition-colors"
+                        title="Refresh Stream">
                         <span data-icon="refresh"></span>
                     </button>
-                    <button id="cast-btn" class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700"
-                        title="Cast to device">
-                        <span data-icon="cast"></span>
-                    </button>
-                    <button id="pip-btn" class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700"
+                    <!-- 2. Picture-in-Picture -->
+                    <button id="pip-btn"
+                        class="text-gray-400 hover:text-white p-1.5 sm:p-2 rounded-md hover:bg-gray-700 flex-shrink-0 transition-colors"
                         title="Picture-in-Picture">
                         <span data-icon="pip"></span>
                     </button>
-                    <button id="audio-track-btn"
-                        class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700 hidden"
-                        title="Audio Tracks">
-                        <span data-icon="audio"></span>
+                    <!-- 3. Container Fullscreen Button -->
+                    <button id="player-fullscreen-btn"
+                        class="text-gray-400 hover:text-white p-1.5 sm:p-2 rounded-md hover:bg-gray-700 flex-shrink-0 transition-colors"
+                        title="Toggle Fullscreen">
+                        <span data-icon="fullscreen"></span>
                     </button>
-                    <button id="subtitle-track-btn"
-                        class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700 hidden"
-                        title="Subtitles">
-                        <span data-icon="subtitles"></span>
-                    </button>
+
+                    <!-- 4. More Options Dropdown Trigger -->
+                    <div class="relative flex-shrink-0">
+                        <button id="player-more-options-btn"
+                            class="text-gray-400 hover:text-white p-1.5 sm:p-2 rounded-md hover:bg-gray-700 flex-shrink-0 transition-colors"
+                            title="More Options">
+                            <span data-icon="more"></span>
+                        </button>
+
+                        <!-- Dropdown Menu -->
+                        <div id="player-more-options-menu"
+                            class="hidden absolute right-0 top-full mt-2 w-72 sm:w-80 max-w-[calc(100vw-32px)] max-h-[min(380px,80vh)] overflow-y-auto custom-scrollbar bg-gray-900/95 backdrop-blur-xl border border-gray-700/80 rounded-xl shadow-2xl p-1.5 z-50 transition-all duration-150 flex flex-col gap-0.5">
+
+                            <!-- Audio-Only Toggle -->
+                            <button id="audio-only-btn"
+                                class="w-full flex items-center gap-3 px-3 py-2.5 text-left text-gray-300 hover:text-white hover:bg-gray-800/80 transition-colors rounded-lg group cursor-pointer"
+                                title="Toggle Audio Only Mode">
+                                <span class="p-1.5 rounded-md bg-gray-800/80 group-hover:bg-blue-600/30 text-gray-400 group-hover:text-blue-400 transition-colors flex-shrink-0">
+                                    <span data-icon="headphones"></span>
+                                </span>
+                                <div class="flex flex-col flex-1 min-w-0">
+                                    <span class="text-sm font-medium leading-snug">Audio-Only Mode</span>
+                                    <span class="text-xs text-gray-400 leading-tight">Background & lock screen playback</span>
+                                </div>
+                                <span id="audio-only-badge" class="hidden text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30">Active</span>
+                            </button>
+
+                            <!-- Player Touch Lock -->
+                            <button id="player-lock-btn"
+                                class="w-full flex items-center gap-3 px-3 py-2.5 text-left text-gray-300 hover:text-white hover:bg-gray-800/80 transition-colors rounded-lg group cursor-pointer"
+                                title="Lock Player Controls">
+                                <span class="p-1.5 rounded-md bg-gray-800/80 group-hover:bg-yellow-600/30 text-gray-400 group-hover:text-yellow-400 transition-colors flex-shrink-0">
+                                    <span data-icon="lock"></span>
+                                </span>
+                                <div class="flex flex-col flex-1 min-w-0">
+                                    <span class="text-sm font-medium leading-snug">Lock Screen Controls</span>
+                                    <span class="text-xs text-gray-400 leading-tight">Prevent accidental taps</span>
+                                </div>
+                            </button>
+
+                            <!-- Aspect Ratio Lock -->
+                            <button id="aspect-ratio-lock-btn"
+                                class="w-full flex items-center gap-3 px-3 py-2.5 text-left text-gray-300 hover:text-white hover:bg-gray-800/80 transition-colors rounded-lg group cursor-pointer"
+                                title="Toggle Aspect Ratio Lock">
+                                <span class="p-1.5 rounded-md bg-gray-800/80 group-hover:bg-blue-600/30 text-blue-400 transition-colors flex-shrink-0 aspect-ratio-icon-container">
+                                    <span data-icon="aspectRatio"></span>
+                                </span>
+                                <div class="flex flex-col flex-1 min-w-0">
+                                    <span class="text-sm font-medium leading-snug">Aspect Ratio</span>
+                                    <span class="text-xs text-gray-400 leading-tight">Maintain 16:9 when resizing</span>
+                                </div>
+                                <span id="aspect-ratio-status" class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30">16:9 Locked</span>
+                            </button>
+
+                            <div class="my-1 border-t border-gray-800/80"></div>
+
+                            <!-- Cast to device -->
+                            <button id="cast-btn"
+                                class="w-full flex items-center gap-3 px-3 py-2.5 text-left text-gray-300 hover:text-white hover:bg-gray-800/80 transition-colors rounded-lg group cursor-pointer"
+                                title="Cast to device">
+                                <span class="p-1.5 rounded-md bg-gray-800/80 group-hover:bg-gray-700 text-gray-400 group-hover:text-white transition-colors flex-shrink-0">
+                                    <span data-icon="cast"></span>
+                                </span>
+                                <div class="flex flex-col flex-1 min-w-0">
+                                    <span class="text-sm font-medium leading-snug">Cast to Device</span>
+                                    <span class="text-xs text-gray-400 leading-tight">Chromecast or smart display</span>
+                                </div>
+                            </button>
+
+                            <!-- Stream Diagnostics -->
+                            <button id="stream-info-toggle-btn"
+                                class="w-full flex items-center gap-3 px-3 py-2.5 text-left text-gray-300 hover:text-white hover:bg-gray-800/80 transition-colors rounded-lg group cursor-pointer"
+                                title="Toggle Stream Info">
+                                <span class="p-1.5 rounded-md bg-gray-800/80 group-hover:bg-gray-700 text-gray-400 group-hover:text-white transition-colors flex-shrink-0">
+                                    <span data-icon="info"></span>
+                                </span>
+                                <div class="flex flex-col flex-1 min-w-0">
+                                    <span class="text-sm font-medium leading-snug">Stream Diagnostics</span>
+                                    <span class="text-xs text-gray-400 leading-tight">Bitrate, resolution, dropped frames</span>
+                                </div>
+                            </button>
+
+                            <!-- Dynamic Audio Tracks -->
+                            <button id="audio-track-btn"
+                                class="hidden w-full flex items-center gap-3 px-3 py-2.5 text-left text-gray-300 hover:text-white hover:bg-gray-800/80 transition-colors rounded-lg group cursor-pointer"
+                                title="Audio Tracks">
+                                <span class="p-1.5 rounded-md bg-gray-800/80 group-hover:bg-gray-700 text-gray-400 group-hover:text-white transition-colors flex-shrink-0">
+                                    <span data-icon="audioTrack"></span>
+                                </span>
+                                <div class="flex flex-col flex-1 min-w-0">
+                                    <span class="text-sm font-medium leading-snug">Audio Tracks</span>
+                                    <span class="text-xs text-gray-400 leading-tight">Choose stream audio language</span>
+                                </div>
+                            </button>
+
+                            <!-- Dynamic Subtitles -->
+                            <button id="subtitle-track-btn"
+                                class="hidden w-full flex items-center gap-3 px-3 py-2.5 text-left text-gray-300 hover:text-white hover:bg-gray-800/80 transition-colors rounded-lg group cursor-pointer"
+                                title="Subtitles">
+                                <span class="p-1.5 rounded-md bg-gray-800/80 group-hover:bg-gray-700 text-gray-400 group-hover:text-white transition-colors flex-shrink-0">
+                                    <span data-icon="subtitles"></span>
+                                </span>
+                                <div class="flex flex-col flex-1 min-w-0">
+                                    <span class="text-sm font-medium leading-snug">Subtitles</span>
+                                    <span class="text-xs text-gray-400 leading-tight">Toggle closed captions</span>
+                                </div>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 5. Close Modal -->
                     <button id="close-modal"
-                        class="text-gray-400 hover:text-white text-2xl leading-none font-bold">&times;</button>
+                        class="text-gray-400 hover:text-white text-xl sm:text-2xl leading-none font-bold p-1 sm:p-1.5 rounded-md hover:bg-gray-700 flex-shrink-0 transition-colors ml-1 cursor-pointer"
+                        title="Close">&times;</button>
                 </div>
             </div>
 
@@ -2368,8 +2737,47 @@
                 <div class="px-4 py-3 border-b border-gray-700 font-semibold text-white">Subtitles</div>
                 <div id="subtitle-track-list" class="py-2"></div>
             </div>
-            <div id="video-content" class="flex-grow p-1 bg-black relative">
-                <video id="videoElement" controls autoplay class="w-full h-full"></video>
+            <div id="video-content" class="flex-grow p-1 bg-black relative overflow-hidden rounded-b-lg">
+                <video id="videoElement" controls autoplay playsinline webkit-playsinline class="w-full h-full"></video>
+                <!-- Dedicated Audio Element for uninterrupted mobile lock-screen playback -->
+                <audio id="audioElement" playsinline class="hidden"></audio>
+
+                <!-- NEW: Audio-Only Overlay -->
+                <div id="audio-only-overlay"
+                    class="hidden absolute inset-0 flex flex-col items-center justify-center bg-gray-950/95 backdrop-blur-md text-white p-6 z-30 select-none">
+                    <div class="relative mb-6">
+                        <img id="audio-only-logo" src="" alt="Channel Logo"
+                            class="w-24 h-24 sm:w-32 sm:h-32 object-contain rounded-2xl bg-gray-800/80 p-3 shadow-2xl border border-gray-700">
+                        <div class="absolute -bottom-2 -right-2 bg-blue-600 rounded-full p-2 shadow-lg animate-pulse">
+                            <span data-icon="headphones" class="w-5 h-5 text-white"></span>
+                        </div>
+                    </div>
+                    <h3 id="audio-only-title" class="text-xl sm:text-2xl font-bold text-center mb-3 text-white max-w-md truncate px-2"></h3>
+                    <div class="flex items-center gap-1.5 mb-6 text-blue-400 text-xs sm:text-sm font-medium tracking-wide">
+                        <span class="audio-wave-bar w-1 bg-blue-500 rounded-full inline-block"></span>
+                        <span class="audio-wave-bar w-1 bg-blue-400 rounded-full inline-block" style="animation-delay: 0.15s;"></span>
+                        <span class="audio-wave-bar w-1 bg-blue-500 rounded-full inline-block" style="animation-delay: 0.3s;"></span>
+                        <span class="audio-wave-bar w-1 bg-blue-300 rounded-full inline-block" style="animation-delay: 0.45s;"></span>
+                        <span class="audio-wave-bar w-1 bg-blue-500 rounded-full inline-block" style="animation-delay: 0.2s;"></span>
+                        <span class="ml-2 uppercase text-xs tracking-wider text-gray-400 font-semibold">Audio Only Mode</span>
+                    </div>
+                    <button id="resume-video-btn"
+                        class="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-5 py-2.5 rounded-xl font-medium shadow-lg hover:shadow-blue-500/30 transition-all active:scale-95 text-sm sm:text-base cursor-pointer">
+                        <span data-icon="play" class="w-5 h-5"></span>
+                        <span>Resume Video</span>
+                    </button>
+                </div>
+
+                <!-- NEW: Player Touch-Lock Overlay -->
+                <div id="player-lock-overlay"
+                    class="hidden absolute inset-0 z-40 flex items-start justify-end p-4 pointer-events-auto bg-black/10">
+                    <button id="player-unlock-btn"
+                        class="flex items-center gap-2 bg-gray-900/90 hover:bg-gray-800 text-white border border-gray-600/80 px-4 py-2.5 rounded-full shadow-2xl backdrop-blur-md text-sm font-medium transition-transform active:scale-95 cursor-pointer">
+                        <span data-icon="unlock" class="w-5 h-5 text-yellow-400"></span>
+                        <span>Tap to Unlock</span>
+                    </button>
+                </div>
+
                 <!-- NEW: Stream Info Overlay -->
                 <div id="stream-info-overlay" class="hidden">
                     <p id="stream-info-resolution"></p>
@@ -2380,6 +2788,120 @@
                     <p id="stream-info-video"></p>
                     <p id="stream-info-audio"></p>
                 </div>
+
+                <!-- NEW: Live DVR Timeshift Controls Overlay with Scrubber & Quick Seek -->
+                <div id="timeshift-controls-overlay"
+                    class="hidden absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/95 via-black/80 to-transparent px-4 py-3 z-30 transition-opacity duration-300 pointer-events-auto select-none">
+                    <div class="flex flex-col gap-1.5 w-full">
+                        <!-- Scrubber / Timeline Bar -->
+                        <div class="flex items-center gap-3 w-full">
+                            <span id="timeshift-current-time" class="text-xs font-mono font-medium text-white min-w-[48px]">00:00</span>
+                            <div class="relative flex-grow flex items-center py-1 group">
+                                <input type="range" id="timeshift-progress-bar" min="0" max="100" value="0" step="0.1"
+                                    class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-400 transition-all">
+                            </div>
+                            <span id="timeshift-total-time" class="text-xs font-mono font-medium text-gray-400 min-w-[48px] text-right">00:00</span>
+                            <button id="timeshift-live-edge-btn" type="button"
+                                class="ml-1 px-2.5 py-1 text-xs font-bold rounded-md bg-gray-700 text-gray-300 hover:bg-red-600 hover:text-white transition-colors flex items-center gap-1.5 flex-shrink-0 cursor-pointer"
+                                title="Jump to live edge">
+                                <span id="timeshift-live-dot" class="w-2 h-2 rounded-full bg-gray-400 inline-block"></span>
+                                <span>LIVE</span>
+                            </button>
+                        </div>
+                        <!-- Quick Seek & Play Controls -->
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <button id="timeshift-play-pause-btn" type="button"
+                                    class="text-white hover:text-blue-400 p-1.5 rounded-md hover:bg-white/10 transition-colors cursor-pointer"
+                                    title="Play / Pause">
+                                    <span data-icon="play" class="w-5 h-5"></span>
+                                </button>
+                                <button id="timeshift-rewind-15-btn" type="button"
+                                    class="text-gray-300 hover:text-white px-2.5 py-1 text-xs font-medium rounded-md hover:bg-white/10 border border-gray-600 transition-colors flex items-center gap-1 cursor-pointer"
+                                    title="Rewind 15 seconds">
+                                    -15s
+                                </button>
+                                <button id="timeshift-forward-15-btn" type="button"
+                                    class="text-gray-300 hover:text-white px-2.5 py-1 text-xs font-medium rounded-md hover:bg-white/10 border border-gray-600 transition-colors flex items-center gap-1 cursor-pointer"
+                                    title="Forward 15 seconds">
+                                    +15s
+                                </button>
+                                <span id="timeshift-status-text" class="text-xs text-blue-400 font-medium ml-2">Timeshift Playing</span>
+                            </div>
+                            <div class="text-xs text-gray-400 flex items-center gap-1.5">
+                                <span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                                <span>Live DVR Chase Play</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- NEW: Transcoded VOD Controls Overlay with Scrubber & Quick Seek -->
+                <div id="vod-controls-overlay"
+                    class="hidden absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/95 via-black/80 to-transparent px-4 py-3 z-30 transition-opacity duration-300 pointer-events-auto select-none">
+                    <div class="flex flex-col gap-1.5 w-full">
+                        <!-- Scrubber / Timeline Bar -->
+                        <div class="flex items-center gap-3 w-full">
+                            <span id="vod-current-time" class="text-xs font-mono font-medium text-white min-w-[52px]">00:00</span>
+                            <div class="relative flex-grow flex items-center py-1 group">
+                                <input type="range" id="vod-progress-bar" min="0" max="100" value="0" step="1"
+                                    class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-400 transition-all">
+                            </div>
+                            <span id="vod-total-time" class="text-xs font-mono font-medium text-gray-400 min-w-[52px] text-right">--:--</span>
+                        </div>
+                        <!-- Quick Seek & Play Controls -->
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-1.5 sm:gap-2">
+                                <button id="vod-play-pause-btn" type="button"
+                                    class="text-white hover:text-blue-400 p-1.5 rounded-md hover:bg-white/10 transition-colors cursor-pointer"
+                                    title="Play / Pause">
+                                    <span data-icon="play" class="w-5 h-5"></span>
+                                </button>
+                                <button id="vod-rewind-60-btn" type="button"
+                                    class="hidden sm:flex text-gray-300 hover:text-white px-2 py-1 text-xs font-medium rounded-md hover:bg-white/10 border border-gray-600 transition-colors items-center gap-1 cursor-pointer"
+                                    title="Rewind 60 seconds">
+                                    -60s
+                                </button>
+                                <button id="vod-rewind-15-btn" type="button"
+                                    class="text-gray-300 hover:text-white px-2 py-1 text-xs font-medium rounded-md hover:bg-white/10 border border-gray-600 transition-colors flex items-center gap-1 cursor-pointer"
+                                    title="Rewind 15 seconds">
+                                    -15s
+                                </button>
+                                <button id="vod-forward-15-btn" type="button"
+                                    class="text-gray-300 hover:text-white px-2 py-1 text-xs font-medium rounded-md hover:bg-white/10 border border-gray-600 transition-colors flex items-center gap-1 cursor-pointer"
+                                    title="Forward 15 seconds">
+                                    +15s
+                                </button>
+                                <button id="vod-forward-60-btn" type="button"
+                                    class="hidden sm:flex text-gray-300 hover:text-white px-2 py-1 text-xs font-medium rounded-md hover:bg-white/10 border border-gray-600 transition-colors items-center gap-1 cursor-pointer"
+                                    title="Forward 60 seconds">
+                                    +60s
+                                </button>
+                                <!-- Volume Control -->
+                                <div class="hidden sm:flex items-center gap-1 ml-1 text-gray-300 hover:text-white">
+                                    <button id="vod-volume-btn" type="button" class="p-1 rounded hover:bg-white/10 transition-colors cursor-pointer" title="Mute / Unmute">
+                                        <span data-icon="audio" class="w-4 h-4"></span>
+                                    </button>
+                                    <input type="range" id="vod-volume-bar" min="0" max="1" step="0.05" value="1"
+                                        class="w-14 sm:w-16 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-400 transition-all">
+                                </div>
+                                <span id="vod-status-text" class="text-xs text-blue-400 font-medium ml-2 hidden md:inline">Transcoded VOD</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <div class="text-xs text-gray-400 flex items-center gap-1.5">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                                    <span id="vod-profile-badge" class="truncate max-w-[120px] sm:max-w-[200px]">Transcoding</span>
+                                </div>
+                                <button id="vod-fullscreen-btn" type="button"
+                                    class="text-gray-300 hover:text-white p-1 rounded hover:bg-white/10 transition-colors cursor-pointer"
+                                    title="Fullscreen">
+                                    <span data-icon="fullscreen" class="w-4 h-4"></span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <div id="cast-status"
                     class="hidden absolute inset-0 flex-col items-center justify-center bg-black text-white p-4">
                     <span data-icon="cast" class="w-16 h-16 mb-4"></span>
@@ -2443,6 +2965,45 @@
                     class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
                 <button id="confirm-ok-btn"
                     class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Resume Playback Prompt Modal -->
+    <div id="resume-playback-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[70] p-4 backdrop-blur-sm">
+        <div class="bg-gray-800/95 border border-gray-700/80 rounded-2xl shadow-2xl w-full max-w-md p-6 text-white animate-fade-in relative">
+            <button id="resume-playback-close-btn" class="absolute top-4 right-4 text-gray-400 hover:text-white transition-colors p-1 rounded-lg cursor-pointer" title="Cancel">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                </svg>
+            </button>
+            <div class="flex items-center gap-3.5 mb-4">
+                <div class="w-11 h-11 rounded-xl bg-blue-500/20 border border-blue-500/30 text-blue-400 flex items-center justify-center flex-shrink-0">
+                    <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/>
+                    </svg>
+                </div>
+                <div class="overflow-hidden pr-6">
+                    <h3 class="text-lg font-bold text-white leading-tight">Resume Playback</h3>
+                    <p id="resume-playback-title" class="text-xs text-gray-400 truncate mt-0.5 font-medium"></p>
+                </div>
+            </div>
+            <p id="resume-playback-message" class="text-sm text-gray-300 mb-6 leading-relaxed"></p>
+            <div class="flex flex-col sm:flex-row gap-3">
+                <button id="resume-playback-confirm-btn"
+                    class="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2.5 px-4 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer">
+                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"/>
+                    </svg>
+                    <span id="resume-playback-confirm-label">Resume</span>
+                </button>
+                <button id="resume-playback-restart-btn"
+                    class="flex-1 bg-gray-700/80 hover:bg-gray-600 text-gray-200 hover:text-white font-semibold py-2.5 px-4 rounded-xl border border-gray-600/50 transition-all flex items-center justify-center gap-2 cursor-pointer">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                    <span>Start Over</span>
+                </button>
             </div>
         </div>
     </div>
@@ -2724,18 +3285,7 @@
         </div>
     </div>
 
-    <div id="recording-player-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-        <div class="bg-gray-900 rounded-lg shadow-xl max-h-[90vh] flex flex-col" style="width: 896px;">
-            <div class="flex justify-between items-center p-3 border-b border-gray-700 flex-shrink-0">
-                <h3 id="recording-title" class="text-lg font-semibold text-white truncate"></h3>
-                <button id="close-recording-player-btn"
-                    class="text-gray-400 hover:text-white text-2xl leading-none font-bold">&times;</button>
-            </div>
-            <div class="flex-grow p-1 bg-black relative">
-                <video id="recording-video-element" controls autoplay class="w-full h-full"></video>
-            </div>
-        </div>
-    </div>
+    <!-- Unified Video Modal handles live streams, timeshift, VOD, and completed recordings -->
 
     <div id="dvr-error-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[60] p-4">
         <div class="bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl flex flex-col" style="max-height: 80vh;">
@@ -2889,26 +3439,26 @@
         </div>
     </div>
 
-    <div id="vod-details-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[60] p-4">
-        <div id="vod-details-container" class="bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl flex flex-col relative"
+    <div id="vod-details-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[60] p-3 sm:p-4 overflow-y-auto">
+        <div id="vod-details-container" class="bg-gray-800 rounded-2xl shadow-2xl w-full max-w-4xl flex flex-col relative overflow-hidden my-auto"
             style="max-height: 90vh;">
             <button id="vod-details-close-btn"
-                class="absolute top-3 right-3 p-2 text-gray-400 hover:text-white rounded-full hover:bg-gray-700 transition-colors z-20">
+                class="absolute top-3 right-3 p-2 text-gray-400 hover:text-white rounded-full hover:bg-gray-700/80 transition-colors z-20" aria-label="Close modal">
                 <span data-icon="close" class="w-6 h-6"></span>
             </button>
 
-            <div id="vod-details-backdrop" class="absolute inset-0 w-full h-full overflow-hidden rounded-lg">
+            <div id="vod-details-backdrop" class="absolute inset-0 w-full h-full overflow-hidden rounded-2xl">
                 <img id="vod-details-backdrop-img" src="" class="w-full h-full object-cover object-center opacity-20"
                     style="filter: blur(10px);">
                 <div class="absolute inset-0 bg-gradient-to-t from-gray-800 via-gray-800/80 to-transparent"></div>
             </div>
 
             <div id="vod-details-content" class="relative flex-grow flex flex-col overflow-y-auto custom-scrollbar">
-                <div class="p-6 md:p-8 flex flex-col md:flex-row gap-6">
+                <div class="p-5 sm:p-6 md:p-8 flex flex-col md:flex-row gap-6">
                     <img id="vod-details-poster" src=""
-                        class="w-48 h-72 object-cover rounded-md shadow-lg flex-shrink-0 bg-gray-700">
-                    <div class="flex-grow pt-4">
-                        <h2 id="vod-details-title" class="text-3xl font-bold text-white mb-2"></h2>
+                        class="w-36 h-52 sm:w-48 sm:h-72 object-cover rounded-xl shadow-lg flex-shrink-0 bg-gray-700 mx-auto md:mx-0">
+                    <div class="flex-grow pt-2 sm:pt-4 min-w-0">
+                        <h2 id="vod-details-title" class="text-xl sm:text-2xl md:text-3xl font-bold text-white mb-2 pr-10 sm:pr-12 leading-tight break-words"></h2>
                         <div id="vod-details-meta"
                             class="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-gray-400 mb-4">
                             <span id="vod-details-year"></span>
@@ -2933,17 +3483,32 @@
                     </div>
                 </div>
 
-                <div id="vod-details-series-actions" class="hidden px-6 md:px-8 pb-6">
-                    <div class="flex justify-between items-center mb-4">
-                        <h3 class="text-xl font-bold text-white">Episodes</h3>
-                        <div class="flex-shrink-0">
-                            <label for="vod-season-select" class="sr-only">Select Season</label>
-                            <select id="vod-season-select"
-                                class="bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-blue-500 focus:border-blue-500"></select>
+                <div id="vod-details-series-actions" class="hidden px-4 sm:px-6 md:px-8 pb-6">
+                    <div class="flex items-center gap-3 mb-3">
+                        <h3 class="text-lg sm:text-xl font-bold text-white">Episodes</h3>
+                        <span id="vod-episodes-count-badge" class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-900/60 text-blue-300 border border-blue-500/30">0</span>
+                    </div>
+
+                    <!-- Backward compatibility placeholder for cached client scripts -->
+                    <select id="vod-season-select" class="hidden" aria-hidden="true"></select>
+
+                    <!-- Season Tabs (Dispatcharr-style horizontal tabulation) -->
+                    <div class="border-b border-gray-700/80 mb-3">
+                        <div id="vod-season-tabs" class="flex items-center gap-6 overflow-x-auto custom-scrollbar pb-1 -mb-px">
                         </div>
                     </div>
+
+                    <!-- Episode Table Header -->
+                    <div class="flex items-center px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider border-b border-gray-700/60 bg-gray-900/60 rounded-t-lg">
+                        <div class="w-7 text-center flex-shrink-0">#</div>
+                        <div class="flex-1 min-w-0 pl-3">Title</div>
+                        <div class="episode-item-duration pr-2">Duration</div>
+                        <div class="episode-item-date pr-2">Date</div>
+                        <div class="w-8 text-center flex-shrink-0">Action</div>
+                    </div>
+
                     <div id="vod-episode-list"
-                        class="max-h-60 overflow-y-auto custom-scrollbar bg-gray-900/50 rounded-md border border-gray-700">
+                        class="max-h-64 sm:max-h-80 overflow-y-auto custom-scrollbar bg-gray-900/40 rounded-b-lg border border-t-0 border-gray-700/60 divide-y divide-gray-800/60">
                     </div>
                 </div>
             </div>
@@ -2951,7 +3516,7 @@
     </div>
 
 
-    <script type="module" src="/js/main.js?v=2"></script>
+    <script type="module" src="/js/main.js?v=25"></script>
 
     <div id="processing-status-modal"
         class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[70] p-4">

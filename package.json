@@ -1,6 +1,6 @@
 {
   "name": "viniplay",
-  "version": "dev_0.12.0",
+  "version": "dev_0.12.1",
   "description": "A simple IPTV player with server-side storage and user authentication.",
   "main": "server.js",
   "scripts": {
