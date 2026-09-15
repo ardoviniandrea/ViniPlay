@@ -142,6 +142,22 @@ All configuration is done via the web interface in the **Settings** tab.
 -   **Player Settings:** Manage User-Agent strings and define `ffmpeg` stream profiles.
 -   **User Management (Admin):** Admins can create, edit, and delete user accounts.
 
+### Reverse-proxy (SSO) authentication — optional
+
+If you run ViniPlay behind an authenticating reverse proxy (e.g. `oauth2-proxy`, Authelia, Authentik, Traefik forward-auth), the proxy has already authenticated the user. You can let ViniPlay trust an identity header from the proxy and log the user in automatically, so its own login form is skipped and you don't have to maintain a second password. Users are auto-provisioned on first sight. Configure it with these environment variables:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PROXY_AUTH_ENABLED` | `false` | Set to `true` to enable reverse-proxy authentication. |
+| `PROXY_AUTH_HEADER` | `X-Forwarded-Email` | The request header carrying the authenticated user's identity (used as the ViniPlay username). For `oauth2-proxy`, enable `--pass-user-headers=true` (or `--set-xauthrequest=true` and use `X-Auth-Request-Email`). |
+| `PROXY_AUTH_TRUSTED_IPS` | *(empty)* | Comma-separated list of proxy source IPs/CIDRs allowed to supply the identity header, e.g. `172.31.0.0/16`. Matched against the request's real TCP peer, **never** `X-Forwarded-For`. **Required:** if empty while enabled, the header is never trusted (fail closed). |
+| `PROXY_AUTH_ADMIN_USERS` | *(empty)* | Comma-separated identities that are admins. A listed identity is made admin both when its account is first provisioned and, if it already exists as a non-admin, on its next login (grant only — the list never removes admin). Additionally, if no admin exists yet, the first proxy-authenticated user becomes admin (bootstrap). |
+| `PROXY_AUTH_LOGOUT_URL` | *(empty)* | Where the Logout button sends the browser. Without it, logout only clears the ViniPlay session and the next request is re-authenticated by the proxy immediately (so nothing appears to happen). Set it to the proxy's sign-out, e.g. `/oauth2/sign_out` for `oauth2-proxy`, to actually end the session. |
+
+> **Security:** only enable this when a proxy in front of ViniPlay is the **only** way to reach it. The identity header is trusted solely when the connecting IP is in `PROXY_AUTH_TRUSTED_IPS`; a client able to reach ViniPlay directly and set the header could otherwise impersonate any user. Auto-provisioned users have no local password and authenticate only through the proxy. Logout: with proxy auth on, ViniPlay's own logout clears only the ViniPlay session and the proxy re-authenticates the next request immediately — set `PROXY_AUTH_LOGOUT_URL` to the proxy's sign-out so the Logout button actually ends the upstream session.
+
+> **Where logout lands you.** To *fully* sign out (so the next visit shows a login prompt rather than being silently re-authenticated), the logout has to end the identity provider's session too — e.g. point `PROXY_AUTH_LOGOUT_URL` at oauth2-proxy's sign-out with an `rd` to the IdP's `end_session_endpoint`: `PROXY_AUTH_LOGOUT_URL=/oauth2/sign_out?rd=<url-encoded IdP logout URL>` (and whitelist the IdP domain on the proxy, e.g. `OAUTH2_PROXY_WHITELIST_DOMAINS`). After that, the browser is left on the **IdP's** login page, because most IdPs redirect to their own login after logout and ignore any post-logout redirect back to the app (Nextcloud's OIDC logout, for instance, always returns to `/login`). That is expected: to return to ViniPlay, open ViniPlay's own URL again — with the IdP session gone you'll log in once and land back in the app. There is no reliable way to bounce automatically from a full IdP logout straight back into the app; if you prefer the app to be immediately usable again after logout, leave `PROXY_AUTH_LOGOUT_URL` unset (or set it to a plain `/oauth2/sign_out`), accepting that this is a session refresh rather than a true sign-out.
+
 ---
 ## 🏗️ Project Structure
 
