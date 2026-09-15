@@ -42,6 +42,8 @@ ARG TARGETARCH
 ENV NVIDIA_DRIVER_CAPABILITIES=all
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LD_LIBRARY_PATH=/usr/lib/jellyfin-ffmpeg/lib
+ENV DATA_DIR=/data
+ENV DVR_DIR=/dvr
 
 # Install only the necessary runtime dependencies: Node.js, FFmpeg, and drivers.
 # We also add 'ca-certificates' which is crucial for making HTTPS requests from Node.js.

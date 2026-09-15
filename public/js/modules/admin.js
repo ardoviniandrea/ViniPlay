@@ -179,12 +179,17 @@ function renderLiveActivity() {
             ? `<span class="transcode-indicator bg-orange-400" title="Transcoding with FFmpeg"></span>`
             : `<span class="transcode-indicator bg-green-400" title="Direct Redirect"></span>`;
 
+        // Use image proxy for channel logos
+        const channelLogo = stream.channelLogo && stream.channelLogo.startsWith('http')
+            ? `/api/image-proxy?url=${encodeURIComponent(stream.channelLogo)}`
+            : stream.channelLogo || 'https://placehold.co/40x40/1f2937/d1d5db?text=?';
+
         tr.innerHTML = `
             <td><span class="clickable-username" title="Filter history for this user">${stream.username}</span></td>
             <td>${stream.clientIp || 'N/A'}</td>
             <td>
                 <div class="flex items-center gap-3">
-                    <img src="${stream.channelLogo || 'https://placehold.co/40x40/1f2937/d1d5db?text=?'}" 
+                    <img src="${channelLogo}" 
                          onerror="this.onerror=null; this.src='https://placehold.co/40x40/1f2937/d1d5db?text=?';" 
                          class="w-10 h-10 object-contain rounded-md bg-gray-700 flex-shrink-0" 
                          alt="Channel Logo">
@@ -232,12 +237,16 @@ function renderWatchHistory() {
 
     history.forEach(entry => {
         const tr = document.createElement('tr');
+        // Use image proxy for channel logos
+        const channelLogo = entry.channel_logo && entry.channel_logo.startsWith('http')
+            ? `/api/image-proxy?url=${encodeURIComponent(entry.channel_logo)}`
+            : entry.channel_logo || 'https://placehold.co/40x40/1f2937/d1d5db?text=?';
         tr.innerHTML = `
             <td><span class="clickable-username" title="Filter history for this user">${entry.username}</span></td>
             <td>${entry.client_ip || 'N/A'}</td>
             <td>
                 <div class="flex items-center gap-3">
-                    <img src="${entry.channel_logo || 'https://placehold.co/40x40/1f2937/d1d5db?text=?'}" 
+                    <img src="${channelLogo}" 
                          onerror="this.onerror=null; this.src='https://placehold.co/40x40/1f2937/d1d5db?text=?';" 
                          class="w-10 h-10 object-contain rounded-md bg-gray-700 flex-shrink-0" 
                          alt="Channel Logo">
