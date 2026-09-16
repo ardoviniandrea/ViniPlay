@@ -6,6 +6,7 @@
 import { showNotification } from './ui.js';
 import { UIElements, guideState, appState } from './state.js';
 import { stopStream } from './api.js';
+import { forceRefreshStream } from './player.js';
 
 const APPLICATION_ID = 'CC1AD845'; // Default Media Receiver App ID
 
@@ -171,6 +172,9 @@ function handleSessionStateChange(event) {
             castState.currentMedia = null;
             showNotification('Casting session ended.', false, 4000);
             updatePlayerUI();
+            forceRefreshStream().catch(err => {
+              console.error('[CAST] Error refreshing stream after cast ended:', err);
+            });
             break;
         case cast.framework.SessionState.NO_SESSION:
             castState.session = null;
@@ -235,18 +239,38 @@ export async function loadMedia(url, name, logo) {
     // ONLY modify URL to use cast profile if NOT already using it
     // This ensures we switch to the active cast profile for Chromecast
     const activeCastProfileId = guideState.settings?.activeCastProfileId || 'cast-default';
+    const userAgentId = guideState.settings.activeUserAgentId;
+    const activeStreamProfileId = guideState.settings?.activeStreamProfileId;
     let castUrl = url;
-    if (!url.includes(`profileId=${activeCastProfileId}`)) {
-        if (url.includes('profileId=')) {
+
+    const streamProfile = activeStreamProfileId
+        ? (guideState.settings.streamProfiles || []).find(p => p.id === activeStreamProfileId)
+        : null;
+    const isRedirectProfile = streamProfile?.command === 'redirect';
+    
+    if (isRedirectProfile) {
+        // Raw stream URL from Redirect profile - build proper stream URL with cast profile
+        castUrl = `/stream?url=${encodeURIComponent(url)}&profileId=${activeCastProfileId}&userAgentId=${userAgentId}`;
+        console.log(`[CAST] Built stream URL for redirect profile: ${castUrl}`);
+    } else {
+        // Already a /stream endpoint - ensure correct cast profile is set
+        if (url.includes(`profileId=${activeCastProfileId}`)) {
+            castUrl = url;
+        } else if (url.includes('profileId=')) {
             // Replace existing profileId with active cast profile
             castUrl = url.replace(/profileId=[^&]+/, `profileId=${activeCastProfileId}`);
             console.log(`[CAST] Replaced profile with ${activeCastProfileId}`);
         } else {
-            // Add cast profile
+            // Add cast profile to existing stream URL
             const separator = url.includes('?') ? '&' : '?';
             castUrl = `${url}${separator}profileId=${activeCastProfileId}`;
             console.log(`[CAST] Added ${activeCastProfileId} profile`);
         }
+    }
+
+    // Convert to absolute URL if needed
+    if (!castUrl.startsWith('http')) {
+        castUrl = `${window.location.origin}${castUrl}`;
     }
 
     // Generate and append cast authentication token
@@ -273,7 +297,7 @@ export async function loadMedia(url, name, logo) {
         return;
     }
 
-    console.log(`[CAST] Cast URL ready for Chromecast`);
+    console.log(`[CAST] Cast URL (${castUrl}) ready for Chromecast`);
 
     // Use video/mp4 instead of video/mp2t for Chromecast compatibility
     const mediaInfo = new chrome.cast.media.MediaInfo(castUrl, 'video/mp4');
