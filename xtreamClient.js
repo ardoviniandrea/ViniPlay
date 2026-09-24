@@ -127,6 +127,44 @@ class XtreamClient {
             throw new Error(`Failed to fetch all categories: ${error.message}`);
         }
     }
+
+    /**
+     * Fetches category types (Live, VOD, Series) and returns them categorized into an object.
+     * @returns {Promise<{live: string[], movie: string[], series: string[]}>}
+     */
+    async getCategorizedCategories() {
+        try {
+            console.log('[XC Client] Fetching categorized categories...');
+            const [live, vod, series] = await Promise.all([
+                this.getLiveCategories().catch(e => { console.warn('[XC Client] Live categories error:', e.message); return []; }),
+                this.getVodCategories().catch(e => { console.warn('[XC Client] VOD categories error:', e.message); return []; }),
+                this.getSeriesCategories().catch(e => { console.warn('[XC Client] Series categories error:', e.message); return []; })
+            ]);
+
+            const liveSet = new Set();
+            const movieSet = new Set();
+            const seriesSet = new Set();
+
+            if (Array.isArray(live)) {
+                live.forEach(c => c && c.category_name && liveSet.add(c.category_name.trim()));
+            }
+            if (Array.isArray(vod)) {
+                vod.forEach(c => c && c.category_name && movieSet.add(c.category_name.trim()));
+            }
+            if (Array.isArray(series)) {
+                series.forEach(c => c && c.category_name && seriesSet.add(c.category_name.trim()));
+            }
+
+            return {
+                live: Array.from(liveSet).sort((a, b) => a.localeCompare(b)),
+                movie: Array.from(movieSet).sort((a, b) => a.localeCompare(b)),
+                series: Array.from(seriesSet).sort((a, b) => a.localeCompare(b))
+            };
+        } catch (error) {
+            console.error(`[XC Client] Failed to fetch categorized categories: ${error.message}`);
+            throw new Error(`Failed to fetch categorized categories: ${error.message}`);
+        }
+    }
 }
 
 module.exports = XtreamClient;

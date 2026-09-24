@@ -411,10 +411,10 @@ const openUserGroupFilterModal = async (sourceId, selectedGroups, sourceName, bt
         let allGroups = [];
         if (res && res.ok) {
             const data = await res.json();
-            if (Array.isArray(data)) {
-                allGroups = data;
-            } else if (data.groups) {
+            if (data.groups) {
                 allGroups = data.groups;
+            } else if (Array.isArray(data)) {
+                allGroups = data;
             }
         } else {
             // Fallback: extract from client state if available
@@ -429,17 +429,30 @@ const openUserGroupFilterModal = async (sourceId, selectedGroups, sourceName, bt
         // we should only offer those groups to the user.
         console.log(`[DEBUG_USER_FILTER] Type of selectedGroups: ${typeof source.selectedGroups}`, source.selectedGroups);
         if (source.selectedGroups && source.selectedGroups.length > 0) {
-            // Ensure strict type check (it should be an array)
-            if (typeof source.selectedGroups === 'string') {
-                try { source.selectedGroups = JSON.parse(source.selectedGroups); } catch (e) { }
+            let allowedSourceGroups = source.selectedGroups;
+            if (typeof allowedSourceGroups === 'string') {
+                try { allowedSourceGroups = JSON.parse(allowedSourceGroups); } catch (e) { }
             }
-            if (Array.isArray(source.selectedGroups)) {
-                allGroups = allGroups.filter(g => source.selectedGroups.includes(g));
+            if (Array.isArray(allowedSourceGroups) && allowedSourceGroups.length > 0) {
+                const allowedSet = new Set(allowedSourceGroups);
+                if (allGroups && typeof allGroups === 'object' && !Array.isArray(allGroups)) {
+                    allGroups = {
+                        live: (allGroups.live || []).filter(g => allowedSet.has(g)),
+                        movie: (allGroups.movie || []).filter(g => allowedSet.has(g)),
+                        series: (allGroups.series || []).filter(g => allowedSet.has(g))
+                    };
+                } else if (Array.isArray(allGroups)) {
+                    allGroups = allGroups.filter(g => allowedSet.has(g));
+                }
             }
         }
 
+        const totalCount = Array.isArray(allGroups)
+            ? allGroups.length
+            : ((allGroups?.live?.length || 0) + (allGroups?.movie?.length || 0) + (allGroups?.series?.length || 0));
+
         // If we still have no groups, maybe just show the passed selected groups?
-        if (allGroups.length === 0 && selectedGroups.length > 0) {
+        if (totalCount === 0 && selectedGroups.length > 0) {
             allGroups = [...selectedGroups];
         }
 
@@ -462,19 +475,27 @@ const openUserGroupFilterModal = async (sourceId, selectedGroups, sourceName, bt
 
 const populateGroupFilterModal = (allGroups, selectedGroups) => {
     tempSelectedGroups.clear();
-    selectedGroups.forEach(group => tempSelectedGroups.add(group));
+    (selectedGroups || []).forEach(group => tempSelectedGroups.add(group));
     const groups = { live: [], movie: [], series: [] };
 
-    allGroups.forEach(group => {
-        const gLower = group.toLowerCase();
-        if (gLower.includes('movie') || gLower.includes('film') || gLower.includes('vod')) {
-            groups.movie.push(group);
-        } else if (gLower.includes('series') || gLower.includes('show') || gLower.includes('tv')) {
-            groups.series.push(group);
-        } else {
-            groups.live.push(group);
-        }
-    });
+    if (allGroups && typeof allGroups === 'object' && !Array.isArray(allGroups)) {
+        groups.live = Array.isArray(allGroups.live) ? [...allGroups.live] : [];
+        groups.movie = Array.isArray(allGroups.movie) ? [...allGroups.movie] : [];
+        groups.series = Array.isArray(allGroups.series) ? [...allGroups.series] : [];
+    } else if (Array.isArray(allGroups)) {
+        allGroups.forEach(group => {
+            if (!group) return;
+            const gLower = group.toLowerCase();
+            // Check series keywords FIRST so series containing 'vod' aren't wrongly categorized as movies
+            if (gLower.includes('series') || gLower.includes('serie') || gLower.includes('show') || gLower.includes('season') || gLower.includes('stagion')) {
+                groups.series.push(group);
+            } else if (gLower.includes('movie') || gLower.includes('film') || gLower.includes('cinema') || gLower.includes('vod')) {
+                groups.movie.push(group);
+            } else {
+                groups.live.push(group);
+            }
+        });
+    }
 
     UIElements.groupFilterModal.dataset.groups = JSON.stringify(groups);
     UIElements.groupFilterTabLive.textContent = `Live (${groups.live.length})`;
@@ -492,19 +513,27 @@ const populateGroupFilterModal = (allGroups, selectedGroups) => {
 
 const populateUserGroupFilterModal = (allGroups, selectedGroups) => {
     tempSelectedGroups.clear();
-    selectedGroups.forEach(group => tempSelectedGroups.add(group));
+    (selectedGroups || []).forEach(group => tempSelectedGroups.add(group));
     const groups = { live: [], movie: [], series: [] };
 
-    allGroups.forEach(group => {
-        const gLower = group.toLowerCase();
-        if (gLower.includes('movie') || gLower.includes('film') || gLower.includes('vod')) {
-            groups.movie.push(group);
-        } else if (gLower.includes('series') || gLower.includes('show') || gLower.includes('tv')) {
-            groups.series.push(group);
-        } else {
-            groups.live.push(group);
-        }
-    });
+    if (allGroups && typeof allGroups === 'object' && !Array.isArray(allGroups)) {
+        groups.live = Array.isArray(allGroups.live) ? [...allGroups.live] : [];
+        groups.movie = Array.isArray(allGroups.movie) ? [...allGroups.movie] : [];
+        groups.series = Array.isArray(allGroups.series) ? [...allGroups.series] : [];
+    } else if (Array.isArray(allGroups)) {
+        allGroups.forEach(group => {
+            if (!group) return;
+            const gLower = group.toLowerCase();
+            // Check series keywords FIRST so series containing 'vod' aren't wrongly categorized as movies
+            if (gLower.includes('series') || gLower.includes('serie') || gLower.includes('show') || gLower.includes('season') || gLower.includes('stagion')) {
+                groups.series.push(group);
+            } else if (gLower.includes('movie') || gLower.includes('film') || gLower.includes('cinema') || gLower.includes('vod')) {
+                groups.movie.push(group);
+            } else {
+                groups.live.push(group);
+            }
+        });
+    }
 
     const modal = document.getElementById('user-group-filter-modal');
     modal.dataset.groups = JSON.stringify(groups);
@@ -1043,9 +1072,7 @@ const openSourceEditor = (sourceType, source = null) => {
 
                 if (res && res.ok) {
                     const data = await res.json();
-                    let allGroups = [];
-                    if (Array.isArray(data)) allGroups = data;
-                    else if (data.groups) allGroups = data.groups;
+                    let allGroups = data.groups || data || [];
 
                     UIElements.groupFilterModal.querySelector('h3').textContent = `Select Groups for ${sourceName}`;
                     populateGroupFilterModal(allGroups, currentSelected);
@@ -2138,7 +2165,10 @@ export function setupSettingsEventListeners() {
 
                     if (res && res.ok) {
                         const data = await res.json();
-                        showNotification(`Groups refreshed successfully (${data.groups.length} found).`, false);
+                        const groupCount = Array.isArray(data.groups)
+                            ? data.groups.length
+                            : ((data.groups?.live?.length || 0) + (data.groups?.movie?.length || 0) + (data.groups?.series?.length || 0));
+                        showNotification(`Groups refreshed successfully (${groupCount} found).`, false);
                         // Optionally, auto-open the select modal after refresh:
                         // const selectedGroupsInput = document.getElementById('source-editor-selected-groups');
                         // const currentlySelected = selectedGroupsInput ? JSON.parse(selectedGroupsInput.value || '[]') : [];

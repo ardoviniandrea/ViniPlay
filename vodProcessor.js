@@ -50,6 +50,9 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
 
     // --- 0. Process Categories ---
     const categoryMap = new Map();
+    const selectedGroups = Array.isArray(provider.selectedGroups) ? provider.selectedGroups : [];
+    const isGroupFilteringActive = selectedGroups.length > 0;
+    const selectedGroupSet = new Set(selectedGroups);
     try {
         sendStatus(`Fetching VOD and Series categories for ${provider.name}...`, 'info');
         const vodCategories = await client.getVodCategories();
@@ -121,6 +124,9 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
                     if (yearMatch) year = parseInt(yearMatch[1]);
                 }
                 const categoryName = categoryMap.get(String(category_id)) || 'VOD';
+                if (isGroupFilteringActive && !selectedGroupSet.has(categoryName)) {
+                    continue;
+                }
 
                 let movieId = providerUniqueIdMap.get(providerUniqueId);
 
@@ -182,6 +188,9 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
                     if (yearMatch) year = parseInt(yearMatch[1]);
                 }
                 const categoryName = categoryMap.get(String(category_id)) || 'Series';
+                if (isGroupFilteringActive && !selectedGroupSet.has(categoryName)) {
+                    continue;
+                }
 
                 let seriesId = providerUniqueIdMap.get(providerUniqueId);
 
@@ -260,6 +269,9 @@ async function processM3uVod(db, dbGet, dbAll, dbRun, m3uContent, provider, send
     console.log(`[VOD Processor M3U] Starting VOD processing for M3U source: ${provider.name}`);
     const scanStartTime = new Date().toISOString();
     const providerId = provider.id;
+    const selectedGroups = Array.isArray(provider.selectedGroups) ? provider.selectedGroups : [];
+    const isGroupFilteringActive = selectedGroups.length > 0;
+    const selectedGroupSet = new Set(selectedGroups);
 
     try {
         const lines = m3uContent.split('\n');
@@ -314,6 +326,9 @@ async function processM3uVod(db, dbGet, dbAll, dbRun, m3uContent, provider, send
                 const year = yearMatch ? parseInt(yearMatch[1]) : null;
                 const logo = attributes['tvg-logo'] || null;
                 const categoryName = attributes['group-title'] || 'VOD';
+                if (isGroupFilteringActive && !selectedGroupSet.has(categoryName)) {
+                    continue;
+                }
 
                 let movieId = providerUniqueIdMap.get(providerUniqueId);
                 if (!movieId) {
@@ -350,6 +365,9 @@ async function processM3uVod(db, dbGet, dbAll, dbRun, m3uContent, provider, send
                 const year = yearMatch ? parseInt(yearMatch[1]) : null;
                 const logo = attributes['tvg-logo'] || null;
                 const categoryName = attributes['group-title'] || 'Series';
+                if (isGroupFilteringActive && !selectedGroupSet.has(categoryName)) {
+                    continue;
+                }
 
                 let seriesId = providerUniqueIdMap.get(providerUniqueId);
                 if (!seriesId) {

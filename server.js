@@ -1927,12 +1927,12 @@ app.post('/api/sources/fetch-groups', requireAuth, async (req, res) => {
             if (!xcInfo.server || !xcInfo.username || !xcInfo.password) {
                 return res.status(400).json({ error: 'XC source requires server, username, and password.' });
             }
-            console.log('[API_GROUPS] Source is XC type. Using XtreamClient to fetch all categories.');
+            console.log('[API_GROUPS] Source is XC type. Using XtreamClient to fetch categorized categories.');
             const settings = getSettings();
             const activeUserAgent = settings.userAgents.find(ua => ua.id === settings.activeUserAgentId)?.value || 'VLC/3.0.20 (Linux; x86_64)';
             const client = new XtreamClient(xcInfo.server, xcInfo.username, xcInfo.password, activeUserAgent);
-            const allCategories = await client.getAllCategories();
-            return res.json({ success: true, groups: allCategories, usedCache: false });
+            const categorized = await client.getCategorizedCategories();
+            return res.json({ success: true, groups: categorized, usedCache: false });
         }
 
         if (!usedCache) {
@@ -1954,8 +1954,13 @@ app.post('/api/sources/fetch-groups', requireAuth, async (req, res) => {
         // --- End Fetch Logic ---
 
 
-        // --- Efficiently Extract Groups (Handles JSON for XC and Regex for M3U) ---
-        const groups = new Set();
+        // --- Efficiently Extract and Categorize Groups (Handles JSON for XC and Lines for M3U) ---
+        const categorizedGroups = {
+            live: new Set(),
+            movie: new Set(),
+            series: new Set()
+        };
+
         try {
             // First, try to parse as JSON (for XC sources which return a JSON array of categories)
             const groupJsonArray = JSON.parse(content);
@@ -1964,26 +1969,83 @@ app.post('/api/sources/fetch-groups', requireAuth, async (req, res) => {
                 for (const category of groupJsonArray) {
                     if (category && typeof category.category_name === 'string') {
                         const groupName = category.category_name.trim();
-                        if (groupName) groups.add(groupName);
+                        if (groupName) categorizedGroups.live.add(groupName);
                     }
                 }
             }
         } catch (jsonError) {
-            // If JSON parsing fails, assume it's a plain M3U file and use regex
-            console.log(`[API_GROUPS] Content is not valid JSON, attempting to parse as plain M3U.`);
-            const groupTitleRegex = /group-title=\"([^\"]+)\"/g;
-            let match;
-            while ((match = groupTitleRegex.exec(content)) !== null) {
-                const groupName = match[1].trim();
-                if (groupName) {
-                    groups.add(groupName);
+            // Parse plain M3U lines
+            console.log(`[API_GROUPS] Content is not valid JSON, parsing M3U by channel type.`);
+            const lines = content.split('\n');
+            let currentExtInf = null;
+            const groupTitleRegex = /group-title=\"([^\"]+)\"/;
+            const tvgTypeRegex = /tvg-type=\"([^\"]+)\"/;
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith('#EXTINF:')) {
+                    const groupMatch = trimmed.match(groupTitleRegex);
+                    const tvgTypeMatch = trimmed.match(tvgTypeRegex);
+                    currentExtInf = {
+                        group: groupMatch ? groupMatch[1].trim() : '',
+                        type: tvgTypeMatch ? tvgTypeMatch[1].toLowerCase().trim() : ''
+                    };
+                } else if (trimmed.startsWith('http') && currentExtInf) {
+                    const groupName = currentExtInf.group;
+                    if (groupName) {
+                        const isMovie = trimmed.includes('/movie/') || currentExtInf.type === 'movie';
+                        const isSeries = trimmed.includes('/series/') || currentExtInf.type === 'series';
+
+                        if (isMovie) {
+                            categorizedGroups.movie.add(groupName);
+                        } else if (isSeries) {
+                            categorizedGroups.series.add(groupName);
+                        } else {
+                            categorizedGroups.live.add(groupName);
+                        }
+                    }
+                    currentExtInf = null;
                 }
             }
         }
 
-        const sortedGroups = Array.from(groups).sort((a, b) => a.localeCompare(b));
-        console.log(`[API_GROUPS] Found ${sortedGroups.length} unique groups.`);
-        res.json({ success: true, groups: sortedGroups, usedCache: usedCache }); // Optionally tell frontend if cache was used
+        // Cross-reference with DB if this source has already imported VOD
+        if (sourceToUse && sourceToUse.id) {
+            try {
+                const dbMovies = await dbAll(db, `SELECT DISTINCT m.category_name FROM movies m JOIN provider_movie_relations r ON m.id = r.movie_id WHERE r.provider_id = ?`, [sourceToUse.id]);
+                dbMovies.forEach(row => {
+                    if (row.category_name) {
+                        const name = row.category_name.trim();
+                        categorizedGroups.movie.add(name);
+                        categorizedGroups.live.delete(name);
+                    }
+                });
+                const dbSeries = await dbAll(db, `SELECT DISTINCT s.category_name FROM series s JOIN provider_series_relations r ON s.id = r.series_id WHERE r.provider_id = ?`, [sourceToUse.id]);
+                dbSeries.forEach(row => {
+                    if (row.category_name) {
+                        const name = row.category_name.trim();
+                        categorizedGroups.series.add(name);
+                        categorizedGroups.live.delete(name);
+                    }
+                });
+            } catch (dbErr) {
+                console.warn('[API_GROUPS] Error checking DB for existing VOD categories:', dbErr.message);
+            }
+        }
+
+        const sortedLive = Array.from(categorizedGroups.live).sort((a, b) => a.localeCompare(b));
+        const sortedMovie = Array.from(categorizedGroups.movie).sort((a, b) => a.localeCompare(b));
+        const sortedSeries = Array.from(categorizedGroups.series).sort((a, b) => a.localeCompare(b));
+
+        const resultGroups = {
+            live: sortedLive,
+            movie: sortedMovie,
+            series: sortedSeries
+        };
+
+        const totalCount = sortedLive.length + sortedMovie.length + sortedSeries.length;
+        console.log(`[API_GROUPS] Found ${totalCount} unique groups (Live: ${sortedLive.length}, Movie: ${sortedMovie.length}, Series: ${sortedSeries.length}).`);
+        res.json({ success: true, groups: resultGroups, usedCache: usedCache });
 
     } catch (error) {
         console.error(`[API_GROUPS] Failed to fetch or parse M3U for groups: ${error.message}`);
@@ -2398,7 +2460,8 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
                 providerMap.set(p.id, {
                     baseUrl: `${url.protocol}//${url.host}`,
                     username: xcInfo.username,
-                    password: xcInfo.password
+                    password: xcInfo.password,
+                    selectedGroups: new Set(Array.isArray(p.selectedGroups) ? p.selectedGroups : [])
                 });
             } catch (e) {
                 console.error(`[API_VOD] Skipping provider ${p.name}, invalid XC data: ${e.message}`);
@@ -2425,6 +2488,11 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
         const processedMovies = movies.map(m => {
             const provider = providerMap.get(m.provider_id);
             if (!provider) return null; // Skip if provider is not active
+
+            // SOURCE GROUP FILTER: skip categories the source's own selection excludes
+            if (provider.selectedGroups && provider.selectedGroups.size > 0 && !provider.selectedGroups.has(m.category_name)) {
+                return null;
+            }
 
             // PERMISSION CHECK: Filter by category if strict groups are defined
             if (allowedSources) {
@@ -2469,6 +2537,14 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
 
         // Process series headers with permission checks
         const processedSeries = seriesList.map(series => {
+            const seriesProvider = providerMap.get(series.provider_id);
+            if (!seriesProvider) return null;
+
+            // SOURCE GROUP FILTER: skip categories the source's own selection excludes
+            if (seriesProvider.selectedGroups && seriesProvider.selectedGroups.size > 0 && !seriesProvider.selectedGroups.has(series.category_name)) {
+                return null;
+            }
+
             // PERMISSION CHECK: Filter by category if strict groups are defined
             if (allowedSources) {
                 const perms = allowedSources[series.provider_id];
@@ -2789,8 +2865,24 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
 app.get('/api/vod/categories', requireAuth, async (req, res) => {
     console.log('[API_VOD] Request received for /api/vod/categories');
     try {
+        const settings = getSettings();
+        const activeProviders = (settings.m3uSources || []).filter(s => s.isActive);
+        const hasFiltering = activeProviders.some(p => p.selectedGroups && p.selectedGroups.length > 0);
+        let allowedGroups = null;
+        if (hasFiltering) {
+            allowedGroups = new Set();
+            activeProviders.forEach(p => {
+                if (Array.isArray(p.selectedGroups) && p.selectedGroups.length > 0) {
+                    p.selectedGroups.forEach(g => allowedGroups.add(g));
+                }
+            });
+        }
+
         const categories = await dbAll(db, "SELECT category_name FROM vod_categories ORDER BY category_name");
-        const categoryNames = categories.map(cat => cat.category_name);
+        let categoryNames = categories.map(cat => cat.category_name).filter(Boolean);
+        if (allowedGroups && allowedGroups.size > 0) {
+            categoryNames = categoryNames.filter(c => allowedGroups.has(c));
+        }
         res.json({ success: true, categories: categoryNames });
     } catch (error) {
         console.error(`[API_VOD] Error fetching VOD categories: ${error.message}`, error);
