@@ -9,6 +9,7 @@ import { UIElements, guideState, appState } from './state.js';
 import { handleSearchAndFilter, scrollToChannel, openProgramDetails } from './guide.js';
 import { getVapidKey, subscribeToPush, addProgramNotification, getProgramNotifications, deleteProgramNotification, unsubscribeFromPush, clearPastNotifications } from './api.js';
 import { ICONS } from './icons.js'; // MODIFIED: Import the new icon library
+import { proxiedImageUrl } from './utils.js';
 
 let isSubscribed = false;
 
@@ -261,7 +262,7 @@ export const renderNotifications = () => {
 
         return `
             <div class="flex items-center p-4 border-b border-gray-700/50 hover:bg-gray-800 transition-colors rounded-md" data-notification-id="${notif.id}">
-                <img src="${notif.channelLogo || 'https://placehold.co/48x48/1f2937/d1d5db?text=?;&font=Inter'}" onerror="this.onerror=null; this.src='https://placehold.co/48x48/1f2937/d1d5db?text=?';" class="w-12 h-12 object-contain mr-4 flex-shrink-0 rounded-md bg-gray-700">
+                <img src="${proxiedImageUrl(notif.channelLogo) || 'https://placehold.co/48x48/1f2937/d1d5db?text=?;&font=Inter'}" onerror="this.onerror=null; this.src='https://placehold.co/48x48/1f2937/d1d5db?text=?';" class="w-12 h-12 object-contain mr-4 flex-shrink-0 rounded-md bg-gray-700">
                 <div class="flex-grow">
                     <p class="font-semibold text-white text-md">${notif.programTitle || 'Untitled Program'}</p>
                     <p class="text-gray-400 text-sm">${notif.channelName || 'Unknown Channel'} • ${formattedProgramTime}</p>
@@ -320,7 +321,7 @@ export const renderPastNotifications = () => {
 
         return `
             <div class="flex items-center p-4 border-b border-gray-700/50 hover:bg-gray-800 transition-colors rounded-md opacity-70" data-notification-id="${notif.id}">
-                <img src="${notif.channelLogo || 'https://placehold.co/48x48/1f2937/d1d5db?text=?;&font=Inter'}" onerror="this.onerror=null; this.src='https://placehold.co/48x48/1f2937/d1d5db?text=?';" class="w-12 h-12 object-contain mr-4 flex-shrink-0 rounded-md bg-gray-700">
+                <img src="${proxiedImageUrl(notif.channelLogo) || 'https://placehold.co/48x48/1f2937/d1d5db?text=?;&font=Inter'}" onerror="this.onerror=null; this.src='https://placehold.co/48x48/1f2937/d1d5db?text=?';" class="w-12 h-12 object-contain mr-4 flex-shrink-0 rounded-md bg-gray-700">
                 <div class="flex-grow">
                     <p class="font-semibold text-white text-md">${notif.programTitle || 'Untitled Program'}</p>
                     <p class="text-gray-400 text-sm">${notif.channelName || 'Unknown Channel'} • ${formattedProgramTime}</p>
