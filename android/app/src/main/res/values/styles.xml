@@ -1,0 +1,10 @@
+<resources>
+    <style name="Theme.ViniPlay" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#2563EB</item>
+        <item name="colorPrimaryDark">#0F172A</item>
+        <item name="colorAccent">#3B82F6</item>
+        <item name="android:statusBarColor">#0F172A</item>
+        <item name="android:navigationBarColor">#0F172A</item>
+        <item name="android:windowBackground">#0F172A</item>
+    </style>
+</resources>
