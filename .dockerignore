@@ -1,5 +1,10 @@
 # Exclude files and directories from the Docker build context
 
+# Git & GitHub metadata
+.git
+.gitignore
+.github
+
 # Node.js
 node_modules
 npm-debug.log
@@ -11,5 +16,17 @@ npm-debug.log
 Dockerfile
 docker-compose.yml
 
-# Persistent data directory (should be mounted as a volume, not copied)
+# Persistent data directories (should be mounted as volumes, not copied)
 viniplay-data
+viniplay-dvr
+
+# Android companion app & APK builds
+android
+**/*.apk
+
+# README docs/screenshots (root images/ only — public/images/ is still included)
+README.md
+images
+
+# OS metadata
+**/.DS_Store
