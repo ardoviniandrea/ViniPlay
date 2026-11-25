@@ -8,6 +8,73 @@ import { showLoginScreen } from './auth.js';
 import { showNotification } from './ui.js';
 import { guideState } from './state.js';
 
+let cachedCsrfToken = null;
+
+/**
+ * Updates the in-memory CSRF token fallback (also read from the viniplay_csrf cookie).
+ * @param {string|null} token
+ */
+export function setCsrfToken(token) {
+    if (typeof token === 'string' && token.length > 0) {
+        cachedCsrfToken = token;
+    } else if (token === null) {
+        cachedCsrfToken = null;
+    }
+}
+
+/**
+ * Reads the active per-session CSRF token from cookies or in-memory cache.
+ * @returns {string}
+ */
+export function getCsrfToken() {
+    if (typeof document !== 'undefined' && document.cookie) {
+        const match = document.cookie.match(/(?:^|;\s*)viniplay_csrf=([^;]+)/);
+        if (match && match[1]) {
+            try {
+                cachedCsrfToken = decodeURIComponent(match[1]);
+                return cachedCsrfToken;
+            } catch (e) {
+                cachedCsrfToken = match[1];
+                return cachedCsrfToken;
+            }
+        }
+    }
+    return cachedCsrfToken || '';
+}
+
+/**
+ * Returns a copy of headers with X-CSRF-Token populated when a token is available.
+ * @param {Headers|Record<string,string>} headers
+ * @returns {Headers|Record<string,string>}
+ */
+export function withCsrfHeaders(headers = {}) {
+    const token = getCsrfToken();
+    if (headers instanceof Headers) {
+        const nextHeaders = new Headers(headers);
+        if (token && !nextHeaders.has('X-CSRF-Token')) {
+            nextHeaders.set('X-CSRF-Token', token);
+        }
+        return nextHeaders;
+    }
+    const nextHeaders = { ...headers };
+    if (token && !nextHeaders['X-CSRF-Token'] && !nextHeaders['x-csrf-token']) {
+        nextHeaders['X-CSRF-Token'] = token;
+    }
+    return nextHeaders;
+}
+
+/**
+ * Appends the CSRF token as a query parameter for navigator.sendBeacon calls.
+ * @param {string} url
+ * @returns {string}
+ */
+export function appendCsrfQuery(url) {
+    const token = getCsrfToken();
+    if (!token) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}_csrf=${encodeURIComponent(token)}`;
+}
+
 /**
  * A wrapper for the fetch API to handle common tasks like error handling and auth failures.
  * @param {string} url - The API endpoint URL.
@@ -15,9 +82,14 @@ import { guideState } from './state.js';
  * @returns {Promise<Response|null>} - The fetch Response object or null on failure.
  */
 export async function apiFetch(url, options = {}) {
-    console.log(`[API_FETCH] Requesting: ${options.method || 'GET'} ${url}`);
+    const method = (options.method || 'GET').toUpperCase();
+    const fetchOptions = { ...options };
+    if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+        fetchOptions.headers = withCsrfHeaders(options.headers || {});
+    }
+    console.log(`[API_FETCH] Requesting: ${method} ${url}`);
     try {
-        const response = await fetch(url, options);
+        const response = await fetch(url, fetchOptions);
         console.log(`[API_FETCH] Response received for ${url}: Status ${response.status} ${response.statusText}`);
 
         // If the session expired, the server will return a 401 Unauthorized
@@ -409,12 +481,12 @@ export async function stopStream(streamUrl, profileId = null) {
  * @param {string} channelLogo - The URL for the channel's logo.
  * @returns {Promise<number|null>} - The history ID for this session, or null on failure.
  */
-export async function startRedirectStream(streamUrl, channelId, channelName, channelLogo) {
+export async function startRedirectStream(streamUrl, channelId, channelName, channelLogo, mediaType = null) {
     console.log('[API] Notifying server of REDIRECT stream start.');
     const res = await apiFetch('/api/activity/start-redirect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ streamUrl, channelId, channelName, channelLogo })
+        body: JSON.stringify({ streamUrl, channelId, channelName, channelLogo, mediaType })
     });
 
     if (res && res.ok) {
@@ -434,7 +506,7 @@ export async function sendRedirectHeartbeat(historyId) {
     try {
         const res = await fetch('/api/activity/heartbeat', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withCsrfHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ historyId })
         });
         return res && res.ok;
@@ -458,7 +530,7 @@ export async function stopRedirectStream(historyId, useKeepalive = false) {
         try {
             fetch('/api/activity/stop-redirect', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: withCsrfHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({ historyId }),
                 keepalive: true
             }).catch(() => {});
@@ -467,12 +539,20 @@ export async function stopRedirectStream(historyId, useKeepalive = false) {
             return false;
         }
     }
-    const res = await apiFetch('/api/activity/stop-redirect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ historyId })
-    });
-    return res && res.ok;
+    try {
+        const res = await fetch('/api/activity/stop-redirect', {
+            method: 'POST',
+            headers: withCsrfHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ historyId })
+        });
+        if (!res.ok) {
+            console.warn(`[API] Background stop-redirect returned status ${res.status} for history ID ${historyId}.`);
+        }
+        return res.ok;
+    } catch (e) {
+        console.warn(`[API] Network warning sending stop-redirect for history ID ${historyId}:`, e);
+        return false;
+    }
 }
 
 /**
@@ -539,6 +619,29 @@ export async function fetchSeriesDetails(seriesId) {
         return null;
     }
 }
+
+/**
+ * Fetches the detailed information for a specific movie (lazy loading rich metadata).
+ * @param {string|number} movieId - The ID of the movie to fetch.
+ * @returns {Promise<object|null>} The enriched movie object, or null on failure.
+ */
+export async function fetchMovieDetails(movieId) {
+    console.log(`[API] Fetching details for Movie ID: ${movieId} from /api/vod/movie/${movieId}.`);
+    const response = await apiFetch(`/api/vod/movie/${encodeURIComponent(movieId)}?t=${Date.now()}`);
+    if (!response) {
+        console.error(`[API] Failed to fetch details for Movie ID ${movieId}: No response from apiFetch.`);
+        return null;
+    }
+    try {
+        const movieData = await response.json();
+        console.log(`[API] Movie details for ID ${movieId} fetched successfully.`);
+        return movieData;
+    } catch (e) {
+        console.error(`[API] Error parsing movie details JSON for ID ${movieId}:`, e);
+        return null;
+    }
+}
+
 
 /**
  * Fetches stored watch progress for a given media content.

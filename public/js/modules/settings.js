@@ -5,12 +5,13 @@
  */
 
 import { appState, guideState, UIElements } from './state.js';
-import { apiFetch, saveGlobalSetting, saveUserSetting, fetchAppVersion } from './api.js';
+import { apiFetch, saveGlobalSetting, saveUserSetting, fetchAppVersion, fetchConfig } from './api.js';
 // MODIFIED: Import isProcessingRunning for the button logic
 import { showNotification, openModal, closeModal, showConfirm, setButtonLoadingState, showProcessingModal, isProcessingRunning } from './ui.js';
-import { handleGuideLoad } from './guide.js';
+import { handleGuideLoad, handleSearchAndFilter, failedLogoUrls } from './guide.js';
 import { navigate } from './ui.js';
 import { ICONS } from './icons.js';
+import { parseM3U } from './utils.js';
 
 let currentSourceTypeForEditor = 'url';
 let hardwareChecked = false; // Flag to prevent re-checking hardware on every UI update
@@ -275,102 +276,841 @@ async function handleHardwareDetection() {
 
 // --- UI Rendering ---
 
+// --- User Access State & Channel Statistics Helpers ---
+let cachedUsersList = [];
+let userEditorAccessState = {};
+
+const USER_TAB_DEFINITIONS = [
+    { id: 'guide', label: 'TV Guide', short: 'Guide' },
+    { id: 'multiview', label: 'Multi-View', short: 'Multi-View' },
+    { id: 'player', label: 'Single Player', short: 'Player' },
+    { id: 'dvr', label: 'DVR Library', short: 'DVR' },
+    { id: 'vod', label: 'VODs', short: 'VOD' },
+    { id: 'notifications', label: 'Notifications', short: 'Alerts' }
+];
+
+const escapeHtmlAttr = (str = '') => String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
 /**
- * Renders the source list for the User Editor Modal.
- * @param {object|null} user - The user object (null for new user).
+ * Builds a lookup of live channels grouped by sourceId and group name from guideState.channels.
  */
-const renderUserSourceList = (user) => {
+const buildChannelStatsBySource = () => {
+    const m3uSources = guideState.settings.m3uSources || [];
+    const stats = {};
+    m3uSources.forEach(src => {
+        stats[src.id] = {
+            source: src,
+            totalChannels: 0,
+            groups: new Map() // groupName -> Array<{ id, name, chno, group }>
+        };
+    });
+
+    const channels = guideState.channels || [];
+    channels.forEach(ch => {
+        if (!ch || !ch.id) return;
+        const underscoreIdx = ch.id.indexOf('_');
+        if (underscoreIdx === -1) return;
+        const sourceId = ch.id.substring(0, underscoreIdx);
+        if (!stats[sourceId]) return;
+
+        const groupName = ch.group || 'Uncategorized';
+        if (!stats[sourceId].groups.has(groupName)) {
+            stats[sourceId].groups.set(groupName, []);
+        }
+        stats[sourceId].groups.get(groupName).push({
+            id: ch.id,
+            name: ch.displayName || ch.name || 'Unknown Channel',
+            chno: ch.chno || null,
+            group: groupName
+        });
+        stats[sourceId].totalChannels++;
+    });
+
+    return stats;
+};
+
+// Cache of categorized groups { live: [], movie: [], series: [] } per sourceId
+const cachedSourceGroupsMap = new Map();
+const loadingSourceGroupsSet = new Set();
+
+/**
+ * Fetches and caches categorized groups (Live, VOD Movies, VOD Series) for a source.
+ */
+const fetchAndCacheSourceGroups = async (source, forceRefresh = false, onComplete = null) => {
+    if (!source || !source.id) return null;
+    if (!forceRefresh && cachedSourceGroupsMap.has(source.id)) {
+        const cached = cachedSourceGroupsMap.get(source.id);
+        if (typeof onComplete === 'function') onComplete(cached);
+        return cached;
+    }
+    if (loadingSourceGroupsSet.has(source.id)) return null;
+
+    loadingSourceGroupsSet.add(source.id);
+    try {
+        const payload = {
+            type: source.type,
+            sourceId: source.id,
+            refresh: forceRefresh
+        };
+        if (source.type === 'url' || source.type === 'file') {
+            payload.url = source.path;
+        } else if (source.type === 'xc') {
+            payload.xc = source.xc_data;
+        }
+
+        const res = await apiFetch('/api/sources/fetch-groups', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        let rawGroups = { live: [], movie: [], series: [] };
+        if (res && res.ok) {
+            const data = await res.json();
+            const g = data.groups !== undefined ? data.groups : data;
+            if (g && typeof g === 'object' && !Array.isArray(g)) {
+                rawGroups.live = Array.isArray(g.live) ? [...g.live] : [];
+                rawGroups.movie = Array.isArray(g.movie) ? [...g.movie] : [];
+                rawGroups.series = Array.isArray(g.series) ? [...g.series] : [];
+            } else if (Array.isArray(g)) {
+                g.forEach(group => {
+                    if (!group) return;
+                    const gLower = group.toLowerCase();
+                    if (gLower.includes('series') || gLower.includes('serie') || gLower.includes('show') || gLower.includes('season') || gLower.includes('stagion')) {
+                        rawGroups.series.push(group);
+                    } else if (gLower.includes('movie') || gLower.includes('film') || gLower.includes('cinema') || gLower.includes('vod')) {
+                        rawGroups.movie.push(group);
+                    } else {
+                        rawGroups.live.push(group);
+                    }
+                });
+            }
+        }
+
+        // Filter by the source's own selectedGroups whitelist if configured on the source
+        if (source.selectedGroups && source.selectedGroups.length > 0) {
+            let allowedSourceGroups = source.selectedGroups;
+            if (typeof allowedSourceGroups === 'string') {
+                try { allowedSourceGroups = JSON.parse(allowedSourceGroups); } catch (e) { }
+            }
+            if (Array.isArray(allowedSourceGroups) && allowedSourceGroups.length > 0) {
+                const allowedSet = new Set(allowedSourceGroups);
+                rawGroups.live = rawGroups.live.filter(x => allowedSet.has(x));
+                rawGroups.movie = rawGroups.movie.filter(x => allowedSet.has(x));
+                rawGroups.series = rawGroups.series.filter(x => allowedSet.has(x));
+            }
+        }
+
+        rawGroups.live.sort((a, b) => a.localeCompare(b));
+        rawGroups.movie.sort((a, b) => a.localeCompare(b));
+        rawGroups.series.sort((a, b) => a.localeCompare(b));
+
+        cachedSourceGroupsMap.set(source.id, rawGroups);
+
+        // Reconcile legacy shared groups (if user was saved before Live/Movie/Series were separated)
+        const st = userEditorAccessState[source.id];
+        if (st && st._legacySharedGroups && st._legacySharedGroups.size > 0) {
+            const legacySet = st._legacySharedGroups;
+            delete st._legacySharedGroups;
+
+            const matchedLive = rawGroups.live.filter(g => legacySet.has(g));
+            const matchedMovie = rawGroups.movie.filter(g => legacySet.has(g));
+            const matchedSeries = rawGroups.series.filter(g => legacySet.has(g));
+
+            if (matchedMovie.length > 0 && matchedMovie.length < rawGroups.movie.length) {
+                st.allMovieGroupsMode = false;
+                st.movieGroups = new Set(matchedMovie);
+            }
+            if (matchedSeries.length > 0 && matchedSeries.length < rawGroups.series.length) {
+                st.allSeriesGroupsMode = false;
+                st.seriesGroups = new Set(matchedSeries);
+            }
+            // If legacy groups only contained VOD categories and 0 Live groups, heal Live TV back to All Groups
+            if (matchedLive.length === 0 && (matchedMovie.length > 0 || matchedSeries.length > 0)) {
+                st.allGroupsMode = true;
+                st.groups.clear();
+            } else if (matchedLive.length > 0) {
+                st.allGroupsMode = matchedLive.length >= rawGroups.live.length;
+                st.groups = st.allGroupsMode ? new Set() : new Set(matchedLive);
+            }
+        }
+
+        return rawGroups;
+    } catch (err) {
+        console.warn(`[USER_ACCESS] Failed to fetch groups for source ${source.id}:`, err);
+        return null;
+    } finally {
+        loadingSourceGroupsSet.delete(source.id);
+        if (typeof onComplete === 'function') {
+            onComplete(cachedSourceGroupsMap.get(source.id) || null);
+        }
+    }
+};
+
+/**
+ * Computes how many channels a user can access and returns source/group summary badges.
+ */
+const calculateUserChannelAccess = (user, statsBySource) => {
+    const m3uSources = guideState.settings.m3uSources || [];
+    let totalChannels = 0;
+    Object.values(statsBySource).forEach(s => { totalChannels += s.totalChannels; });
+
+    const isAdmin = Boolean(user?.isAdmin || user?.id === 1);
+    let allowedSources = null;
+    if (!isAdmin && user?.allowed_sources) {
+        try {
+            const parsed = typeof user.allowed_sources === 'string'
+                ? JSON.parse(user.allowed_sources)
+                : user.allowed_sources;
+            if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+                allowedSources = parsed;
+            }
+        } catch (e) {
+            allowedSources = null;
+        }
+    }
+
+    if (isAdmin || !allowedSources) {
+        return {
+            isUnrestricted: true,
+            allowedChannels: totalChannels,
+            totalChannels,
+            sourceBadges: [{ label: 'ALL', isAll: true }]
+        };
+    }
+
+    let allowedChannels = 0;
+    const sourceBadges = [];
+
+    m3uSources.forEach(src => {
+        const perm = allowedSources[src.id];
+        if (!perm || !perm.allowed) return;
+
+        const srcStats = statsBySource[src.id];
+        const totalGroupsCount = srcStats ? srcStats.groups.size : 0;
+        const selectedGroups = Array.isArray(perm.groups) ? perm.groups : [];
+        const allLiveGroups = perm.allLiveGroups !== undefined
+            ? Boolean(perm.allLiveGroups)
+            : (selectedGroups.length === 0);
+        const excludedSet = new Set(Array.isArray(perm.excludedChannels) ? perm.excludedChannels : []);
+
+        let srcAllowedChannels = 0;
+        if (srcStats) {
+            for (const [gName, chList] of srcStats.groups.entries()) {
+                if (!allLiveGroups && !selectedGroups.includes(gName)) continue;
+                chList.forEach(ch => {
+                    if (!excludedSet.has(ch.id)) srcAllowedChannels++;
+                });
+            }
+        }
+        allowedChannels += srcAllowedChannels;
+
+        const subParts = [];
+        if (!allLiveGroups) {
+            if (totalGroupsCount > 0) {
+                subParts.push(`${selectedGroups.length}/${totalGroupsCount} live`);
+            } else {
+                subParts.push(`${selectedGroups.length} live`);
+            }
+        }
+        if (perm.allMovieGroups === false) {
+            const mCount = Array.isArray(perm.movieGroups) ? perm.movieGroups.length : 0;
+            subParts.push(`${mCount} mov`);
+        }
+        if (perm.allSeriesGroups === false) {
+            const sCount = Array.isArray(perm.seriesGroups) ? perm.seriesGroups.length : 0;
+            subParts.push(`${sCount} ser`);
+        }
+
+        sourceBadges.push({
+            label: src.name,
+            subLabel: subParts.join(' · '),
+            isAll: false
+        });
+    });
+
+    return {
+        isUnrestricted: false,
+        allowedChannels,
+        totalChannels,
+        sourceBadges
+    };
+};
+
+/**
+ * Updates the live channel summary badge inside the User Editor Modal.
+ */
+const updateUserEditorChannelSummaryBadge = () => {
+    const badge = document.getElementById('user-editor-channel-summary-badge');
+    if (!badge) return;
+
+    const isAdminChecked = Boolean(UIElements.userEditorIsAdmin?.checked);
+    const statsBySource = buildChannelStatsBySource();
+    let totalChannels = 0;
+    Object.values(statsBySource).forEach(s => { totalChannels += s.totalChannels; });
+
+    if (isAdminChecked) {
+        badge.textContent = totalChannels > 0 ? `All ${totalChannels} Channels (Admin)` : 'All Channels (Admin)';
+        badge.className = 'px-2.5 py-1 text-xs font-bold rounded-full bg-purple-950/80 text-purple-300 border border-purple-700/60';
+        return;
+    }
+
+    let allowedCount = 0;
+    let allowedSourcesCount = 0;
+    const m3uSources = guideState.settings.m3uSources || [];
+
+    m3uSources.forEach(src => {
+        const st = userEditorAccessState[src.id];
+        if (!st || !st.allowed) return;
+        allowedSourcesCount++;
+        const srcStats = statsBySource[src.id];
+        if (!srcStats) return;
+
+        for (const [gName, chList] of srcStats.groups.entries()) {
+            if (!st.allGroupsMode && !st.groups.has(gName)) continue;
+            chList.forEach(ch => {
+                if (!st.excludedChannels.has(ch.id)) allowedCount++;
+            });
+        }
+    });
+
+    if (allowedSourcesCount === 0) {
+        badge.textContent = `0 / ${totalChannels} Channels`;
+        badge.className = 'px-2.5 py-1 text-xs font-bold rounded-full bg-red-950/80 text-red-300 border border-red-700/60';
+    } else if (allowedCount === totalChannels && allowedSourcesCount === m3uSources.length) {
+        badge.textContent = `All ${totalChannels} Channels`;
+        badge.className = 'px-2.5 py-1 text-xs font-bold rounded-full bg-emerald-950/80 text-emerald-300 border border-emerald-700/60';
+    } else {
+        badge.textContent = `${allowedCount} / ${totalChannels} Channels`;
+        badge.className = 'px-2.5 py-1 text-xs font-bold rounded-full bg-blue-950/80 text-blue-300 border border-blue-700/60';
+    }
+};
+
+/**
+ * Renders the 3-Tier (Source -> Inline [Live TV | VOD Movies | VOD Series] Groups -> Optional Specific Channels) tree inside the User Editor Modal.
+ * @param {object|null} user - The user object (null for new user).
+ * @param {boolean} preserveState - If true, re-renders using existing userEditorAccessState.
+ */
+const renderUserSourceList = (user, preserveState = false) => {
     const listEl = UIElements.userEditorSourceList;
     if (!listEl) return;
     listEl.innerHTML = '';
 
     const m3uSources = guideState.settings.m3uSources || [];
-    // Only M3U sources act as content providers we filter. EPG sources are just metadata.
-    // If strict EPG filtering is needed, we can add them, but usually they are 1-1 with M3U or global.
-    // Focusing on M3U sources for access control.
+    const statsBySource = buildChannelStatsBySource();
+    const searchInput = document.getElementById('user-editor-source-search');
+    const searchTerm = (searchInput?.value || '').trim().toLowerCase();
+    const isAdminChecked = Boolean(UIElements.userEditorIsAdmin?.checked);
+
+    if (!preserveState) {
+        userEditorAccessState = {};
+        let allowedSources = null;
+        if (user && user.allowed_sources && !user.isAdmin && user.id !== 1) {
+            try {
+                const parsed = typeof user.allowed_sources === 'string'
+                    ? JSON.parse(user.allowed_sources)
+                    : user.allowed_sources;
+                if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+                    allowedSources = parsed;
+                }
+            } catch (e) {
+                console.error("Error parsing user allowed_sources:", e);
+            }
+        }
+
+        m3uSources.forEach(source => {
+            let isAllowed = true;
+            let allGroupsMode = true;
+            let selectedGroups = [];
+            let excludedChannels = [];
+            let allMovieGroupsMode = true;
+            let selectedMovieGroups = [];
+            let allSeriesGroupsMode = true;
+            let selectedSeriesGroups = [];
+            let legacySharedGroups = null;
+
+            if (allowedSources) {
+                const perm = allowedSources[source.id];
+                if (perm && perm.allowed) {
+                    isAllowed = true;
+                    selectedGroups = Array.isArray(perm.groups) ? perm.groups : [];
+                    allGroupsMode = perm.allLiveGroups !== undefined
+                        ? Boolean(perm.allLiveGroups)
+                        : (selectedGroups.length === 0);
+                    excludedChannels = Array.isArray(perm.excludedChannels) ? perm.excludedChannels : [];
+
+                    if (perm.allMovieGroups !== undefined || Array.isArray(perm.movieGroups)) {
+                        selectedMovieGroups = Array.isArray(perm.movieGroups) ? perm.movieGroups : [];
+                        allMovieGroupsMode = perm.allMovieGroups !== undefined
+                            ? Boolean(perm.allMovieGroups)
+                            : (selectedMovieGroups.length === 0);
+                    } else if (selectedGroups.length > 0) {
+                        legacySharedGroups = new Set(selectedGroups);
+                    }
+
+                    if (perm.allSeriesGroups !== undefined || Array.isArray(perm.seriesGroups)) {
+                        selectedSeriesGroups = Array.isArray(perm.seriesGroups) ? perm.seriesGroups : [];
+                        allSeriesGroupsMode = perm.allSeriesGroups !== undefined
+                            ? Boolean(perm.allSeriesGroups)
+                            : (selectedSeriesGroups.length === 0);
+                    } else if (selectedGroups.length > 0) {
+                        legacySharedGroups = new Set(selectedGroups);
+                    }
+                } else {
+                    isAllowed = false;
+                }
+            }
+
+            userEditorAccessState[source.id] = {
+                allowed: isAllowed,
+                activeSubTab: 'live',
+                allGroupsMode,
+                groups: new Set(selectedGroups),
+                excludedChannels: new Set(excludedChannels),
+                allMovieGroupsMode,
+                movieGroups: new Set(selectedMovieGroups),
+                allSeriesGroupsMode,
+                seriesGroups: new Set(selectedSeriesGroups),
+                _legacySharedGroups: legacySharedGroups,
+                expandedGroups: false,
+                expandedChannelGroups: new Set()
+            };
+
+            // If we already have cached provider groups, reconcile legacy groups immediately
+            if (legacySharedGroups && cachedSourceGroupsMap.has(source.id)) {
+                fetchAndCacheSourceGroups(source, false);
+            }
+        });
+    }
 
     if (m3uSources.length === 0) {
-        listEl.innerHTML = `<tr><td colspan="3" class="text-center text-gray-500 py-4">No sources available.</td></tr>`;
+        listEl.innerHTML = `<div class="text-center text-gray-500 py-8 text-sm">No M3U or Xtream Codes sources configured yet.</div>`;
+        updateUserEditorChannelSummaryBadge();
         return;
     }
 
-    let allowedSources = null;
-    if (user && user.allowed_sources) {
-        try {
-            allowedSources = JSON.parse(user.allowed_sources);
-        } catch (e) {
-            console.error("Error parsing user allowed_sources:", e);
-        }
-    }
-
     m3uSources.forEach(source => {
-        // PERMISSION LOGIC:
-        // If allowedSources is null (legacy or admin-like), default to ALLOWED.
-        // If allowedSources exists, check if this source is in it.
-        // For NEW users (user is null), default to ALLOWED (or user choice, but UI defaults to checked).
+        const state = userEditorAccessState[source.id] || {
+            allowed: true,
+            activeSubTab: 'live',
+            allGroupsMode: true,
+            groups: new Set(),
+            excludedChannels: new Set(),
+            allMovieGroupsMode: true,
+            movieGroups: new Set(),
+            allSeriesGroupsMode: true,
+            seriesGroups: new Set(),
+            expandedGroups: false,
+            expandedChannelGroups: new Set()
+        };
+        userEditorAccessState[source.id] = state;
 
-        let isAllowed = true;
-        let groupCount = 0;
-        let selectedGroups = [];
+        const srcStats = statsBySource[source.id] || { totalChannels: 0, groups: new Map() };
+        const cachedCats = cachedSourceGroupsMap.get(source.id) || null;
+        const isFetchingCats = loadingSourceGroupsSet.has(source.id);
 
-        if (allowedSources) {
-            // If permissions exist, strict whitelist.
-            if (allowedSources[source.id] && allowedSources[source.id].allowed) {
-                isAllowed = true;
-                selectedGroups = allowedSources[source.id].groups || [];
-                groupCount = selectedGroups.length;
-            } else {
-                isAllowed = false;
-            }
+        // Merge live groups from guideState.channels and cached provider categories
+        const liveGroupSet = new Set(srcStats.groups.keys());
+        if (cachedCats && Array.isArray(cachedCats.live)) {
+            cachedCats.live.forEach(g => liveGroupSet.add(g));
         }
-        // If !allowedSources, we assume full access, so isAllowed=true, groupCount=0 (all).
+        const allLiveGroupNames = Array.from(liveGroupSet).sort((a, b) => a.localeCompare(b));
+        const allMovieGroupNames = cachedCats ? cachedCats.movie : [];
+        const allSeriesGroupNames = cachedCats ? cachedCats.series : [];
 
-        const tr = document.createElement('tr');
-        tr.className = "hover:bg-gray-700/30 transition-colors";
-        tr.dataset.sourceId = source.id;
-        tr.innerHTML = `
-            <td class="px-3 py-2 text-center">
-                <input type="checkbox" class="user-source-checkbox h-4 w-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500" ${isAllowed ? 'checked' : ''}>
-            </td>
-            <td class="px-3 py-2 text-gray-300 font-medium">${source.name}</td>
-            <td class="px-3 py-2 text-right">
-                <button type="button" class="user-group-filter-btn text-xs font-bold py-1 px-3 rounded-full transition-colors ${isAllowed ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-gray-600 text-gray-400 cursor-not-allowed'}" ${isAllowed ? '' : 'disabled'}>
-                    ${groupCount > 0 ? `${groupCount} Groups` : 'All Groups'}
-                </button>
-            </td>
+        // Calculate allowed live channels for this source
+        let srcAllowedChannels = 0;
+        let srcAllowedLiveGroupsCount = 0;
+        if (state.allowed || isAdminChecked) {
+            allLiveGroupNames.forEach(gName => {
+                const groupAllowed = isAdminChecked || state.allGroupsMode || state.groups.has(gName);
+                if (!groupAllowed) return;
+                srcAllowedLiveGroupsCount++;
+                const chList = srcStats.groups.get(gName) || [];
+                chList.forEach(ch => {
+                    if (isAdminChecked || !state.excludedChannels.has(ch.id)) {
+                        srcAllowedChannels++;
+                    }
+                });
+            });
+        }
+
+        // Filter items by searchTerm
+        const matchingLiveGroupNames = searchTerm
+            ? allLiveGroupNames.filter(gName => {
+                if (source.name.toLowerCase().includes(searchTerm)) return true;
+                if (gName.toLowerCase().includes(searchTerm)) return true;
+                const chs = srcStats.groups.get(gName) || [];
+                return chs.some(c => c.name.toLowerCase().includes(searchTerm) || (c.chno && String(c.chno).includes(searchTerm)));
+            })
+            : allLiveGroupNames;
+
+        const matchingMovieGroupNames = searchTerm
+            ? allMovieGroupNames.filter(gName => source.name.toLowerCase().includes(searchTerm) || gName.toLowerCase().includes(searchTerm))
+            : allMovieGroupNames;
+
+        const matchingSeriesGroupNames = searchTerm
+            ? allSeriesGroupNames.filter(gName => source.name.toLowerCase().includes(searchTerm) || gName.toLowerCase().includes(searchTerm))
+            : allSeriesGroupNames;
+
+        if (searchTerm &&
+            !source.name.toLowerCase().includes(searchTerm) &&
+            matchingLiveGroupNames.length === 0 &&
+            matchingMovieGroupNames.length === 0 &&
+            matchingSeriesGroupNames.length === 0
+        ) {
+            return;
+        }
+
+        const isSourceEnabled = isAdminChecked || state.allowed;
+        const showGroupsPanel = !isAdminChecked && isSourceEnabled && (state.expandedGroups || Boolean(searchTerm));
+
+        // Automatically trigger category fetch when panel is expanded (or if legacy groups need reconciliation)
+        if ((showGroupsPanel || state._legacySharedGroups) && !cachedCats && !isFetchingCats) {
+            fetchAndCacheSourceGroups(source, false, () => {
+                renderUserSourceList(user, true);
+            });
+        }
+
+        const card = document.createElement('div');
+        card.className = `rounded-xl border transition-all ${isSourceEnabled ? 'bg-gray-900/90 border-gray-700/80' : 'bg-gray-900/40 border-gray-800/70 opacity-70'}`;
+        card.dataset.sourceId = source.id;
+
+        const isAllUnrestricted = state.allGroupsMode && state.allMovieGroupsMode && state.allSeriesGroupsMode;
+        const summaryParts = [];
+        if (!state.allGroupsMode) {
+            summaryParts.push(`Live ${state.groups.size}/${allLiveGroupNames.length || state.groups.size}`);
+        }
+        if (!state.allMovieGroupsMode) {
+            summaryParts.push(`Movies ${state.movieGroups.size}${cachedCats ? `/${allMovieGroupNames.length}` : ''}`);
+        }
+        if (!state.allSeriesGroupsMode) {
+            summaryParts.push(`Series ${state.seriesGroups.size}${cachedCats ? `/${allSeriesGroupNames.length}` : ''}`);
+        }
+
+        const groupSummaryLabel = isAdminChecked
+            ? 'All Groups & VOD'
+            : (!state.allowed
+                ? 'Blocked'
+                : (isAllUnrestricted
+                    ? `All Groups & VOD`
+                    : summaryParts.join(' · ')));
+
+        const excludedCount = state.excludedChannels.size;
+        const activeSubTab = state.activeSubTab || 'live';
+
+        const liveTabBadgeText = state.allGroupsMode
+            ? `All ${allLiveGroupNames.length}`
+            : `${ srcAllowedLiveGroupsCount }/${allLiveGroupNames.length}`;
+        const movieTabBadgeText = !cachedCats
+            ? (state.allMovieGroupsMode ? 'All' : `${state.movieGroups.size}`)
+            : (state.allMovieGroupsMode ? `All ${allMovieGroupNames.length}` : `${allMovieGroupNames.filter(g => state.movieGroups.has(g)).length}/${allMovieGroupNames.length}`);
+        const seriesTabBadgeText = !cachedCats
+            ? (state.allSeriesGroupsMode ? 'All' : `${state.seriesGroups.size}`)
+            : (state.allSeriesGroupsMode ? `All ${allSeriesGroupNames.length}` : `${allSeriesGroupNames.filter(g => state.seriesGroups.has(g)).length}/${allSeriesGroupNames.length}`);
+
+        card.innerHTML = `
+            <div class="p-3 flex flex-wrap items-center justify-between gap-2">
+                <label class="flex items-center gap-3 cursor-pointer min-w-0 flex-grow">
+                    <input type="checkbox" class="user-source-checkbox h-4 w-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500"
+                        ${isSourceEnabled ? 'checked' : ''} ${isAdminChecked ? 'disabled' : ''}>
+                    <div class="min-w-0">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="text-sm font-bold text-white truncate">${escapeHtmlAttr(source.name)}</span>
+                            <span class="px-1.5 py-0.5 text-[10px] font-bold uppercase rounded bg-gray-800 text-gray-300 border border-gray-700">${escapeHtmlAttr(source.type || 'm3u')}</span>
+                            <span class="px-2 py-0.5 text-[11px] font-semibold rounded-full ${isSourceEnabled ? 'bg-blue-950/80 text-blue-300 border border-blue-700/50' : 'bg-gray-800 text-gray-500 border border-gray-700'}">
+                                ${srcAllowedChannels} / ${srcStats.totalChannels} ch
+                            </span>
+                            ${excludedCount > 0 && !isAdminChecked && state.allowed ? `<span class="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-amber-950/80 text-amber-300 border border-amber-700/50">${excludedCount} ch excluded</span>` : ''}
+                            ${!isAdminChecked && state.allowed && (!state.allMovieGroupsMode || !state.allSeriesGroupsMode) ? `<span class="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-purple-950/80 text-purple-300 border border-purple-700/50">VOD Filtered</span>` : ''}
+                        </div>
+                    </div>
+                </label>
+
+                <div class="flex items-center gap-1.5 flex-shrink-0">
+                    <button type="button" class="user-toggle-groups-btn text-xs font-semibold py-1.5 px-3 rounded-lg border transition-colors flex items-center gap-1.5 ${isSourceEnabled && !isAdminChecked ? 'bg-gray-800 hover:bg-gray-700 text-gray-200 border-gray-600' : 'bg-gray-800/50 text-gray-500 border-gray-800 cursor-not-allowed'}"
+                        ${isSourceEnabled && !isAdminChecked ? '' : 'disabled'}>
+                        <span>${escapeHtmlAttr(groupSummaryLabel)}</span>
+                        <svg class="w-3.5 h-3.5 transition-transform ${showGroupsPanel ? 'rotate-180' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                    </button>
+                </div>
+            </div>
+            <div class="user-source-groups-panel ${showGroupsPanel ? '' : 'hidden'} border-t border-gray-800 bg-gray-950/50 px-3 py-2.5 space-y-2.5 rounded-b-xl">
+                <div class="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-gray-800/80">
+                    <div class="inline-flex items-center bg-gray-900 p-1 rounded-lg border border-gray-800 gap-1">
+                        <button type="button" data-subtab="live" class="user-src-subtab-btn px-2.5 py-1 rounded-md text-xs font-semibold transition-colors flex items-center gap-1.5 ${activeSubTab === 'live' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}">
+                            <span>Live TV</span>
+                            <span class="px-1.5 py-0.2 text-[10px] rounded-full ${activeSubTab === 'live' ? 'bg-blue-800/80 text-blue-100' : 'bg-gray-800 text-gray-400'}">${liveTabBadgeText}</span>
+                        </button>
+                        <button type="button" data-subtab="movie" class="user-src-subtab-btn px-2.5 py-1 rounded-md text-xs font-semibold transition-colors flex items-center gap-1.5 ${activeSubTab === 'movie' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}">
+                            <span>VOD Movies</span>
+                            <span class="px-1.5 py-0.2 text-[10px] rounded-full ${activeSubTab === 'movie' ? 'bg-blue-800/80 text-blue-100' : 'bg-gray-800 text-gray-400'}">${isFetchingCats && !cachedCats ? '...' : movieTabBadgeText}</span>
+                        </button>
+                        <button type="button" data-subtab="series" class="user-src-subtab-btn px-2.5 py-1 rounded-md text-xs font-semibold transition-colors flex items-center gap-1.5 ${activeSubTab === 'series' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}">
+                            <span>VOD Series</span>
+                            <span class="px-1.5 py-0.2 text-[10px] rounded-full ${activeSubTab === 'series' ? 'bg-blue-800/80 text-blue-100' : 'bg-gray-800 text-gray-400'}">${isFetchingCats && !cachedCats ? '...' : seriesTabBadgeText}</span>
+                        </button>
+                    </div>
+                    <div class="flex items-center gap-2 text-[11px]">
+                        <button type="button" class="user-src-all-groups-btn text-blue-400 hover:text-blue-300 font-semibold">Select All</button>
+                        <span class="text-gray-700">·</span>
+                        <button type="button" class="user-src-no-groups-btn text-gray-400 hover:text-gray-200 font-semibold">Deselect All</button>
+                        ${activeSubTab === 'live' && excludedCount > 0 ? `<span class="text-gray-700">·</span><button type="button" class="user-src-reset-channels-btn text-amber-400 hover:text-amber-300 font-semibold">Reset Channel Exclusions</button>` : ''}
+                        <span class="text-gray-700">·</span>
+                        <button type="button" class="user-src-refresh-cats-btn text-gray-400 hover:text-white font-semibold flex items-center gap-1" title="Force refresh categories from provider">
+                            <svg class="w-3 h-3 ${isFetchingCats ? 'animate-spin text-blue-400' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                            <span>Refresh</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="user-source-groups-list space-y-1.5 max-h-64 overflow-y-auto custom-scrollbar pr-1"></div>
+            </div>
         `;
 
-        // Store current groups on the button or row for easy access
-        // We'll attach it to the DOM element property to avoid parsing JSON in attributes
-        const btn = tr.querySelector('.user-group-filter-btn');
-        btn.dataset.sourceId = source.id;
-        btn._selectedGroups = selectedGroups; // Direct property assignment
-
-        // Checkbox listener to toggle button state
-        const checkbox = tr.querySelector('.user-source-checkbox');
-        checkbox.addEventListener('change', (e) => {
-            const checked = e.target.checked;
-            btn.disabled = !checked;
-            btn.classList.toggle('bg-blue-600', checked);
-            btn.classList.toggle('hover:bg-blue-500', checked);
-            btn.classList.toggle('text-white', checked);
-            btn.classList.toggle('bg-gray-600', !checked);
-            btn.classList.toggle('text-gray-400', !checked);
-            btn.classList.toggle('cursor-not-allowed', !checked);
+        // Sub-tab switching (Live TV | VOD Movies | VOD Series)
+        card.querySelectorAll('.user-src-subtab-btn').forEach(tabBtn => {
+            tabBtn.addEventListener('click', () => {
+                state.activeSubTab = tabBtn.dataset.subtab || 'live';
+                renderUserSourceList(user, true);
+            });
         });
 
-        // Button listener
-        btn.addEventListener('click', () => {
-            openUserGroupFilterModal(source.id, btn._selectedGroups, source.name, btn);
+        // Force refresh categories button
+        card.querySelector('.user-src-refresh-cats-btn')?.addEventListener('click', () => {
+            if (loadingSourceGroupsSet.has(source.id)) return;
+            fetchAndCacheSourceGroups(source, true, () => {
+                renderUserSourceList(user, true);
+            });
+            renderUserSourceList(user, true);
         });
 
-        listEl.appendChild(tr);
+        // Populate body according to activeSubTab
+        const groupsListEl = card.querySelector('.user-source-groups-list');
+        if (showGroupsPanel && groupsListEl) {
+            if (activeSubTab === 'live') {
+                if (matchingLiveGroupNames.length === 0) {
+                    groupsListEl.innerHTML = `<div class="text-xs text-gray-500 py-3 text-center">${isFetchingCats ? 'Loading Live TV groups...' : 'No Live TV groups found for this source.'}</div>`;
+                } else {
+                    matchingLiveGroupNames.forEach(groupName => {
+                        const chList = srcStats.groups.get(groupName) || [];
+                        const isGroupChecked = state.allGroupsMode || state.groups.has(groupName);
+                        const allowedInGroup = isGroupChecked
+                            ? chList.filter(ch => !state.excludedChannels.has(ch.id)).length
+                            : 0;
+
+                        const isChannelsExpanded = state.expandedChannelGroups.has(groupName) ||
+                            (Boolean(searchTerm) && !groupName.toLowerCase().includes(searchTerm) && chList.some(c => c.name.toLowerCase().includes(searchTerm)));
+
+                        const groupWrap = document.createElement('div');
+                        groupWrap.className = 'rounded-lg bg-gray-900/80 border border-gray-800/90 overflow-hidden';
+
+                        const hasExcludedInGroup = chList.some(ch => state.excludedChannels.has(ch.id));
+
+                        groupWrap.innerHTML = `
+                            <div class="px-2.5 py-1.5 flex items-center justify-between gap-2 hover:bg-gray-800/50 transition-colors">
+                                <label class="flex items-center gap-2.5 cursor-pointer min-w-0 flex-grow">
+                                    <input type="checkbox" class="user-group-checkbox h-3.5 w-3.5 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500"
+                                        data-group-name="${escapeHtmlAttr(groupName)}" ${isGroupChecked ? 'checked' : ''}>
+                                    <span class="text-xs font-medium ${isGroupChecked ? 'text-gray-200' : 'text-gray-500 line-through'} truncate">${escapeHtmlAttr(groupName)}</span>
+                                </label>
+                                ${chList.length > 0 ? `
+                                <button type="button" class="user-expand-channels-btn text-[11px] font-semibold px-2 py-0.5 rounded border transition-colors flex items-center gap-1 flex-shrink-0 ${hasExcludedInGroup ? 'bg-amber-950/60 text-amber-300 border-amber-700/50' : 'bg-gray-800/80 hover:bg-gray-700 text-gray-400 hover:text-gray-200 border-gray-700/70'}"
+                                    title="Expand to include/exclude specific channels in this group">
+                                    <span>${allowedInGroup}/${chList.length} ch</span>
+                                    <svg class="w-3 h-3 transition-transform ${isChannelsExpanded ? 'rotate-180' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                                </button>` : ''}
+                            </div>
+                            <div class="user-group-channels-panel ${isChannelsExpanded && chList.length > 0 ? '' : 'hidden'} border-t border-gray-800/80 bg-gray-950/80 px-3 py-2">
+                                <div class="flex items-center justify-between text-[10px] text-gray-400 mb-1.5">
+                                    <span>Specific channels in <strong>${escapeHtmlAttr(groupName)}</strong>:</span>
+                                    <div class="flex gap-2">
+                                        <button type="button" class="user-grp-ch-all text-blue-400 hover:text-blue-300 font-semibold">All</button>
+                                        <span>·</span>
+                                        <button type="button" class="user-grp-ch-none text-gray-400 hover:text-gray-200 font-semibold">None</button>
+                                    </div>
+                                </div>
+                                <div class="user-group-channels-grid grid grid-cols-1 sm:grid-cols-2 gap-1 max-h-44 overflow-y-auto custom-scrollbar pr-1"></div>
+                            </div>
+                        `;
+
+                        // Live Group checkbox toggle (strictly affects Live TV groups)
+                        const grpCheckbox = groupWrap.querySelector('.user-group-checkbox');
+                        grpCheckbox.addEventListener('change', (e) => {
+                            const checked = e.target.checked;
+                            if (state.allGroupsMode) {
+                                state.allGroupsMode = false;
+                                state.groups = new Set(allLiveGroupNames);
+                            }
+                            if (checked) {
+                                state.groups.add(groupName);
+                                if (allLiveGroupNames.length > 0 && state.groups.size >= allLiveGroupNames.length) {
+                                    state.allGroupsMode = true;
+                                    state.groups.clear();
+                                }
+                            } else {
+                                state.groups.delete(groupName);
+                            }
+                            renderUserSourceList(user, true);
+                        });
+
+                        // Expand channels button (Tier 3)
+                        const expandChBtn = groupWrap.querySelector('.user-expand-channels-btn');
+                        expandChBtn?.addEventListener('click', () => {
+                            if (state.expandedChannelGroups.has(groupName)) {
+                                state.expandedChannelGroups.delete(groupName);
+                            } else {
+                                state.expandedChannelGroups.add(groupName);
+                            }
+                            renderUserSourceList(user, true);
+                        });
+
+                        // Populate Tier 3 Channels if expanded
+                        if (isChannelsExpanded && chList.length > 0) {
+                            const chGrid = groupWrap.querySelector('.user-group-channels-grid');
+                            const visibleChannels = searchTerm && !groupName.toLowerCase().includes(searchTerm)
+                                ? chList.filter(c => c.name.toLowerCase().includes(searchTerm) || (c.chno && String(c.chno).includes(searchTerm)))
+                                : chList;
+
+                            visibleChannels.forEach(ch => {
+                                const isChAllowed = isGroupChecked && !state.excludedChannels.has(ch.id);
+                                const chLabel = document.createElement('label');
+                                chLabel.className = 'flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-800/70 cursor-pointer text-[11px]';
+                                chLabel.innerHTML = `
+                                    <input type="checkbox" class="user-channel-checkbox h-3 w-3 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500"
+                                        ${isChAllowed ? 'checked' : ''} ${isGroupChecked ? '' : 'disabled'}>
+                                    <span class="truncate ${isChAllowed ? 'text-gray-300' : 'text-gray-500 line-through'}">
+                                        ${ch.chno ? `<strong class="text-gray-400 font-mono mr-1">${escapeHtmlAttr(ch.chno)}</strong>` : ''}${escapeHtmlAttr(ch.name)}
+                                    </span>
+                                `;
+                                chLabel.querySelector('.user-channel-checkbox').addEventListener('change', (ev) => {
+                                    if (ev.target.checked) {
+                                        state.excludedChannels.delete(ch.id);
+                                    } else {
+                                        state.excludedChannels.add(ch.id);
+                                    }
+                                    renderUserSourceList(user, true);
+                                });
+                                chGrid.appendChild(chLabel);
+                            });
+
+                            groupWrap.querySelector('.user-grp-ch-all')?.addEventListener('click', () => {
+                                chList.forEach(ch => state.excludedChannels.delete(ch.id));
+                                renderUserSourceList(user, true);
+                            });
+                            groupWrap.querySelector('.user-grp-ch-none')?.addEventListener('click', () => {
+                                chList.forEach(ch => state.excludedChannels.add(ch.id));
+                                renderUserSourceList(user, true);
+                            });
+                        }
+
+                        groupsListEl.appendChild(groupWrap);
+                    });
+                }
+            } else if (activeSubTab === 'movie' || activeSubTab === 'series') {
+                const isMovieTab = activeSubTab === 'movie';
+                const allVodCats = isMovieTab ? allMovieGroupNames : allSeriesGroupNames;
+                const matchingVodCats = isMovieTab ? matchingMovieGroupNames : matchingSeriesGroupNames;
+                const allVodModeKey = isMovieTab ? 'allMovieGroupsMode' : 'allSeriesGroupsMode';
+                const vodSetKey = isMovieTab ? 'movieGroups' : 'seriesGroups';
+
+                if (isFetchingCats && !cachedCats) {
+                    groupsListEl.innerHTML = `<div class="text-xs text-gray-400 py-4 text-center flex items-center justify-center gap-2"><svg class="w-4 h-4 animate-spin text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg><span>Loading ${isMovieTab ? 'VOD Movie' : 'VOD Series'} categories...</span></div>`;
+                } else if (matchingVodCats.length === 0) {
+                    groupsListEl.innerHTML = `<div class="text-xs text-gray-500 py-3 text-center">No ${isMovieTab ? 'VOD Movie' : 'VOD Series'} categories found for this source.</div>`;
+                } else {
+                    const gridWrap = document.createElement('div');
+                    gridWrap.className = 'grid grid-cols-1 sm:grid-cols-2 gap-1.5';
+
+                    matchingVodCats.forEach(catName => {
+                        const isCatChecked = state[allVodModeKey] || state[vodSetKey].has(catName);
+                        const itemLabel = document.createElement('label');
+                        itemLabel.className = 'px-2.5 py-1.5 rounded-lg bg-gray-900/80 border border-gray-800/90 hover:bg-gray-800/50 transition-colors flex items-center gap-2.5 cursor-pointer min-w-0';
+                        itemLabel.innerHTML = `
+                            <input type="checkbox" class="user-vod-group-checkbox h-3.5 w-3.5 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500"
+                                data-group-name="${escapeHtmlAttr(catName)}" ${isCatChecked ? 'checked' : ''}>
+                            <span class="text-xs font-medium ${isCatChecked ? 'text-gray-200' : 'text-gray-500 line-through'} truncate">${escapeHtmlAttr(catName)}</span>
+                        `;
+                        itemLabel.querySelector('.user-vod-group-checkbox').addEventListener('change', (ev) => {
+                            const checked = ev.target.checked;
+                            if (state[allVodModeKey]) {
+                                state[allVodModeKey] = false;
+                                state[vodSetKey] = new Set(allVodCats);
+                            }
+                            if (checked) {
+                                state[vodSetKey].add(catName);
+                                if (allVodCats.length > 0 && state[vodSetKey].size >= allVodCats.length) {
+                                    state[allVodModeKey] = true;
+                                    state[vodSetKey].clear();
+                                }
+                            } else {
+                                state[vodSetKey].delete(catName);
+                            }
+                            renderUserSourceList(user, true);
+                        });
+                        gridWrap.appendChild(itemLabel);
+                    });
+
+                    groupsListEl.appendChild(gridWrap);
+                }
+            }
+        }
+
+        // Source checkbox listener
+        const srcCheckbox = card.querySelector('.user-source-checkbox');
+        srcCheckbox.addEventListener('change', (e) => {
+            state.allowed = e.target.checked;
+            renderUserSourceList(user, true);
+        });
+
+        // Toggle inline groups panel button
+        const toggleGroupsBtn = card.querySelector('.user-toggle-groups-btn');
+        toggleGroupsBtn.addEventListener('click', () => {
+            state.expandedGroups = !state.expandedGroups;
+            renderUserSourceList(user, true);
+        });
+
+        // Select All / Deselect All inside the currently active sub-tab ONLY
+        card.querySelector('.user-src-all-groups-btn')?.addEventListener('click', () => {
+            if (activeSubTab === 'movie') {
+                state.allMovieGroupsMode = true;
+                state.movieGroups.clear();
+            } else if (activeSubTab === 'series') {
+                state.allSeriesGroupsMode = true;
+                state.seriesGroups.clear();
+            } else {
+                state.allGroupsMode = true;
+                state.groups.clear();
+            }
+            renderUserSourceList(user, true);
+        });
+        card.querySelector('.user-src-no-groups-btn')?.addEventListener('click', () => {
+            if (activeSubTab === 'movie') {
+                state.allMovieGroupsMode = false;
+                state.movieGroups.clear();
+            } else if (activeSubTab === 'series') {
+                state.allSeriesGroupsMode = false;
+                state.seriesGroups.clear();
+            } else {
+                state.allGroupsMode = false;
+                state.groups.clear();
+            }
+            renderUserSourceList(user, true);
+        });
+        card.querySelector('.user-src-reset-channels-btn')?.addEventListener('click', () => {
+            state.excludedChannels.clear();
+            renderUserSourceList(user, true);
+        });
+
+        listEl.appendChild(card);
     });
-};
 
-/**
- * Opens the Group Filter Modal for a User.
- */
+    updateUserEditorChannelSummaryBadge();
+};
 const openUserGroupFilterModal = async (sourceId, selectedGroups, sourceName, btnElement) => {
     currentGroupEditorContext = 'user-editor';
     currentGroupSourceId = sourceId;
@@ -466,7 +1206,7 @@ const openUserGroupFilterModal = async (sourceId, selectedGroups, sourceName, bt
     } catch (e) {
         showNotification("Failed to fetch groups: " + e.message, true);
     } finally {
-        btnElement.textContent = selectedGroups.length > 0 ? `${selectedGroups.length} Groups` : 'All Groups';
+        btnElement.textContent = 'VOD / Modal';
         btnElement.disabled = false;
     }
 };
@@ -715,20 +1455,25 @@ const renderSourceTable = (sourceType) => {
 export const updateUIFromSettings = async () => {
     const settings = guideState.settings;
 
-    // Run hardware detection which may add new profiles to the state
-    const hardware = await handleHardwareDetection();
-
-    // One-time timezone auto-detection and setting.
+    // One-time timezone auto-detection and setting MUST run synchronously before any await
+    // so that initial guide rendering does not race with /api/hardware and render in UTC+0.
     const timezoneSetFlag = localStorage.getItem('vini_timezone_auto_set');
+    const browserOffset = Math.round(-(new Date().getTimezoneOffset() / 60));
     if (!timezoneSetFlag) {
-        const browserOffset = Math.round(-(new Date().getTimezoneOffset() / 60));
         settings.timezoneOffset = browserOffset;
         console.log(`[SETTINGS] First-run timezone detection. Setting to browser offset: ${browserOffset} and saving.`);
-        saveGlobalSetting({ timezoneOffset: browserOffset });
+        if (appState.currentUser?.isAdmin) {
+            saveGlobalSetting({ timezoneOffset: browserOffset });
+        }
         localStorage.setItem('vini_timezone_auto_set', 'true');
+    } else if (settings.timezoneOffset === undefined || settings.timezoneOffset === null || Number.isNaN(Number(settings.timezoneOffset))) {
+        settings.timezoneOffset = browserOffset;
     } else {
-        settings.timezoneOffset = settings.timezoneOffset ?? Math.round(-(new Date().getTimezoneOffset() / 60));
+        settings.timezoneOffset = Number(settings.timezoneOffset);
     }
+
+    // Run hardware detection which may add new profiles to the state
+    const hardware = await handleHardwareDetection();
 
     try {
         const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -774,6 +1519,15 @@ export const updateUIFromSettings = async () => {
     if (UIElements.logMaxFilesInput) UIElements.logMaxFilesInput.value = settings.logs.maxFiles;
     if (UIElements.logMaxSizeInput) UIElements.logMaxSizeInput.value = Math.round(settings.logs.maxFileSizeBytes / (1024 * 1024));
     if (UIElements.logAutoDeleteDaysInput) UIElements.logAutoDeleteDaysInput.value = settings.logs.autoDeleteDays;
+
+    // Update Logo & Image Cache Management toggles and stats
+    if (UIElements.storeLogosInternallyToggle) {
+        UIElements.storeLogosInternallyToggle.checked = settings.storeLogosInternally !== false;
+    }
+    if (UIElements.smartLogoMatchingToggle) {
+        UIElements.smartLogoMatchingToggle.checked = settings.smartLogoMatching !== false;
+    }
+    refreshLogoCacheInfo();
 
     // Fetch and display log info
     refreshLogInfo();
@@ -907,29 +1661,200 @@ export const updateUIFromSettings = async () => {
 
 // --- User Management (Admin) ---
 
+let currentEditingUser = null;
+
+const formatUserTimestamp = (rawTs, includeTime = false) => {
+    if (!rawTs) return null;
+    let normalized = String(rawTs).trim();
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(normalized)) {
+        normalized = normalized.replace(' ', 'T') + 'Z';
+    }
+    const dt = new Date(normalized);
+    if (isNaN(dt.getTime())) return rawTs;
+    const pad = (n) => String(n).padStart(2, '0');
+    const datePart = `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${dt.getFullYear()}`;
+    if (!includeTime) return datePart;
+    const timePart = `${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
+    return `${datePart}, ${timePart}`;
+};
+
+const syncUserEditorAdminLockState = () => {
+    const isAdminChecked = Boolean(UIElements.userEditorIsAdmin?.checked);
+    if (UIElements.userEditorCanUseDvr) {
+        if (isAdminChecked) UIElements.userEditorCanUseDvr.checked = true;
+        UIElements.userEditorCanUseDvr.disabled = isAdminChecked;
+    }
+    const tabCheckboxes = document.querySelectorAll('#user-editor-tabs-grid .user-tab-checkbox');
+    tabCheckboxes.forEach(cb => {
+        if (isAdminChecked) cb.checked = true;
+        cb.disabled = isAdminChecked;
+    });
+    const tabsCard = document.getElementById('user-editor-tabs-card');
+    if (tabsCard) {
+        tabsCard.classList.toggle('opacity-60', isAdminChecked);
+    }
+    renderUserSourceList(currentEditingUser, true);
+};
+
+/**
+ * Renders the filtered user rows into #user-list.
+ */
+export const renderUserTableRows = () => {
+    if (!UIElements.userList) return;
+    const searchInput = document.getElementById('user-search-input');
+    const countBadge = document.getElementById('user-count-badge');
+    const tableContainer = document.getElementById('user-table-container');
+    const noUsersMsg = document.getElementById('no-users-message');
+
+    if (countBadge) {
+        countBadge.textContent = String(cachedUsersList.length);
+    }
+
+    const query = (searchInput?.value || '').trim().toLowerCase();
+    const filteredUsers = query
+        ? cachedUsersList.filter(u =>
+            (u.username || '').toLowerCase().includes(query) ||
+            (u.isAdmin ? 'admin administrator' : 'user streamer').includes(query)
+        )
+        : cachedUsersList;
+
+    if (filteredUsers.length === 0) {
+        UIElements.userList.innerHTML = '';
+        tableContainer?.classList.add('hidden');
+        noUsersMsg?.classList.remove('hidden');
+        return;
+    }
+
+    tableContainer?.classList.remove('hidden');
+    noUsersMsg?.classList.add('hidden');
+
+    const statsBySource = buildChannelStatsBySource();
+
+    UIElements.userList.innerHTML = filteredUsers.map(user => {
+        const isUserAdmin = Boolean(user.isAdmin || user.id === 1);
+        const isCurrentUser = appState.currentUser && String(appState.currentUser.id) === String(user.id);
+        const createdStr = formatUserTimestamp(user.created_at, false) || '—';
+        const lastLoginStr = formatUserTimestamp(user.last_login, true);
+
+        // Role / User Level cell
+        const roleBadgeHtml = isUserAdmin
+            ? `<div class="flex items-center gap-1.5">
+                   <span class="px-2.5 py-1 inline-flex items-center gap-1.5 text-xs font-bold rounded-lg bg-purple-950/80 text-purple-300 border border-purple-700/60">
+                       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
+                       Admin
+                   </span>
+               </div>`
+            : `<div class="flex items-center gap-1.5 flex-wrap">
+                   <span class="px-2.5 py-1 inline-flex items-center gap-1.5 text-xs font-semibold rounded-lg bg-gray-800 text-gray-300 border border-gray-600/80">
+                       <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
+                       Streamer
+                   </span>
+                   ${user.canUseDvr ? '<span class="px-2 py-0.5 text-[10px] font-bold uppercase rounded-md bg-blue-950/80 text-blue-300 border border-blue-700/50" title="Can schedule & record DVR">DVR Rec</span>' : ''}
+               </div>`;
+
+        // Password cell
+        const hasPlainPassword = Boolean(user.password_plain);
+        const passwordCellHtml = hasPlainPassword
+            ? `<div class="flex items-center gap-1.5">
+                   <span class="user-pwd-mask font-mono text-xs text-gray-400 tracking-widest select-all" data-plain="${escapeHtmlAttr(user.password_plain)}" data-shown="false">••••••••</span>
+                   <button type="button" class="toggle-user-pwd-btn p-1 text-gray-400 hover:text-white rounded-md hover:bg-gray-700/60 transition-colors" title="Show / Hide Password">
+                       <svg class="w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                       </svg>
+                   </button>
+                   <button type="button" class="copy-user-pwd-btn p-1 text-gray-400 hover:text-blue-400 rounded-md hover:bg-gray-700/60 transition-colors" data-plain="${escapeHtmlAttr(user.password_plain)}" data-username="${escapeHtmlAttr(user.username)}" title="Copy Password">
+                       <svg class="w-3.5 h-3.5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                       </svg>
+                   </button>
+               </div>`
+            : `<div class="flex items-center gap-1.5">
+                   <span class="font-mono text-xs text-gray-500 tracking-widest">••••••••</span>
+                   <button type="button" class="edit-user-btn text-[11px] text-blue-400 hover:text-blue-300 underline" title="Log in as this user or set a password in Edit to make it viewable">Set/Cache</button>
+               </div>`;
+
+        // Visible Tabs cell
+        let allowedTabsArr = null;
+        if (!isUserAdmin && user.allowed_tabs) {
+            try {
+                const parsed = typeof user.allowed_tabs === 'string' ? JSON.parse(user.allowed_tabs) : user.allowed_tabs;
+                if (Array.isArray(parsed)) allowedTabsArr = parsed;
+            } catch (e) { }
+        }
+        let tabsCellHtml = '';
+        if (isUserAdmin || !allowedTabsArr || allowedTabsArr.length >= USER_TAB_DEFINITIONS.length) {
+            tabsCellHtml = `<span class="px-2 py-0.5 text-xs font-bold rounded-md bg-blue-950/70 text-blue-300 border border-blue-700/50">ALL</span>`;
+        } else if (allowedTabsArr.length === 0) {
+            tabsCellHtml = `<span class="px-2 py-0.5 text-xs font-semibold rounded-md bg-red-950/70 text-red-300 border border-red-700/50">None</span>`;
+        } else {
+            const pills = USER_TAB_DEFINITIONS
+                .filter(t => allowedTabsArr.includes(t.id))
+                .map(t => `<span class="px-2 py-0.5 text-[11px] font-medium rounded-md bg-gray-800 text-gray-300 border border-gray-700">${t.short}</span>`)
+                .join('');
+            tabsCellHtml = `<div class="flex flex-wrap gap-1 max-w-[210px]">${pills}</div>`;
+        }
+
+        // Channels & Sources cell
+        const chAccess = calculateUserChannelAccess(user, statsBySource);
+        const badgesHtml = chAccess.sourceBadges.length > 0
+            ? chAccess.sourceBadges.map(b => b.isAll
+                ? `<span class="px-2 py-0.5 text-xs font-bold rounded-md bg-emerald-950/80 text-emerald-300 border border-emerald-700/50">ALL</span>`
+                : `<span class="px-2 py-0.5 text-xs font-medium rounded-md bg-gray-800 text-gray-200 border border-gray-700">${escapeHtmlAttr(b.label)}${b.subLabel ? ` <span class="text-gray-400 text-[10px]">(${escapeHtmlAttr(b.subLabel)})</span>` : ''}</span>`
+            ).join('')
+            : `<span class="px-2 py-0.5 text-xs font-semibold rounded-md bg-red-950/70 text-red-300 border border-red-700/50">No Sources</span>`;
+
+        const chCountBadge = chAccess.totalChannels > 0
+            ? `<span class="text-xs font-mono font-semibold ${chAccess.allowedChannels > 0 ? 'text-blue-300' : 'text-red-400'}">${chAccess.allowedChannels}${chAccess.isUnrestricted ? '' : `/${chAccess.totalChannels}`} ch</span>`
+            : '';
+
+        const channelsCellHtml = `<div class="flex flex-wrap items-center gap-1.5">${badgesHtml}${chCountBadge}</div>`;
+
+        return `
+            <tr data-user-id="${user.id}" class="hover:bg-gray-800/50 transition-colors">
+                <td class="px-5 py-4 whitespace-nowrap text-sm">${roleBadgeHtml}</td>
+                <td class="px-5 py-4 whitespace-nowrap text-sm font-bold text-white">
+                    <div class="flex items-center gap-2">
+                        <span>${escapeHtmlAttr(user.username)}</span>
+                        ${isCurrentUser ? '<span class="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-blue-600/20 text-blue-300 border border-blue-500/30">You</span>' : ''}
+                    </div>
+                </td>
+                <td class="px-5 py-4 whitespace-nowrap text-xs text-gray-300 font-mono">${escapeHtmlAttr(createdStr)}</td>
+                <td class="px-5 py-4 whitespace-nowrap text-xs ${lastLoginStr ? 'text-gray-300 font-mono' : 'text-gray-500 italic'}">${lastLoginStr ? escapeHtmlAttr(lastLoginStr) : 'Never'}</td>
+                <td class="px-5 py-4 whitespace-nowrap text-sm">${passwordCellHtml}</td>
+                <td class="px-5 py-4 text-sm">${tabsCellHtml}</td>
+                <td class="px-5 py-4 text-sm">${channelsCellHtml}</td>
+                <td class="px-5 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <div class="inline-flex items-center justify-end gap-1">
+                        <button type="button" class="edit-user-btn p-2 text-gray-300 hover:text-blue-400 hover:bg-gray-700/60 rounded-lg transition-colors" title="Edit User">
+                            <svg class="w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                        </button>
+                        <button type="button" class="delete-user-btn p-2 text-gray-400 hover:text-red-400 hover:bg-gray-700/60 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                            title="${isCurrentUser ? 'Cannot delete your own account' : 'Delete User'}"
+                            ${isCurrentUser || user.id === 1 ? 'disabled' : ''}>
+                            <svg class="w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+};
+
 /**
  * Fetches the user list from the server and renders it.
  */
 export const refreshUserList = async () => {
-    // No admin check needed here as the whole page is admin-only.
     try {
         const res = await apiFetch('/api/users');
         if (!res) return;
-        const users = await res.json();
-        UIElements.userList.innerHTML = users.map(user => `
-            <tr data-user-id="${user.id}">
-                <td class="px-4 py-3 whitespace-nowrap text-sm text-white">${user.username}</td>
-                <td class="px-4 py-3 whitespace-nowrap text-sm">${user.isAdmin ? '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-200 text-green-800">Admin</span>' : '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-200 text-gray-800">User</span>'}</td>
-                <td class="px-4 py-3 whitespace-nowrap text-sm">${user.canUseDvr ? '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-200 text-blue-800">Yes</span>' : '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-200 text-gray-800">No</span>'}</td>
-                <td class="px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
-                    <button class="text-blue-400 hover:text-blue-600 edit-user-btn">Edit</button>
-                    <button class="text-red-400 hover:text-red-600 ml-4 delete-user-btn" ${appState.currentUser.username === user.username ? 'disabled' : ''}>Delete</button>
-                </td>
-            </tr>
-        `).join('');
+        cachedUsersList = await res.json();
+        renderUserTableRows();
     } catch (error) {
         console.error("Failed to refresh user list:", error);
-        UIElements.userList.innerHTML = `<tr><td colspan="4" class="text-center text-red-400 py-4">Failed to load users.</td></tr>`;
+        if (UIElements.userList) {
+            UIElements.userList.innerHTML = `<tr><td colspan="8" class="text-center text-red-400 py-6">Failed to load users.</td></tr>`;
+        }
     }
 };
 
@@ -938,14 +1863,74 @@ export const refreshUserList = async () => {
  * @param {object|null} user - The user object to edit, or null to add a new user.
  */
 const openUserEditor = (user = null) => {
+    currentEditingUser = user;
     UIElements.userEditorId.value = user ? user.id : '';
     UIElements.userEditorUsername.value = user ? user.username : '';
-    UIElements.userEditorPassword.value = '';
-    UIElements.userEditorIsAdmin.checked = user ? user.isAdmin : false;
-    UIElements.userEditorCanUseDvr.checked = user ? user.canUseDvr : false;
-    UIElements.userEditorTitle.textContent = user ? 'Edit User' : 'Add New User';
+
+    // Password setup: pre-fill stored password_plain if editing an existing user so admin can view or edit it
+    const pwdInput = UIElements.userEditorPassword;
+    const pwdStatus = document.getElementById('user-editor-password-status');
+    const pwdHint = document.getElementById('user-editor-password-hint');
+    if (pwdInput) {
+        pwdInput.type = 'password';
+        pwdInput.required = !user;
+        if (user) {
+            pwdInput.value = user.password_plain || '';
+            pwdInput.placeholder = user.password_plain ? 'Enter password...' : 'Leave blank to keep current password';
+            if (pwdStatus) {
+                pwdStatus.textContent = user.password_plain ? 'Stored (click eye to reveal)' : 'Not cached yet';
+                pwdStatus.className = user.password_plain ? 'text-[11px] text-emerald-400' : 'text-[11px] text-gray-500';
+            }
+            if (pwdHint) {
+                pwdHint.textContent = user.password_plain
+                    ? 'Click the eye icon to view the current password, or type a new one to change it.'
+                    : 'Leave blank to keep current password, or type a new password to update and cache it.';
+            }
+        } else {
+            pwdInput.value = '';
+            pwdInput.placeholder = 'Enter password for new user...';
+            if (pwdStatus) pwdStatus.textContent = 'Required';
+            if (pwdHint) pwdHint.textContent = 'Use the dice icon to generate a strong password.';
+        }
+    }
+
+    const isUserAdmin = Boolean(user && (user.isAdmin || user.id === 1));
+    UIElements.userEditorIsAdmin.checked = isUserAdmin;
+    UIElements.userEditorIsAdmin.disabled = Boolean(user && user.id === 1);
+    UIElements.userEditorCanUseDvr.checked = user ? Boolean(user.canUseDvr || isUserAdmin) : false;
+
+    // Populate Visible Navigation Tabs checkboxes
+    let allowedTabs = null;
+    if (user && user.allowed_tabs && !isUserAdmin) {
+        try {
+            const parsed = typeof user.allowed_tabs === 'string' ? JSON.parse(user.allowed_tabs) : user.allowed_tabs;
+            if (Array.isArray(parsed)) allowedTabs = parsed;
+        } catch (e) { }
+    }
+    const tabCheckboxes = document.querySelectorAll('#user-editor-tabs-grid .user-tab-checkbox');
+    tabCheckboxes.forEach(cb => {
+        cb.checked = isUserAdmin || !allowedTabs || allowedTabs.includes(cb.value);
+    });
+
+    // Modal Title & Subtitle with Creation / Last Login metadata
+    UIElements.userEditorTitle.textContent = user ? `Edit User: ${user.username}` : 'Add New User';
+    const metaSubtitle = document.getElementById('user-editor-meta-subtitle');
+    if (metaSubtitle) {
+        if (user) {
+            const created = formatUserTimestamp(user.created_at, false) || 'Unknown';
+            const lastLogin = formatUserTimestamp(user.last_login, true) || 'Never';
+            metaSubtitle.textContent = `Date Joined: ${created}  ·  Last Login: ${lastLogin}`;
+        } else {
+            metaSubtitle.textContent = 'Configure account credentials, visible navigation tabs, and channel access.';
+        }
+    }
+
+    const srcSearch = document.getElementById('user-editor-source-search');
+    if (srcSearch) srcSearch.value = '';
+
     UIElements.userEditorError.classList.add('hidden');
-    renderUserSourceList(user);
+    renderUserSourceList(user, false);
+    syncUserEditorAdminLockState();
     openModal(UIElements.userEditorModal);
 };
 
@@ -964,6 +1949,15 @@ const openSourceEditor = (sourceType, source = null) => {
     UIElements.sourceEditorName.value = source ? source.name : '';
     UIElements.sourceEditorIsActive.checked = source ? source.isActive : true;
     UIElements.sourceEditorRefreshInterval.value = source ? (source.refreshHours || 0) : 0;
+
+    const preDownloadLogosContainer = document.getElementById('source-editor-predownload-logos-container');
+    const preDownloadLogosCheckbox = document.getElementById('source-editor-preDownloadLogos');
+    if (preDownloadLogosContainer) {
+        preDownloadLogosContainer.classList.toggle('hidden', sourceType !== 'm3u');
+    }
+    if (preDownloadLogosCheckbox) {
+        preDownloadLogosCheckbox.checked = source ? (source.preDownloadLogos !== false) : true;
+    }
 
     // Default to 'url' tab unless source dictates otherwise
     let activeTab = 'url';
@@ -1195,8 +2189,9 @@ const openEditorModal = (type, item = null) => {
 const saveSettingAndNotify = async (saveFunction, ...args) => {
     const updatedSettings = await saveFunction(...args);
     if (updatedSettings) {
-        // FINAL FIX: Replace the local state completely, don't merge it.
-        guideState.settings = updatedSettings;
+        // Merge updated global settings into guideState.settings so device-local settings
+        // (channelColumnWidth, activeGroupFilter, activeSourceFilter) and user settings (favorites) are preserved.
+        Object.assign(guideState.settings, updatedSettings);
         showNotification('Setting saved.');
     }
     return !!updatedSettings;
@@ -1280,10 +2275,270 @@ function handleClearLogs() {
     );
 }
 
+// --- LOGO & IMAGE CACHE MANAGEMENT FUNCTIONS ---
+
+function formatCacheBytes(bytes) {
+    const b = Number(bytes) || 0;
+    if (b < 1024) return `${b} B`;
+    if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+    if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(2)} MB`;
+    return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function updateLogoSyncBadgeUI(syncState) {
+    const badge = UIElements.logoSyncStatusBadge;
+    if (!badge) return;
+    if (syncState && syncState.inProgress) {
+        const pct = syncState.total > 0 ? Math.round((syncState.processed / syncState.total) * 100) : 0;
+        badge.textContent = `Syncing logos: ${syncState.processed}/${syncState.total} (${pct}%)`;
+        badge.className = 'text-xs font-medium px-2.5 py-1 rounded-full bg-blue-900/60 text-blue-300 border border-blue-700/50 animate-pulse';
+        badge.classList.remove('hidden');
+    } else if (syncState && syncState.lastCompletedAt) {
+        badge.textContent = `Verified • ${syncState.updated || 0} updated, ${syncState.matched || 0} smart, ${syncState.keptSafe || 0} kept`;
+        badge.className = 'text-xs font-medium px-2.5 py-1 rounded-full bg-emerald-900/50 text-emerald-300 border border-emerald-700/50';
+        badge.classList.remove('hidden');
+    } else {
+        badge.classList.add('hidden');
+    }
+}
+
+/**
+ * Reloads the M3U channel list from the server into memory and IndexedDB after logo changes.
+ */
+async function reloadChannelsInMemoryAfterLogoChange() {
+    try {
+        if (failedLogoUrls && typeof failedLogoUrls.clear === 'function') {
+            failedLogoUrls.clear();
+        }
+        const config = await fetchConfig();
+        if (config) {
+            Object.assign(guideState.settings, config.settings || {});
+            if (config.m3uContent) {
+                guideState.channels = parseM3U(config.m3uContent);
+                if (Array.isArray(guideState.settings.favoriteChannels)) {
+                    guideState.channels.forEach(channel => {
+                        channel.isFavorite = guideState.settings.favoriteChannels.includes(channel.id);
+                    });
+                }
+                if (appState.db) {
+                    const tx = appState.db.transaction(['guideData'], 'readwrite');
+                    tx.objectStore('guideData').put(guideState.channels, 'channels');
+                    if (config.settings?.sourcesLastUpdated) {
+                        tx.objectStore('guideData').put(config.settings.sourcesLastUpdated, 'sourcesLastUpdated');
+                    }
+                }
+                const path = window.location.pathname;
+                if (path === '/' || path.startsWith('/tvguide')) {
+                    handleSearchAndFilter(false, true);
+                }
+            }
+        }
+    } catch (err) {
+        console.warn('[SETTINGS] Could not reload channels in memory after logo change:', err);
+    }
+}
+
+/**
+ * Fetches and displays statistics for both Stored Channel Logos and Cached VOD Posters.
+ */
+export async function refreshLogoCacheInfo() {
+    try {
+        const res = await apiFetch('/api/logos/stats');
+        if (res && res.ok) {
+            const data = await res.json();
+            if (data.logos) {
+                if (UIElements.logoCacheCount) {
+                    UIElements.logoCacheCount.textContent = `${data.logos.fileCount} files`;
+                }
+                if (UIElements.logoCacheSize) {
+                    UIElements.logoCacheSize.textContent = formatCacheBytes(data.logos.totalSize);
+                }
+                if (UIElements.logoChannelCoverage) {
+                    const total = data.logos.totalChannels || 0;
+                    const stored = data.logos.storedChannels || 0;
+                    const smart = data.logos.smartMatches || 0;
+                    UIElements.logoChannelCoverage.textContent = total > 0
+                        ? `${stored} / ${total} (${smart} smart)`
+                        : '0 / 0';
+                }
+                updateLogoSyncBadgeUI(data.logos.syncState);
+            }
+            if (data.posters) {
+                if (UIElements.posterCacheCount) {
+                    UIElements.posterCacheCount.textContent = `${data.posters.fileCount} files`;
+                }
+                if (UIElements.posterCacheSize) {
+                    UIElements.posterCacheSize.textContent = formatCacheBytes(data.posters.totalSize);
+                }
+            }
+        }
+    } catch (error) {
+        console.error('[SETTINGS] Error fetching logo/poster cache stats:', error);
+    }
+}
+
+/**
+ * Handles real-time SSE 'logo-sync-status' events from the server.
+ */
+export function handleLogoSyncStatusUpdate(syncState) {
+    updateLogoSyncBadgeUI(syncState);
+    if (syncState && !syncState.inProgress) {
+        refreshLogoCacheInfo();
+        reloadChannelsInMemoryAfterLogoChange();
+    }
+}
+
+/**
+ * Triggers a manual verification and update check of all channel logos against upstream sources.
+ */
+async function handleSyncLogosNow() {
+    const btn = UIElements.syncLogosNowBtn;
+    if (!btn) return;
+    const originalHTML = btn.innerHTML;
+    setButtonLoadingState(btn, true, 'Checking Logos...');
+
+    try {
+        const res = await apiFetch('/api/logos/sync', { method: 'POST' });
+        if (res && res.ok) {
+            const data = await res.json();
+            if (data.completed) {
+                const st = data.syncState || {};
+                showNotification(
+                    `Logo check complete: ${st.updated || 0} updated, ${st.matched || 0} smart-matched, ${st.keptSafe || 0} kept.`,
+                    false,
+                    4500
+                );
+                await refreshLogoCacheInfo();
+                await reloadChannelsInMemoryAfterLogoChange();
+            } else if (data.runningInBackground) {
+                showNotification('Checking & updating channel logos in the background...', false, 4000);
+                updateLogoSyncBadgeUI(data.syncState);
+            }
+        } else {
+            showNotification('Failed to start channel logo check.', true);
+        }
+    } catch (error) {
+        console.error('[SETTINGS] Error syncing logos:', error);
+        showNotification('Error checking channel logos.', true);
+    } finally {
+        setButtonLoadingState(btn, false, originalHTML);
+    }
+}
+
+/**
+ * Clears all stored channel logos (/data/logos) and resets the channel logo index after confirmation.
+ */
+function handleClearChannelLogos() {
+    showConfirm(
+        'Reset Channel Logos',
+        'Are you sure you want to delete all stored channel logo files (/data/logos)? You can click "Check & Update Logos Now" afterward to download fresh logos from your sources.',
+        async () => {
+            try {
+                const res = await apiFetch('/api/logos/cache', { method: 'DELETE' });
+                if (res && res.ok) {
+                    const data = await res.json();
+                    showNotification(data.message || `Cleared ${data.deletedFiles} stored channel logo files.`, false, 3500);
+                    await refreshLogoCacheInfo();
+                    await reloadChannelsInMemoryAfterLogoChange();
+                } else {
+                    showNotification('Failed to reset channel logos.', true);
+                }
+            } catch (error) {
+                console.error('[SETTINGS] Error clearing channel logos:', error);
+                showNotification('Failed to reset channel logos.', true);
+            }
+        }
+    );
+}
+
+/**
+ * Clears all cached VOD poster images (/data/image_cache) after confirmation.
+ */
+function handleClearVodPosters() {
+    showConfirm(
+        'Clear VOD Poster Cache',
+        'Are you sure you want to delete all cached movie and series poster images (/data/image_cache)? Posters will be re-downloaded automatically as you browse VOD.',
+        async () => {
+            try {
+                const res = await apiFetch('/api/image-cache', { method: 'DELETE' });
+                if (res && res.ok) {
+                    const data = await res.json();
+                    if (guideState && guideState.settings) {
+                        guideState.settings.posterCacheClearedAt = data.posterCacheClearedAt || Date.now();
+                    }
+                    showNotification(data.message || `Cleared ${data.deletedFiles} cached VOD posters.`, false, 3500);
+                    await refreshLogoCacheInfo();
+                } else {
+                    showNotification('Failed to clear VOD poster cache.', true);
+                }
+            } catch (error) {
+                console.error('[SETTINGS] Error clearing VOD poster cache:', error);
+                showNotification('Failed to clear VOD poster cache.', true);
+            }
+        }
+    );
+}
+
+const VALID_SETTINGS_TABS = ['sources', 'logos', 'playback', 'dvr', 'users', 'logs', 'system'];
+
+/**
+ * Switches the active category pane inside the Settings page.
+ * @param {string} tabId - One of VALID_SETTINGS_TABS
+ */
+export function switchSettingsSection(tabId) {
+    const targetTab = VALID_SETTINGS_TABS.includes(tabId) ? tabId : 'sources';
+    const navButtons = document.querySelectorAll('#settings-sidebar-nav .settings-nav-btn[data-settings-tab]');
+    const panes = document.querySelectorAll('#page-settings .settings-pane[data-settings-pane]');
+
+    navButtons.forEach(btn => {
+        const isActive = btn.dataset.settingsTab === targetTab;
+        btn.classList.toggle('active', isActive);
+        btn.classList.toggle('bg-blue-600/20', isActive);
+        btn.classList.toggle('text-blue-400', isActive);
+        btn.classList.toggle('border-blue-500/40', isActive);
+        btn.classList.toggle('shadow-sm', isActive);
+
+        btn.classList.toggle('text-gray-300', !isActive);
+        btn.classList.toggle('hover:bg-gray-700/60', !isActive);
+        btn.classList.toggle('hover:text-white', !isActive);
+        btn.classList.toggle('border-transparent', !isActive);
+    });
+
+    panes.forEach(pane => {
+        const isMatch = pane.dataset.settingsPane === targetTab;
+        pane.classList.toggle('hidden', !isMatch);
+    });
+
+    if (UIElements.pageSettings) {
+        UIElements.pageSettings.scrollTop = 0;
+    }
+
+    if (targetTab === 'logos') {
+        refreshLogoCacheInfo();
+    } else if (targetTab === 'logs') {
+        refreshLogInfo();
+    } else if (targetTab === 'users' && appState.currentUser?.isAdmin) {
+        refreshUserList();
+    }
+}
+
 /**
  * Sets up all event listeners for the settings page.
  */
 export function setupSettingsEventListeners() {
+
+    // --- Settings Sidebar Navigation ---
+    const settingsNavButtons = document.querySelectorAll('#settings-sidebar-nav .settings-nav-btn[data-settings-tab]');
+    settingsNavButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            switchSettingsSection(btn.dataset.settingsTab);
+        });
+    });
+
+    try {
+        sessionStorage.removeItem('viniplay_settings_tab');
+    } catch (e) { }
+    switchSettingsSection('sources');
 
     // --- Source Management ---
     if (UIElements.processSourcesBtn) {
@@ -1354,6 +2609,10 @@ export function setupSettingsEventListeners() {
         formData.append('sourceType', sourceType);
         formData.append('name', UIElements.sourceEditorName.value);
         formData.append('isActive', UIElements.sourceEditorIsActive.checked);
+        const preDownloadLogosCheckbox = document.getElementById('source-editor-preDownloadLogos');
+        if (sourceType === 'm3u' && preDownloadLogosCheckbox) {
+            formData.append('preDownloadLogos', preDownloadLogosCheckbox.checked);
+        }
 
         if (currentSourceTypeForEditor === 'url') {
             formData.append('url', UIElements.sourceEditorUrl.value);
@@ -1691,101 +2950,228 @@ export function setupSettingsEventListeners() {
     // --- User Management ---
     UIElements.addUserBtn.addEventListener('click', () => openUserEditor());
     UIElements.userEditorCancelBtn.addEventListener('click', () => closeModal(UIElements.userEditorModal));
+    document.getElementById('user-editor-close-btn')?.addEventListener('click', () => closeModal(UIElements.userEditorModal));
+
+    // Real-time search in Users & Access table
+    document.getElementById('user-search-input')?.addEventListener('input', () => {
+        renderUserTableRows();
+    });
+
+    // User Editor Password Controls (Show/Hide, Copy, Random Generator)
+    document.getElementById('user-editor-toggle-password-btn')?.addEventListener('click', () => {
+        const pwdInput = UIElements.userEditorPassword;
+        if (!pwdInput) return;
+        pwdInput.type = pwdInput.type === 'password' ? 'text' : 'password';
+    });
+
+    document.getElementById('user-editor-copy-password-btn')?.addEventListener('click', async () => {
+        const val = UIElements.userEditorPassword?.value || '';
+        if (!val) {
+            return showNotification('No password entered to copy.', true);
+        }
+        try {
+            await navigator.clipboard.writeText(val);
+            showNotification('Password copied to clipboard!');
+        } catch (e) {
+            showNotification('Could not copy password to clipboard.', true);
+        }
+    });
+
+    document.getElementById('user-editor-generate-password-btn')?.addEventListener('click', () => {
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*';
+        let generated = '';
+        for (let i = 0; i < 12; i++) {
+            generated += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        if (UIElements.userEditorPassword) {
+            UIElements.userEditorPassword.value = generated;
+            UIElements.userEditorPassword.type = 'text';
+            showNotification('Generated new password (visible in field).');
+        }
+    });
+
+    // Admin checkbox toggles tab/DVR/source locks
+    UIElements.userEditorIsAdmin?.addEventListener('change', () => {
+        syncUserEditorAdminLockState();
+    });
+
+    // Quick Select All / Minimal Navigation Tabs
+    document.getElementById('user-editor-tabs-all-btn')?.addEventListener('click', () => {
+        if (UIElements.userEditorIsAdmin?.checked) return;
+        document.querySelectorAll('#user-editor-tabs-grid .user-tab-checkbox').forEach(cb => { cb.checked = true; });
+    });
+    document.getElementById('user-editor-tabs-minimal-btn')?.addEventListener('click', () => {
+        if (UIElements.userEditorIsAdmin?.checked) return;
+        document.querySelectorAll('#user-editor-tabs-grid .user-tab-checkbox').forEach(cb => {
+            cb.checked = (cb.value === 'guide');
+        });
+    });
+
+    // Search & Allow All / Block All in 3-Tier Source/Group/Channel tree
+    document.getElementById('user-editor-source-search')?.addEventListener('input', () => {
+        renderUserSourceList(currentEditingUser, true);
+    });
+    document.getElementById('user-editor-sources-all-btn')?.addEventListener('click', () => {
+        if (UIElements.userEditorIsAdmin?.checked) return;
+        Object.values(userEditorAccessState).forEach(st => {
+            st.allowed = true;
+            st.allGroupsMode = true;
+            st.groups.clear();
+            st.excludedChannels.clear();
+            st.allMovieGroupsMode = true;
+            st.movieGroups.clear();
+            st.allSeriesGroupsMode = true;
+            st.seriesGroups.clear();
+        });
+        renderUserSourceList(currentEditingUser, true);
+    });
+    document.getElementById('user-editor-sources-none-btn')?.addEventListener('click', () => {
+        if (UIElements.userEditorIsAdmin?.checked) return;
+        Object.values(userEditorAccessState).forEach(st => {
+            st.allowed = false;
+        });
+        renderUserSourceList(currentEditingUser, true);
+    });
+
     UIElements.userEditorForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const id = UIElements.userEditorId.value;
-        const body = {
-            username: UIElements.userEditorUsername.value,
-            password: UIElements.userEditorPassword.value,
-            isAdmin: UIElements.userEditorIsAdmin.checked,
-            canUseDvr: UIElements.userEditorCanUseDvr.checked,
-            // Capture allowed sources
-            allowed_sources: (() => {
-                const map = {};
-                // Iterate through source list
-                const rows = UIElements.userEditorSourceList.querySelectorAll('tr');
-                rows.forEach(row => {
-                    const sourceId = row.dataset.sourceId;
-                    const checkbox = row.querySelector('.user-source-checkbox');
-                    const btn = row.querySelector('.user-group-filter-btn');
+        const isAdminChecked = Boolean(UIElements.userEditorIsAdmin.checked);
 
-                    if (checkbox && checkbox.checked) {
-                        map[sourceId] = {
-                            allowed: true,
-                            groups: btn._selectedGroups || []
-                        };
-                    } else {
-                        // Implicitly not allowed, but if we want to save "blocked", we can.
-                        // For now, if not in map, it's not allowed.
+        // Capture visible tabs
+        const selectedTabs = Array.from(document.querySelectorAll('#user-editor-tabs-grid .user-tab-checkbox'))
+            .filter(cb => cb.checked)
+            .map(cb => cb.value);
+
+        if (!isAdminChecked && selectedTabs.length === 0) {
+            UIElements.userEditorError.textContent = 'Please enable at least one navigation tab for this user.';
+            UIElements.userEditorError.classList.remove('hidden');
+            return;
+        }
+
+        // Capture 3-tier allowed_sources (independent Live TV, VOD Movies, and VOD Series groups)
+        const allowedSourcesPayload = (() => {
+            if (isAdminChecked) return null;
+            const map = {};
+            const m3uSources = guideState.settings.m3uSources || [];
+            m3uSources.forEach(src => {
+                const st = userEditorAccessState[src.id];
+                if (st && st.allowed) {
+                    const entry = {
+                        allowed: true,
+                        allLiveGroups: Boolean(st.allGroupsMode),
+                        groups: st.allGroupsMode ? [] : Array.from(st.groups),
+                        allMovieGroups: Boolean(st.allMovieGroupsMode),
+                        movieGroups: st.allMovieGroupsMode ? [] : Array.from(st.movieGroups),
+                        allSeriesGroups: Boolean(st.allSeriesGroupsMode),
+                        seriesGroups: st.allSeriesGroupsMode ? [] : Array.from(st.seriesGroups)
+                    };
+                    if (st.excludedChannels && st.excludedChannels.size > 0) {
+                        entry.excludedChannels = Array.from(st.excludedChannels);
                     }
-                });
-                return map;
-            })()
+                    map[src.id] = entry;
+                }
+            });
+            return map;
+        })();
+
+        const body = {
+            username: UIElements.userEditorUsername.value.trim(),
+            password: UIElements.userEditorPassword.value,
+            isAdmin: isAdminChecked,
+            canUseDvr: isAdminChecked ? true : UIElements.userEditorCanUseDvr.checked,
+            allowed_tabs: (isAdminChecked || selectedTabs.length >= USER_TAB_DEFINITIONS.length) ? null : selectedTabs,
+            allowed_sources: allowedSourcesPayload
         };
-        if (!body.password) delete body.password; // Don't send empty password if not changing
+
+        // Don't send empty password or unchanged pre-filled password if not needed,
+        // though sending pre-filled password is also safe; if blank on edit, omit it.
+        if (!body.password) {
+            delete body.password;
+        }
 
         const url = id ? `/api/users/${id}` : '/api/users';
         const method = id ? 'PUT' : 'POST';
 
         const res = await apiFetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-        // apiFetch handles errors, but we need the success case
         if (res && res.ok) {
             closeModal(UIElements.userEditorModal);
-            refreshUserList(); // Refresh the list on success
+            refreshUserList();
             showNotification(`User ${id ? 'updated' : 'added'} successfully.`);
 
-            // --- FIX: Auto-refresh if current user was updated ---
-            console.log('[DEBUG_REFRESH] Checking for auto-refresh...');
-            console.log('[DEBUG_REFRESH] Edited User ID:', id);
-            console.log('[DEBUG_REFRESH] Current User State:', appState.currentUser);
-            if (appState.currentUser) console.log('[DEBUG_REFRESH] Current User ID:', appState.currentUser.id);
-
             if (id && appState.currentUser && String(appState.currentUser.id) === String(id)) {
-                console.log('[DEBUG_REFRESH] User match! Triggering reload.');
                 showNotification('Your settings have changed. Reloading application...', 'info', 2000);
                 setTimeout(() => window.location.reload(), 2000);
-            } else {
-                console.log('[DEBUG_REFRESH] User mismatch or missing data. No reload.');
             }
         } else if (res) {
-            // Display specific error from backend if available
             const data = await res.json().catch(() => ({ error: 'An unknown error occurred.' }));
             UIElements.userEditorError.textContent = data.error;
             UIElements.userEditorError.classList.remove('hidden');
         }
     });
-    // User List Click Handler (Edit/Delete)
+
+    // User List Click Handler (Reveal Password, Copy Password, Edit, Delete)
     UIElements.userList.addEventListener('click', async (e) => {
-        const target = e.target;
-        if (target.disabled) return; // Ignore clicks on disabled buttons (like delete self)
-        const row = target.closest('tr');
+        const btn = e.target.closest('button');
+        if (!btn || btn.disabled) return;
+        const row = btn.closest('tr');
         if (!row) return;
         const userId = row.dataset.userId;
 
-        if (target.classList.contains('edit-user-btn')) {
-            // Fetch the specific user's details again before opening the editor
-            // This ensures we have the latest data, though refreshUserList usually covers it.
-            // For simplicity, we can rely on the data used to render the table if refreshUserList is called often.
-            // Let's assume refreshUserList keeps the UI consistent for now.
-            const res = await apiFetch(`/api/users?t=${Date.now()}`); // Re-fetch all users to find the one clicked
+        // 1. Toggle Password Visibility in Table Row
+        if (btn.classList.contains('toggle-user-pwd-btn')) {
+            const maskEl = row.querySelector('.user-pwd-mask');
+            if (!maskEl) return;
+            const isShown = maskEl.dataset.shown === 'true';
+            if (isShown) {
+                maskEl.textContent = '••••••••';
+                maskEl.dataset.shown = 'false';
+                maskEl.className = 'user-pwd-mask font-mono text-xs text-gray-400 tracking-widest select-all';
+            } else {
+                maskEl.textContent = maskEl.dataset.plain || '';
+                maskEl.dataset.shown = 'true';
+                maskEl.className = 'user-pwd-mask font-mono text-xs text-emerald-300 font-semibold select-all';
+            }
+            return;
+        }
+
+        // 2. Copy Password from Table Row
+        if (btn.classList.contains('copy-user-pwd-btn')) {
+            const plain = btn.dataset.plain || '';
+            const uname = btn.dataset.username || 'user';
+            if (!plain) return;
+            try {
+                await navigator.clipboard.writeText(plain);
+                showNotification(`Copied password for "${uname}"`);
+            } catch (err) {
+                showNotification('Failed to copy password.', true);
+            }
+            return;
+        }
+
+        // 3. Edit User
+        if (btn.classList.contains('edit-user-btn')) {
+            const res = await apiFetch(`/api/users?t=${Date.now()}`);
             if (!res) return;
             const users = await res.json();
-            const user = users.find(u => u.id == userId); // Use == for potential type difference
+            cachedUsersList = users;
+            const user = users.find(u => String(u.id) === String(userId));
             if (user) {
                 openUserEditor(user);
             } else {
                 showNotification('Could not find user data to edit.', true);
             }
+            return;
         }
 
-        if (target.classList.contains('delete-user-btn')) {
-            showConfirm('Delete User?', 'Are you sure? This action cannot be undone.', async () => {
+        // 4. Delete User
+        if (btn.classList.contains('delete-user-btn')) {
+            showConfirm('Delete User?', 'Are you sure? Active streams for this user will be terminated immediately and this action cannot be undone.', async () => {
                 const res = await apiFetch(`/api/users/${userId}`, { method: 'DELETE' });
-                if (res?.ok) { // Check for ok status explicitly
+                if (res?.ok) {
                     refreshUserList();
                     showNotification('User deleted.');
                 }
-                // apiFetch handles error notification
             });
         }
     });
@@ -2015,8 +3401,12 @@ export function setupSettingsEventListeners() {
         const triggerBtn = modal._triggerBtn;
         if (triggerBtn) {
             triggerBtn._selectedGroups = finalSelectedGroups;
-            const count = finalSelectedGroups.length;
-            triggerBtn.textContent = count > 0 ? `${count} Groups` : 'All Groups';
+            if (typeof triggerBtn._onSaveGroups === 'function') {
+                triggerBtn._onSaveGroups(finalSelectedGroups);
+            } else {
+                const count = finalSelectedGroups.length;
+                triggerBtn.textContent = count > 0 ? `${count} Groups` : 'All Groups';
+            }
         }
 
         closeModal(modal);
@@ -2244,6 +3634,41 @@ export function setupSettingsEventListeners() {
         UIElements.clearLogsBtn.addEventListener('click', handleClearLogs);
     } else {
         console.warn('[SETTINGS] Clear logs button element not found!');
+    }
+
+    // --- LOGO & IMAGE CACHE MANAGEMENT EVENT LISTENERS ---
+    if (UIElements.storeLogosInternallyToggle) {
+        UIElements.storeLogosInternallyToggle.addEventListener('change', async (e) => {
+            const enabled = e.target.checked;
+            const ok = await saveSettingAndNotify(saveGlobalSetting, { storeLogosInternally: enabled });
+            if (ok) {
+                await refreshLogoCacheInfo();
+                await reloadChannelsInMemoryAfterLogoChange();
+            }
+        });
+    }
+
+    if (UIElements.smartLogoMatchingToggle) {
+        UIElements.smartLogoMatchingToggle.addEventListener('change', async (e) => {
+            const enabled = e.target.checked;
+            const ok = await saveSettingAndNotify(saveGlobalSetting, { smartLogoMatching: enabled });
+            if (ok) {
+                await refreshLogoCacheInfo();
+                await reloadChannelsInMemoryAfterLogoChange();
+            }
+        });
+    }
+
+    if (UIElements.syncLogosNowBtn) {
+        UIElements.syncLogosNowBtn.addEventListener('click', handleSyncLogosNow);
+    }
+
+    if (UIElements.clearChannelLogosBtn) {
+        UIElements.clearChannelLogosBtn.addEventListener('click', handleClearChannelLogos);
+    }
+
+    if (UIElements.clearVodPostersBtn) {
+        UIElements.clearVodPostersBtn.addEventListener('click', handleClearVodPosters);
     }
 
 }; // Closing brace for setupSettingsEventListeners (ensure this matches your file structure)

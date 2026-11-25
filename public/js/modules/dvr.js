@@ -155,6 +155,7 @@ async function playTimeshiftStream(job, startTime = 0) {
 
     const streamUrl = `/api/dvr/timeshift/${job.id}/stream.m3u8?_t=${Date.now()}`;
     console.log(`[DVR_TIMESHIFT] Starting HLS timeshift playback for URL: ${streamUrl} at ${seekTarget}s`);
+
     videoTitle.textContent = `${job.programTitle} (Timeshift)`;
 
     appState.activeTimeshiftJobId = job.id;

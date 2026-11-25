@@ -5,7 +5,7 @@
 
 import { appState, guideState, UIElements } from './state.js';
 // MODIFIED: Added stopStream and sendRedirectHeartbeat to the import
-import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream, sendRedirectHeartbeat, saveWatchProgressApi, getWatchProgress, deleteWatchProgress } from './api.js';
+import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream, sendRedirectHeartbeat, saveWatchProgressApi, getWatchProgress, deleteWatchProgress, withCsrfHeaders, appendCsrfQuery } from './api.js';
 import { showNotification, openModal, closeModal } from './ui.js';
 import { castState, loadMedia, setLocalPlayerState } from './cast.js';
 import { logToPlayerConsole } from './player_direct.js';
@@ -22,7 +22,56 @@ let currentRedirectToken = 0; // NEW: Guard against race conditions when switchi
 let currentStreamUrlToPlay = null; // Track full stream URL for audio/video swapping
 let isUserInitiatedPause = false; // Distinguishes intentional user pause from OS screen lock
 let isTransitioningFromPip = false; // Prevents OS PiP docking pause from being misclassified as user pause
+let isTransitioningAudioOnly = false; // Prevents OS PiP/background surface teardown from pausing VODs when entering Audio-Only
+let directAudioHandoff = null; // Stores { url, duration, lastKnownTime, audioTrackIndex } when progressive VOD/DVR uses #audioElement
 let playbackLockRelease = null; // Web Lock to prevent Chrome Android from discarding background tab
+let isStoppingPlayer = false; // Prevents leavepictureinpicture from reopening modal during stopAndCleanupPlayer
+let pipWindowCheckTimer = null;
+let activePipWindowRef = null;
+let activePipResizeHandler = null;
+
+function clearPipWindowWatch() {
+    if (pipWindowCheckTimer) {
+        clearTimeout(pipWindowCheckTimer);
+        pipWindowCheckTimer = null;
+    }
+    if (activePipWindowRef && activePipResizeHandler) {
+        try {
+            activePipWindowRef.removeEventListener('resize', activePipResizeHandler);
+        } catch (e) {}
+    }
+    activePipWindowRef = null;
+    activePipResizeHandler = null;
+}
+
+/**
+ * Synchronizes #video-modal.pip-active and the desktop #pip-active-banner recovery pill.
+ */
+function setPipModalActive(active) {
+    const banner = document.getElementById('pip-active-banner');
+    const bannerTitle = document.getElementById('pip-active-banner-title');
+    if (active) {
+        UIElements.videoModal?.classList.add('pip-active');
+        document.body.classList.remove('modal-open');
+        if (banner && !window.ViniAndroid && !document.body.classList.contains('android-pip-mode')) {
+            if (bannerTitle) {
+                bannerTitle.textContent = currentChannelInfo?.name || UIElements.videoTitle?.textContent || 'Stream';
+            }
+            banner.classList.remove('hidden');
+        }
+    } else {
+        UIElements.videoModal?.classList.remove('pip-active');
+        banner?.classList.add('hidden');
+    }
+}
+
+if (typeof window !== 'undefined') {
+    window.__viniNativeAudioHandoffReady = true;
+}
+
+function getAudioElement() {
+    return document.getElementById('audioElement') || UIElements.audioElement;
+}
 
 // --- NEW: Watch Progress Tracking State ---
 let currentActiveMedia = null; // Stores { contentType, contentId, title, duration }
@@ -93,7 +142,7 @@ function stopRedirectHeartbeat() {
  * Starts a redirect logging session and initiates periodic heartbeats.
  * Guards against race conditions if user switches streams before promise resolves.
  */
-function beginRedirectLogging(url, channelOrVodId, name, logo) {
+function beginRedirectLogging(url, channelOrVodId, name, logo, mediaType = null) {
     if (currentRedirectHistoryId) {
         stopRedirectStream(currentRedirectHistoryId);
         currentRedirectHistoryId = null;
@@ -102,7 +151,7 @@ function beginRedirectLogging(url, channelOrVodId, name, logo) {
 
     const token = ++currentRedirectToken;
 
-    startRedirectStream(url, channelOrVodId, name, logo)
+    startRedirectStream(url, channelOrVodId, name, logo, mediaType)
         .then(historyId => {
             if (!historyId) return;
             // If the user already switched channels or closed player, immediately stop this session
@@ -125,11 +174,16 @@ export function getCurrentPlaybackProgress() {
     if (!currentActiveMedia) return null;
     let progress = 0;
     let duration = 0;
+    const audioEl = getAudioElement();
 
     if (currentVodTranscodeSession) {
         const curElapsed = UIElements.videoElement?.currentTime || 0;
         progress = (currentVodTranscodeSession.currentSeekTime || 0) + curElapsed;
         duration = currentVodTranscodeSession.duration || currentActiveMedia.duration || 0;
+    } else if (directAudioHandoff && audioEl) {
+        progress = audioEl.currentTime > 0 ? audioEl.currentTime : (directAudioHandoff.lastKnownTime || 0);
+        const audDur = audioEl.duration;
+        duration = (isFinite(audDur) && audDur > 0) ? audDur : (directAudioHandoff.duration || currentActiveMedia.duration || 0);
     } else if (UIElements.videoElement) {
         progress = UIElements.videoElement.currentTime || 0;
         const vidDur = UIElements.videoElement.duration;
@@ -211,7 +265,7 @@ export function flushWatchProgress() {
         });
         if (navigator.sendBeacon) {
             const blob = new Blob([payload], { type: 'application/json' });
-            navigator.sendBeacon('/api/progress', blob);
+            navigator.sendBeacon(appendCsrfQuery('/api/progress'), blob);
         } else {
             saveWatchProgressApi(prog.contentType, prog.contentId, prog.progressSeconds, prog.durationSeconds);
         }
@@ -414,37 +468,98 @@ export async function releaseScreenWakeLock() {
 }
 
 /**
+ * Resolves a descriptive subtitle (current EPG program or VOD/DVR category) for MediaSession & Android player card.
+ */
+function resolveMediaSessionSubtitle() {
+    let base = 'ViniPlay';
+    if (currentChannelInfo?.channelId && guideState.programs?.[currentChannelInfo.channelId]) {
+        const nowMs = Date.now();
+        const liveProg = guideState.programs[currentChannelInfo.channelId].find(
+            p => new Date(p.start).getTime() <= nowMs && new Date(p.stop).getTime() > nowMs
+        );
+        if (liveProg?.title) {
+            base = liveProg.title;
+        } else {
+            base = 'Live TV • ViniPlay';
+        }
+    } else if (currentActiveMedia?.contentType === 'vod_episode') {
+        base = 'Series • ViniPlay';
+    } else if (currentActiveMedia?.contentType === 'vod_movie') {
+        base = 'Movie • ViniPlay';
+    } else if (currentActiveMedia?.contentType === 'dvr_recording' || appState.activeTimeshiftJobId) {
+        base = 'DVR • ViniPlay';
+    } else if (currentVodTranscodeSession) {
+        base = 'VOD • ViniPlay';
+    }
+    if (isAudioOnly && !base.includes('Audio Only')) {
+        return `${base} • Audio Only`;
+    }
+    return base;
+}
+
+/**
  * Updates navigator.mediaSession metadata and action handlers for background/lock-screen controls.
  */
-function updateMediaSession(title, logo) {
+function updateMediaSession(title, logo, subtitle = '') {
     if ('mediaSession' in navigator) {
         try {
+            const resolvedLogo = logo
+                ? (logo.startsWith('http') || logo.startsWith('data:') ? logo : `${window.location.origin}${logo.startsWith('/') ? '' : '/'}${logo}`)
+                : `${window.location.origin}/viniplay.png`;
+            const artistText = subtitle || resolveMediaSessionSubtitle();
             navigator.mediaSession.metadata = new MediaMetadata({
                 title: title || 'ViniPlay Stream',
-                artist: 'ViniPlay',
-                artwork: logo ? [{ src: logo, sizes: '512x512', type: 'image/png' }] : []
+                artist: artistText,
+                artwork: [{ src: resolvedLogo, sizes: '512x512', type: 'image/png' }]
             });
-            navigator.mediaSession.playbackState = 'playing';
+            const getActiveMediaEl = () => (directAudioHandoff && getAudioElement()) ? getAudioElement() : UIElements.videoElement;
+            const audioTarget = directAudioHandoff ? getAudioElement() : null;
+            navigator.mediaSession.playbackState = (audioTarget && audioTarget.paused && isUserInitiatedPause) ? 'paused' : 'playing';
 
             navigator.mediaSession.setActionHandler('play', () => {
                 isUserInitiatedPause = false;
+                if (typeof window !== 'undefined') window.__viniExplicitlyPausedByUser = false;
                 if (noSleepVideo && !noSleepVideo.paused) {
                     try { noSleepVideo.pause(); } catch (e) {}
                 }
-                if (UIElements.videoElement) {
-                    UIElements.videoElement.play().then(() => {
+                const target = getActiveMediaEl();
+                if (target) {
+                    target.play().then(() => {
                         navigator.mediaSession.playbackState = 'playing';
                     }).catch(console.error);
                 }
             });
             navigator.mediaSession.setActionHandler('pause', () => {
                 isUserInitiatedPause = true;
-                UIElements.videoElement?.pause();
+                if (typeof window !== 'undefined') {
+                    window.__viniSuppressPauseUntil = 0;
+                    window.__viniExplicitlyPausedByUser = true;
+                }
+                getActiveMediaEl()?.pause();
                 navigator.mediaSession.playbackState = 'paused';
             });
             navigator.mediaSession.setActionHandler('stop', () => {
                 isUserInitiatedPause = true;
+                if (typeof window !== 'undefined') {
+                    window.__viniSuppressPauseUntil = 0;
+                    window.__viniExplicitlyPausedByUser = false;
+                }
                 stopAndCleanupPlayer();
+            });
+            navigator.mediaSession.setActionHandler('seekto', (details) => {
+                if (details && typeof details.seekTime === 'number') {
+                    if (currentVodTranscodeSession) {
+                        performVodSeek(details.seekTime);
+                    } else {
+                        const target = getActiveMediaEl();
+                        if (target && isFinite(target.duration) && target.duration > 0) {
+                            target.currentTime = details.seekTime;
+                            if (directAudioHandoff && target === getAudioElement()) {
+                                directAudioHandoff.lastKnownTime = target.currentTime;
+                            }
+                        }
+                    }
+                }
             });
         } catch (e) {
             console.warn('[PLAYER] MediaSession configuration failed:', e);
@@ -490,12 +605,150 @@ export function togglePlayerLock(forceState = null) {
     }
 }
 
+function canUseDirectAudioHandoff(videoEl) {
+    if (!videoEl || appState.player || appState.hlsPlayer || appState.shakaPlayer || currentVodTranscodeSession || appState.activeTimeshiftJobId) {
+        return false;
+    }
+    const rawUrl = videoEl.currentSrc || videoEl.getAttribute('src') || currentStreamUrlToPlay || '';
+    if (!rawUrl || rawUrl.startsWith('blob:') || rawUrl.startsWith('data:') || rawUrl.includes('/stream?')) {
+        return false;
+    }
+    return true;
+}
+
+function enterDirectAudioHandoff(videoEl) {
+    const audioEl = getAudioElement();
+    if (!audioEl || !canUseDirectAudioHandoff(videoEl) || directAudioHandoff) {
+        return false;
+    }
+
+    const savedUrl = videoEl.currentSrc || videoEl.getAttribute('src') || currentStreamUrlToPlay;
+    const savedTime = videoEl.currentTime || 0;
+    const savedDuration = (isFinite(videoEl.duration) && videoEl.duration > 0)
+        ? videoEl.duration
+        : (currentActiveMedia?.duration || 0);
+    const savedVolume = videoEl.volume;
+    const savedMuted = videoEl.muted;
+    const wasExplicitlyPaused = videoEl.paused && (isUserInitiatedPause || (typeof window !== 'undefined' && window.__viniExplicitlyPausedByUser));
+
+    let selectedTrackIdx = -1;
+    if (videoEl.audioTracks && videoEl.audioTracks.length > 1) {
+        for (let i = 0; i < videoEl.audioTracks.length; i++) {
+            if (videoEl.audioTracks[i].enabled) {
+                selectedTrackIdx = i;
+                break;
+            }
+        }
+    }
+
+    directAudioHandoff = {
+        url: savedUrl,
+        duration: savedDuration,
+        lastKnownTime: savedTime,
+        audioTrackIndex: selectedTrackIdx
+    };
+
+    // Detach <videoElement> first so only 1 HTTP connection is open to the IPTV/VOD provider
+    videoEl.pause();
+    videoEl.removeAttribute('src');
+    videoEl.load();
+
+    audioEl.volume = savedVolume;
+    audioEl.muted = savedMuted;
+    audioEl.src = savedUrl;
+    audioEl.load();
+
+    const applyHandoffMetadata = () => {
+        if (!directAudioHandoff) return;
+        if (selectedTrackIdx >= 0 && audioEl.audioTracks && audioEl.audioTracks[selectedTrackIdx]) {
+            for (let i = 0; i < audioEl.audioTracks.length; i++) {
+                audioEl.audioTracks[i].enabled = (i === selectedTrackIdx);
+            }
+        }
+        if (savedTime > 0) {
+            try {
+                audioEl.currentTime = savedTime;
+            } catch (e) {}
+        }
+    };
+
+    if (audioEl.readyState >= 1) {
+        applyHandoffMetadata();
+    } else {
+        audioEl.addEventListener('loadedmetadata', applyHandoffMetadata, { once: true });
+    }
+
+    if (!wasExplicitlyPaused) {
+        audioEl.play().catch(err => console.warn('[PLAYER] Audio-Only element play warning:', err));
+    }
+    return true;
+}
+
+function exitDirectAudioHandoff(restoreVideo = true) {
+    const audioEl = getAudioElement();
+    const videoEl = UIElements.videoElement;
+    const handoff = directAudioHandoff;
+    directAudioHandoff = null;
+
+    if (!handoff) {
+        if (audioEl && (audioEl.currentSrc || audioEl.getAttribute('src'))) {
+            audioEl.pause();
+            audioEl.removeAttribute('src');
+            audioEl.load();
+        }
+        return false;
+    }
+
+    const resumeTime = (audioEl && audioEl.currentTime > 0) ? audioEl.currentTime : (handoff.lastKnownTime || 0);
+    const resumeVolume = audioEl ? audioEl.volume : (videoEl ? videoEl.volume : 1);
+    const resumeMuted = audioEl ? audioEl.muted : false;
+
+    if (audioEl) {
+        audioEl.pause();
+        audioEl.removeAttribute('src');
+        audioEl.load();
+    }
+
+    if (restoreVideo && videoEl && handoff.url) {
+        isUserInitiatedPause = false;
+        if (typeof window !== 'undefined') window.__viniExplicitlyPausedByUser = false;
+        videoEl.volume = resumeVolume;
+        videoEl.muted = resumeMuted;
+        videoEl.src = handoff.url;
+        videoEl.load();
+
+        const applyVideoRestore = () => {
+            if (handoff.audioTrackIndex >= 0 && videoEl.audioTracks && videoEl.audioTracks[handoff.audioTrackIndex]) {
+                for (let i = 0; i < videoEl.audioTracks.length; i++) {
+                    videoEl.audioTracks[i].enabled = (i === handoff.audioTrackIndex);
+                }
+            }
+            if (resumeTime > 0) {
+                try {
+                    videoEl.currentTime = resumeTime;
+                } catch (e) {}
+            }
+        };
+
+        if (videoEl.readyState >= 1) {
+            applyVideoRestore();
+        } else {
+            videoEl.addEventListener('loadedmetadata', applyVideoRestore, { once: true });
+        }
+
+        videoEl.play().catch(err => console.warn('[PLAYER] Video restore play warning:', err));
+        return true;
+    }
+    return false;
+}
+
 /**
  * Toggles Audio-Only mode. Keeps the active media feed running seamlessly without disconnecting,
  * displays the dark glassmorphic overlay with channel info, and releases screen wake lock so the mobile display can sleep.
  * @param {boolean|null} forceState
+ * @param {{ restoreVideo?: boolean }} [options]
  */
-export function toggleAudioOnly(forceState = null) {
+export function toggleAudioOnly(forceState = null, { restoreVideo = true } = {}) {
     isAudioOnly = forceState !== null ? forceState : !isAudioOnly;
     const overlay = document.getElementById('audio-only-overlay') || UIElements.audioOnlyOverlay;
     const audioOnlyBtn = document.getElementById('audio-only-btn') || UIElements.audioOnlyBtn;
@@ -508,6 +761,13 @@ export function toggleAudioOnly(forceState = null) {
     document.getElementById('player-more-options-menu')?.classList.add('hidden');
 
     if (isAudioOnly) {
+        isTransitioningAudioOnly = true;
+        isUserInitiatedPause = false;
+        if (typeof window !== 'undefined') window.__viniExplicitlyPausedByUser = false;
+        setTimeout(() => {
+            isTransitioningAudioOnly = false;
+        }, 6000);
+
         if (titleEl) {
             titleEl.textContent = currentChannelInfo?.name || UIElements.videoTitle?.textContent || 'Audio Playback';
         }
@@ -521,6 +781,11 @@ export function toggleAudioOnly(forceState = null) {
         if (videoEl) {
             videoEl.style.opacity = '0';
             videoEl.style.pointerEvents = 'none';
+            // Hand progressive Direct Play VOD/DVR audio over to #audioElement so Chromium never pauses when hidden
+            const handedOff = enterDirectAudioHandoff(videoEl);
+            if (!handedOff && videoEl.paused && !videoEl.ended && (videoEl.src || videoEl.currentSrc || appState.player || appState.hlsPlayer)) {
+                videoEl.play().catch(() => {});
+            }
         }
         if (audioOnlyBtn) {
             audioOnlyBtn.classList.add('text-blue-400');
@@ -535,12 +800,19 @@ export function toggleAudioOnly(forceState = null) {
         updateMediaSession(currentChannelInfo?.name || UIElements.videoTitle?.textContent, currentChannelInfo?.logo);
         showNotification('Audio Only mode active. Screen can be locked.', false, 2500);
     } else {
+        isTransitioningAudioOnly = false;
         overlay?.classList.add('hidden');
+        const restoredFromAudio = exitDirectAudioHandoff(restoreVideo);
         if (videoEl) {
             videoEl.style.opacity = '1';
             videoEl.style.pointerEvents = 'auto';
-            if (!isPlayerLocked) {
+            if (!isPlayerLocked && !currentVodTranscodeSession && !appState.activeTimeshiftJobId) {
                 videoEl.controls = true;
+            }
+            if (restoreVideo && !restoredFromAudio && videoEl.paused && !videoEl.ended && (videoEl.src || videoEl.currentSrc || appState.player || appState.hlsPlayer)) {
+                isUserInitiatedPause = false;
+                if (typeof window !== 'undefined') window.__viniExplicitlyPausedByUser = false;
+                videoEl.play().catch(() => {});
             }
         }
         if (audioOnlyBtn) {
@@ -551,9 +823,11 @@ export function toggleAudioOnly(forceState = null) {
             audioBadge.classList.add('hidden');
         }
 
-        requestScreenWakeLock();
-        updateMediaSession(currentChannelInfo?.name || UIElements.videoTitle?.textContent, currentChannelInfo?.logo);
-        showNotification('Resumed video playback.', false, 1500);
+        if (restoreVideo) {
+            requestScreenWakeLock();
+            updateMediaSession(currentChannelInfo?.name || UIElements.videoTitle?.textContent, currentChannelInfo?.logo);
+            showNotification('Resumed video playback.', false, 1500);
+        }
     }
 }
 
@@ -670,173 +944,183 @@ export async function forceRefreshStream() {
  * This does NOT affect an active Google Cast session.
  */
 export const stopAndCleanupPlayer = async () => { // MODIFIED: Made function async
-    tracePlayerAction('stopAndCleanupPlayer() invoked', {
-        currentLocalStreamUrl,
-        currentRedirectHistoryId,
-        isUserInitiatedPause,
-        visibilityState: document.visibilityState
-    });
+    isStoppingPlayer = true;
+    clearPipWindowWatch();
+    try {
+        tracePlayerAction('stopAndCleanupPlayer() invoked', {
+            currentLocalStreamUrl,
+            currentRedirectHistoryId,
+            isUserInitiatedPause,
+            visibilityState: document.visibilityState
+        });
 
-    // Flush watch progress before tearing down players
-    flushWatchProgress();
+        // Flush watch progress before tearing down players
+        flushWatchProgress();
 
-    // NEW: Stop redirect heartbeat and invalidate in-flight promises
-    stopRedirectHeartbeat();
-    currentRedirectToken++;
+        // NEW: Stop redirect heartbeat and invalidate in-flight promises
+        stopRedirectHeartbeat();
+        currentRedirectToken++;
 
-    // If we were logging a redirect stream, tell the server it has stopped.
-    if (currentRedirectHistoryId) {
-        stopRedirectStream(currentRedirectHistoryId);
-        currentRedirectHistoryId = null;
-    }
-
-    // NEW: Clear any scheduled retry attempt
-    if (retryTimeout) {
-        clearTimeout(retryTimeout);
-        retryTimeout = null;
-    }
-    retryCount = 0;
-    currentChannelInfo = null;
-
-
-    // Explicitly tell the server to stop the stream process.
-    if (currentLocalStreamUrl && !castState.isCasting) {
-        console.log(`[PLAYER] Sending stop request to server for URL: ${currentLocalStreamUrl} with Profile ID: ${currentProfileId}`);
-        await stopStream(currentLocalStreamUrl, currentProfileId);
-        currentLocalStreamUrl = null; // Clear the tracked URL after stopping
-        currentProfileId = null; // Clear the profile ID
-    }
-
-    // Clear the stream info update interval
-    if (streamInfoInterval) {
-        clearInterval(streamInfoInterval);
-        streamInfoInterval = null;
-    }
-
-    if (UIElements.streamInfoOverlay) {
-        UIElements.streamInfoOverlay.classList.add('hidden');
-    }
-
-    // CRITICAL FIX: Always destroy the local player first, regardless of cast state
-    // This ensures local playback stops when switching to cast or closing the modal
-    if (appState.player) {
-        console.log('[PLAYER] Destroying local mpegts player.');
-        appState.player.destroy();
-        appState.player = null;
-    }
-
-    // Destroy Hls.js player if active (e.g. timeshift playback)
-    if (appState.hlsPlayer) {
-        console.log('[PLAYER] Destroying Hls.js instance.');
-        try {
-            appState.hlsPlayer.destroy();
-        } catch (e) {
-            console.warn('[PLAYER] Error destroying Hls.js player:', e);
+        // If we were logging a redirect stream, tell the server it has stopped.
+        if (currentRedirectHistoryId) {
+            stopRedirectStream(currentRedirectHistoryId);
+            currentRedirectHistoryId = null;
         }
-        appState.hlsPlayer = null;
-    }
-    if (appState.shakaPlayer) {
-        try {
-            await appState.shakaPlayer.destroy();
-        } catch (e) { }
-        appState.shakaPlayer = null;
-    }
 
-    // Hide timeshift controls overlay if visible
-    const timeshiftOverlay = document.getElementById('timeshift-controls-overlay') || UIElements.timeshiftControlsOverlay;
-    if (timeshiftOverlay) {
-        timeshiftOverlay.classList.add('hidden');
-    }
+        // NEW: Clear any scheduled retry attempt
+        if (retryTimeout) {
+            clearTimeout(retryTimeout);
+            retryTimeout = null;
+        }
+        retryCount = 0;
+        currentChannelInfo = null;
 
-    // Hide VOD controls overlay if visible
-    const vodOverlay = document.getElementById('vod-controls-overlay');
-    if (vodOverlay) {
-        vodOverlay.classList.add('hidden');
-        vodOverlay.style.opacity = '0';
-    }
-    if (vodTimeUpdateInterval) {
-        clearInterval(vodTimeUpdateInterval);
-        vodTimeUpdateInterval = null;
-    }
-    if (vodHideControlsTimeout) {
-        clearTimeout(vodHideControlsTimeout);
-        vodHideControlsTimeout = null;
-    }
-    if (seekDebounceTimeout) {
-        clearTimeout(seekDebounceTimeout);
-        seekDebounceTimeout = null;
-    }
-    pendingSeekTarget = null;
-    isVodSeeking = false;
+        // Explicitly tell the server to stop the stream process.
+        if (currentLocalStreamUrl && !castState.isCasting) {
+            console.log(`[PLAYER] Sending stop request to server for URL: ${currentLocalStreamUrl} with Profile ID: ${currentProfileId}`);
+            await stopStream(currentLocalStreamUrl, currentProfileId);
+            currentLocalStreamUrl = null; // Clear the tracked URL after stopping
+            currentProfileId = null; // Clear the profile ID
+        }
 
-    // Stop active timeshift session on server if running
-    if (appState.activeTimeshiftJobId) {
-        console.log(`[PLAYER] Sending stop beacon for timeshift job ${appState.activeTimeshiftJobId}`);
-        try {
-            navigator.sendBeacon(`/api/dvr/timeshift/${appState.activeTimeshiftJobId}/stop`);
-        } catch (e) { }
-        appState.activeTimeshiftJobId = null;
-    }
+        // Clear the stream info update interval
+        if (streamInfoInterval) {
+            clearInterval(streamInfoInterval);
+            streamInfoInterval = null;
+        }
 
-    isUserInitiatedPause = true;
-    releaseTabDiscardLock();
+        if (UIElements.streamInfoOverlay) {
+            UIElements.streamInfoOverlay.classList.add('hidden');
+        }
 
-    if (UIElements.videoElement) {
-        UIElements.videoElement.pause();
-        UIElements.videoElement.src = "";
-        UIElements.videoElement.removeAttribute('src');
-        UIElements.videoElement.load();
-    }
+        // CRITICAL FIX: Always destroy the local player first, regardless of cast state
+        // This ensures local playback stops when switching to cast or closing the modal
+        if (appState.player) {
+            console.log('[PLAYER] Destroying local mpegts player.');
+            appState.player.destroy();
+            appState.player = null;
+        }
 
-    currentStreamUrlToPlay = null;
-    currentVodTranscodeSession = null;
+        // Destroy Hls.js player if active (e.g. timeshift playback)
+        if (appState.hlsPlayer) {
+            console.log('[PLAYER] Destroying Hls.js instance.');
+            try {
+                appState.hlsPlayer.destroy();
+            } catch (e) {
+                console.warn('[PLAYER] Error destroying Hls.js player:', e);
+            }
+            appState.hlsPlayer = null;
+        }
+        if (appState.shakaPlayer) {
+            try {
+                await appState.shakaPlayer.destroy();
+            } catch (e) { }
+            appState.shakaPlayer = null;
+        }
 
-    setLocalPlayerState(null, null, null);
+        // Hide timeshift controls overlay if visible
+        const timeshiftOverlay = document.getElementById('timeshift-controls-overlay') || UIElements.timeshiftControlsOverlay;
+        if (timeshiftOverlay) {
+            timeshiftOverlay.classList.add('hidden');
+        }
 
-    // If we're casting, just close the modal and keep the cast session active
-    if (castState.isCasting) {
-        console.log('[PLAYER] Closing modal but leaving cast session active.');
+        // Hide VOD controls overlay if visible
+        const vodOverlay = document.getElementById('vod-controls-overlay');
+        if (vodOverlay) {
+            vodOverlay.classList.add('hidden');
+            vodOverlay.style.opacity = '0';
+        }
+        if (vodTimeUpdateInterval) {
+            clearInterval(vodTimeUpdateInterval);
+            vodTimeUpdateInterval = null;
+        }
+        if (vodHideControlsTimeout) {
+            clearTimeout(vodHideControlsTimeout);
+            vodHideControlsTimeout = null;
+        }
+        if (seekDebounceTimeout) {
+            clearTimeout(seekDebounceTimeout);
+            seekDebounceTimeout = null;
+        }
+        pendingSeekTarget = null;
+        isVodSeeking = false;
+
+        // Stop active timeshift session on server if running
+        if (appState.activeTimeshiftJobId) {
+            console.log(`[PLAYER] Sending stop beacon for timeshift job ${appState.activeTimeshiftJobId}`);
+            try {
+                navigator.sendBeacon(appendCsrfQuery(`/api/dvr/timeshift/${appState.activeTimeshiftJobId}/stop`));
+            } catch (e) { }
+            appState.activeTimeshiftJobId = null;
+        }
+
+        isUserInitiatedPause = true;
+        releaseTabDiscardLock();
+
+        if (!castState.isCasting && document.pictureInPictureElement) {
+            try {
+                await document.exitPictureInPicture();
+            } catch (e) {}
+        }
+
+        if (UIElements.videoElement) {
+            UIElements.videoElement.pause();
+            UIElements.videoElement.src = "";
+            UIElements.videoElement.removeAttribute('src');
+            UIElements.videoElement.load();
+        }
+        exitDirectAudioHandoff(false);
+
+        currentStreamUrlToPlay = null;
+        currentVodTranscodeSession = null;
+
+        setLocalPlayerState(null, null, null);
+
+        // If we're casting, just close the modal and keep the cast session active
+        if (castState.isCasting) {
+            console.log('[PLAYER] Closing modal but leaving cast session active.');
+            closeModal(UIElements.videoModal);
+            return;
+        }
+
+        // NEW: Release screen wake lock
+        releaseScreenWakeLock();
+
+        // NEW: Reset Audio-Only and Touch-Lock states if active
+        if (isAudioOnly) {
+            toggleAudioOnly(false, { restoreVideo: false });
+        }
+        if (isPlayerLocked) {
+            togglePlayerLock(false);
+        }
+
+        if (UIElements.videoElement) {
+            UIElements.videoElement.style.opacity = '1';
+            UIElements.videoElement.style.pointerEvents = 'auto';
+            UIElements.videoElement.controls = true;
+        }
+
+        // NEW: Exit fullscreen if container was in fullscreen mode
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
+            if (document.exitFullscreen) {
+                document.exitFullscreen().catch(() => {});
+            } else if (document.webkitExitFullscreen) {
+                document.webkitExitFullscreen().catch(() => {});
+            }
+        }
+
+        // Unhide refresh button for future live playback
+        const refreshBtn = document.getElementById('refresh-stream-btn');
+        if (refreshBtn) refreshBtn.classList.remove('hidden');
+
+        document.getElementById('player-more-options-menu')?.classList.add('hidden');
+        setPipModalActive(false);
         closeModal(UIElements.videoModal);
-        return;
+    } finally {
+        setTimeout(() => {
+            isStoppingPlayer = false;
+        }, 150);
     }
-
-    if (document.pictureInPictureElement) {
-        document.exitPictureInPicture().catch(console.error);
-    }
-
-    // NEW: Release screen wake lock
-    releaseScreenWakeLock();
-
-    // NEW: Reset Audio-Only and Touch-Lock states if active
-    if (isAudioOnly) {
-        toggleAudioOnly(false);
-    }
-    if (isPlayerLocked) {
-        togglePlayerLock(false);
-    }
-
-    if (UIElements.videoElement) {
-        UIElements.videoElement.style.opacity = '1';
-        UIElements.videoElement.style.pointerEvents = 'auto';
-        UIElements.videoElement.controls = true;
-    }
-
-    // NEW: Exit fullscreen if container was in fullscreen mode
-    if (document.fullscreenElement || document.webkitFullscreenElement) {
-        if (document.exitFullscreen) {
-            document.exitFullscreen().catch(() => {});
-        } else if (document.webkitExitFullscreen) {
-            document.webkitExitFullscreen().catch(() => {});
-        }
-    }
-
-    // Unhide refresh button for future live playback
-    const refreshBtn = document.getElementById('refresh-stream-btn');
-    if (refreshBtn) refreshBtn.classList.remove('hidden');
-
-    document.getElementById('player-more-options-menu')?.classList.add('hidden');
-    UIElements.videoModal?.classList.remove('pip-active');
-    closeModal(UIElements.videoModal);
 };
 
 /**
@@ -883,6 +1167,7 @@ export const playChannel = (url, name, channelId) => {
     // Prime / request wake lock immediately inside user click gesture
     requestScreenWakeLock();
 
+    const isAutoRetry = Boolean(retryTimeout);
     // On a fresh play request (not a retry), reset the retry counter
     if (!retryTimeout) {
         retryCount = 0;
@@ -903,6 +1188,7 @@ export const playChannel = (url, name, channelId) => {
         const recentChannels = [channelId, ...(guideState.settings.recentChannels || []).filter(id => id !== channelId)].slice(0, 15);
         guideState.settings.recentChannels = recentChannels;
         saveUserSetting('recentChannels', recentChannels);
+        window.dispatchEvent(new CustomEvent('viniplay:recents-updated'));
     }
 
     const profileId = guideState.settings.activeStreamProfileId;
@@ -916,18 +1202,18 @@ export const playChannel = (url, name, channelId) => {
         return showNotification("Stream profile not found.", true);
     }
 
+    const streamUrlToPlay = profile.command === 'redirect' ? url : `/stream?url=${encodeURIComponent(url)}&profileId=${profileId}&userAgentId=${userAgentId}&mediaType=live`;
+    currentStreamUrlToPlay = streamUrlToPlay;
+    if (isAudioOnly) {
+        toggleAudioOnly(false, { restoreVideo: false });
+    }
+
     // --- Activity Logging for Redirect Streams ---
     if (profile.command === 'redirect') {
         const channel = guideState.channels.find(c => c.id === channelId);
-        beginRedirectLogging(url, channelId, name, channel ? channel.logo : '');
+        beginRedirectLogging(url, channelId, name, channel ? channel.logo : '', 'live');
     }
     // --- End Activity Logging ---
-
-    const streamUrlToPlay = profile.command === 'redirect' ? url : `/stream?url=${encodeURIComponent(url)}&profileId=${profileId}&userAgentId=${userAgentId}`;
-    currentStreamUrlToPlay = streamUrlToPlay;
-    if (isAudioOnly) {
-        toggleAudioOnly(false);
-    }
 
     if (castState.isCasting) {
         console.log(`[PLAYER] Already casting. Loading new channel "${name}" to remote device.`);
@@ -994,8 +1280,19 @@ export const playChannel = (url, name, channelId) => {
             }
         });
 
-        UIElements.videoModal?.classList.remove('pip-active');
-        openModal(UIElements.videoModal);
+        if (document.pictureInPictureElement) {
+            if (!isAutoRetry) {
+                document.exitPictureInPicture().catch(() => {});
+                setPipModalActive(false);
+                openModal(UIElements.videoModal);
+            } else {
+                const bannerTitle = document.getElementById('pip-active-banner-title');
+                if (bannerTitle) bannerTitle.textContent = name;
+            }
+        } else {
+            setPipModalActive(false);
+            openModal(UIElements.videoModal);
+        }
         UIElements.videoTitle.textContent = name;
         updateMediaSession(name, logo);
         requestScreenWakeLock();
@@ -1051,7 +1348,7 @@ export const playRecordingOrDirectVideo = async (url, title, logo = '', isVod = 
     isUserInitiatedPause = false;
     currentStreamUrlToPlay = url;
     if (isAudioOnly) {
-        toggleAudioOnly(false);
+        toggleAudioOnly(false, { restoreVideo: false });
     }
 
     // 2. Setup title, channel info, and media session
@@ -1065,11 +1362,14 @@ export const playRecordingOrDirectVideo = async (url, title, logo = '', isVod = 
     const refreshBtn = document.getElementById('refresh-stream-btn');
     if (refreshBtn) refreshBtn.classList.add('hidden');
 
-    // 4. Activity logging for Direct VOD sessions
+    // 4. Activity logging for Direct VOD and DVR sessions
     if (isVod) {
         const vodItem = (guideState.vodMovies || []).find(m => m.url === url) || (guideState.vodSeries || []).find(s => s.url === url);
-        const vodId = vodItem ? vodItem.id : null;
-        beginRedirectLogging(url, vodId, title, logo);
+        const vodId = vodItem ? vodItem.id : (mediaInfo?.contentId || null);
+        const vodType = (mediaInfo?.contentType === 'vod_episode' || vodItem?.type === 'series' || /S\d{1,2}\s*E\d{1,3}/i.test(title)) ? 'series' : 'movie';
+        beginRedirectLogging(url, vodId, title, logo, vodType);
+    } else if (url.startsWith('/dvr/') || mediaInfo?.contentType === 'dvr_recording') {
+        beginRedirectLogging(url, mediaInfo?.contentId || null, title, logo, 'dvr');
     }
 
     // 5. Watch Progress Tracking
@@ -1086,6 +1386,7 @@ export const playRecordingOrDirectVideo = async (url, title, logo = '', isVod = 
             });
         }
     }
+    updateMediaSession(title, logo || '/viniplay.png');
 
     // 6. Configure video element
     if (UIElements.videoElement) {
@@ -1113,7 +1414,10 @@ export const playRecordingOrDirectVideo = async (url, title, logo = '', isVod = 
     }
 
     // 7. Open unified video modal
-    UIElements.videoModal?.classList.remove('pip-active');
+    if (document.pictureInPictureElement) {
+        document.exitPictureInPicture().catch(() => {});
+    }
+    setPipModalActive(false);
     openModal(UIElements.videoModal);
     requestScreenWakeLock();
 
@@ -1345,16 +1649,16 @@ export const playVOD = async (url, title, logo = '', startTime = 0, knownDuratio
 
     // 2. Get necessary settings
     const settings = guideState.settings;
-    const profileId = settings.activeStreamProfileId;
+    let profileId = settings.activeStreamProfileId;
     const userAgentId = settings.activeUserAgentId;
-    const profile = (settings.streamProfiles || []).find(p => p.id === profileId);
+    let profile = (settings.streamProfiles || []).find(p => p.id === profileId);
 
     // Hide VOD controls overlay if not transcoding
     const vodOverlay = document.getElementById('vod-controls-overlay');
 
     // --- DIRECT PLAY / REDIRECT LOGIC ---
-    // If Direct Play is explicitly enabled OR the active profile is 'redirect' (no transcoding),
-    // always use native HTML5 <video> playback. Never pass direct MKV/MP4 files into mpegts.js.
+    // If Direct Play is enabled OR the selected profile is 'redirect', use the native <video> element.
+    // Also fallback to this if the selected profile cannot be found.
     if (useDirectPlay || !profile || profile.command === 'redirect') {
         currentVodTranscodeSession = null;
         if (vodOverlay) {
@@ -1380,7 +1684,8 @@ export const playVOD = async (url, title, logo = '', startTime = 0, knownDuratio
         duration: preservedDuration
     };
 
-    let streamUrlToPlay = `/stream?url=${encodeURIComponent(url)}&profileId=${profileId}&userAgentId=${userAgentId}&vodName=${encodeURIComponent(title)}&vodLogo=${encodeURIComponent(logo)}`;
+    const vodMediaType = (mediaInfo?.contentType === 'vod_episode' || /S\d{1,2}\s*E\d{1,3}/i.test(title)) ? 'series' : 'movie';
+    let streamUrlToPlay = `/stream?url=${encodeURIComponent(url)}&profileId=${profileId}&userAgentId=${userAgentId}&vodName=${encodeURIComponent(title)}&vodLogo=${encodeURIComponent(logo)}&mediaType=${vodMediaType}`;
     if (startTime > 0) {
         streamUrlToPlay += `&startTime=${Math.floor(startTime)}`;
     }
@@ -1391,7 +1696,7 @@ export const playVOD = async (url, title, logo = '', startTime = 0, knownDuratio
     currentProfileId = profileId;
 
     if (isAudioOnly) {
-        toggleAudioOnly(false);
+        toggleAudioOnly(false, { restoreVideo: false });
     }
 
     console.log(`[VOD_PLAYER] Final stream URL: ${streamUrlToPlay}`);
@@ -1441,7 +1746,10 @@ export const playVOD = async (url, title, logo = '', startTime = 0, knownDuratio
             });
 
             // Open modal and set title
-            UIElements.videoModal?.classList.remove('pip-active');
+            if (document.pictureInPictureElement) {
+                document.exitPictureInPicture().catch(() => {});
+            }
+            setPipModalActive(false);
             openModal(UIElements.videoModal);
             UIElements.videoTitle.textContent = title;
             currentChannelInfo = { url, name: title, channelId: null, logo };
@@ -1458,8 +1766,12 @@ export const playVOD = async (url, title, logo = '', startTime = 0, knownDuratio
 
             // Fetch duration in background if not known
             if (!currentVodTranscodeSession.duration) {
-                fetch(`/api/vod/duration?url=${encodeURIComponent(url)}`)
-                    .then(res => res.json())
+                fetch('/api/vod/duration', {
+                    method: 'POST',
+                    headers: withCsrfHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({ url })
+                })
+                    .then(res => res.ok ? res.json() : null)
                     .then(data => {
                         if (data && data.duration && currentVodTranscodeSession && currentVodTranscodeSession.url === url) {
                             currentVodTranscodeSession.duration = data.duration;
@@ -1646,12 +1958,69 @@ export function setupPlayerEventListeners() {
         bindTap(refreshBtn, forceRefreshStream);
     }
 
-    bindTap(UIElements.pipBtn, () => {
-        if (document.pictureInPictureEnabled && UIElements.videoElement && (UIElements.videoElement.readyState >= 1 || !UIElements.videoElement.paused)) {
-            requestScreenWakeLock();
-            UIElements.videoElement.requestPictureInPicture().catch(() => showNotification("Could not enter Picture-in-Picture.", true));
+    bindTap(UIElements.pipBtn, async () => {
+        if (document.pictureInPictureElement) {
+            document.exitPictureInPicture().catch(console.error);
+            return;
+        }
+        const wasAudioOnly = isAudioOnly;
+        if (wasAudioOnly) {
+            toggleAudioOnly(false);
+        }
+        if (document.pictureInPictureEnabled && UIElements.videoElement) {
+            // Exit HTML5 Container/Element Fullscreen first so macOS Chrome never attaches
+            // the PiP NSWindow to a disappearing temporary Fullscreen Space.
+            if (document.fullscreenElement || document.webkitFullscreenElement) {
+                try {
+                    if (document.exitFullscreen) {
+                        await document.exitFullscreen();
+                    } else if (document.webkitExitFullscreen) {
+                        await document.webkitExitFullscreen();
+                    }
+                    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                } catch (err) {
+                    console.warn('[PLAYER] Failed to exit fullscreen before PiP:', err);
+                }
+            }
+
+            if (UIElements.videoElement.readyState >= 1 || !UIElements.videoElement.paused) {
+                requestScreenWakeLock();
+                UIElements.videoElement.requestPictureInPicture().catch(() => showNotification("Could not enter Picture-in-Picture.", true));
+            } else if (wasAudioOnly && (UIElements.videoElement.getAttribute('src') || currentStreamUrlToPlay)) {
+                UIElements.videoElement.addEventListener('loadedmetadata', () => {
+                    requestScreenWakeLock();
+                    UIElements.videoElement.requestPictureInPicture().catch(() => showNotification("Could not enter Picture-in-Picture.", true));
+                }, { once: true });
+            }
         }
     });
+
+    // Desktop / Browser PiP Recovery Mini-Bar Buttons
+    const pipBannerRestoreBtn = document.getElementById('pip-banner-restore-btn');
+    if (pipBannerRestoreBtn) {
+        bindTap(pipBannerRestoreBtn, async () => {
+            if (document.pictureInPictureElement) {
+                try {
+                    await document.exitPictureInPicture();
+                    return;
+                } catch (err) {
+                    console.warn('[PLAYER] exitPictureInPicture failed, restoring modal directly:', err);
+                }
+            }
+            setPipModalActive(false);
+            openModal(UIElements.videoModal);
+            if (UIElements.videoElement && UIElements.videoElement.paused && !isUserInitiatedPause) {
+                UIElements.videoElement.play().catch(() => {});
+            }
+        });
+    }
+
+    const pipBannerStopBtn = document.getElementById('pip-banner-stop-btn');
+    if (pipBannerStopBtn) {
+        bindTap(pipBannerStopBtn, () => {
+            stopAndCleanupPlayer();
+        });
+    }
 
     // More Options Dropdown Toggle & Outside Click
     const moreOptionsBtn = document.getElementById('player-more-options-btn');
@@ -1786,6 +2155,11 @@ export function setupPlayerEventListeners() {
         });
     });
     UIElements.videoElement.addEventListener('pause', () => {
+        // When progressive VOD/DVR audio has been handed off to #audioElement, ignore detached <videoElement> pause
+        if (directAudioHandoff) {
+            return;
+        }
+
         saveCurrentWatchProgress(true);
 
         if (!document.pictureInPictureElement) {
@@ -1799,9 +2173,23 @@ export function setupPlayerEventListeners() {
             pipActive: !!document.pictureInPictureElement
         });
 
-        // Ignore internal OS pause event fired when leaving/docking Picture-in-Picture
-        if (isTransitioningFromPip) {
-            console.log('[PLAYER] Ignored browser pause event during PiP exit transition.');
+        // Ignore internal OS pause event fired when leaving/docking Picture-in-Picture or during background Audio-Only
+        const explicitlyPaused = isUserInitiatedPause || (typeof window !== 'undefined' && window.__viniExplicitlyPausedByUser);
+        const suppressAudioOnlyPause = (isAudioOnly && !explicitlyPaused) ||
+            isTransitioningAudioOnly ||
+            (typeof window !== 'undefined' && window.__viniSuppressPauseUntil > Date.now());
+        if (isTransitioningFromPip || suppressAudioOnlyPause) {
+            console.log('[PLAYER] Ignored browser pause event during PiP / Audio-Only transition.');
+            if (suppressAudioOnlyPause) {
+                const resumeIfNeeded = () => {
+                    const nowExplicit = isUserInitiatedPause || (typeof window !== 'undefined' && window.__viniExplicitlyPausedByUser);
+                    if (!directAudioHandoff && UIElements.videoElement && UIElements.videoElement.paused && !UIElements.videoElement.ended && !nowExplicit) {
+                        UIElements.videoElement.play().catch(() => {});
+                    }
+                };
+                setTimeout(resumeIfNeeded, 40);
+                setTimeout(resumeIfNeeded, 200);
+            }
             return;
         }
 
@@ -1820,8 +2208,54 @@ export function setupPlayerEventListeners() {
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
     });
 
+    // Dedicated #audioElement listeners for uninterrupted Direct Play VOD/DVR Audio-Only playback
+    const dedicatedAudioEl = getAudioElement();
+    if (dedicatedAudioEl) {
+        dedicatedAudioEl.addEventListener('timeupdate', () => {
+            if (directAudioHandoff && dedicatedAudioEl.currentTime > 0) {
+                directAudioHandoff.lastKnownTime = dedicatedAudioEl.currentTime;
+            }
+        });
+        dedicatedAudioEl.addEventListener('play', () => {
+            if (!directAudioHandoff) return;
+            isUserInitiatedPause = false;
+            acquireTabDiscardLock();
+            if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+        });
+        dedicatedAudioEl.addEventListener('playing', () => {
+            if (!directAudioHandoff) return;
+            isUserInitiatedPause = false;
+            acquireTabDiscardLock();
+            if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+        });
+        dedicatedAudioEl.addEventListener('pause', () => {
+            if (!directAudioHandoff) return;
+            saveCurrentWatchProgress(true);
+            if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+        });
+        dedicatedAudioEl.addEventListener('ended', () => {
+            if (!directAudioHandoff) return;
+            if (currentActiveMedia) {
+                saveWatchProgressApi(currentActiveMedia.contentType, currentActiveMedia.contentId, 0, currentActiveMedia.duration || 0);
+                currentActiveMedia = null;
+            }
+            exitDirectAudioHandoff(false);
+            releaseScreenWakeLock();
+            releaseTabDiscardLock();
+            if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
+        });
+    }
+
     // Handle tab visibility changes: restore video playback when returning to foreground if not paused by user
     document.addEventListener('visibilitychange', () => {
+        const audioEl = getAudioElement();
+        if (directAudioHandoff && audioEl) {
+            if (document.visibilityState === 'visible' && audioEl.paused && !audioEl.ended && !isUserInitiatedPause) {
+                audioEl.play().catch(() => {});
+            }
+            return;
+        }
+
         const hasActiveStream = !!(appState.player || appState.hlsPlayer || currentLocalStreamUrl || (UIElements.videoElement && (UIElements.videoElement.src || UIElements.videoElement.currentSrc)));
 
         if (document.visibilityState === 'visible') {
@@ -1837,37 +2271,91 @@ export function setupPlayerEventListeners() {
         }
     });
 
-    UIElements.videoElement.addEventListener('enterpictureinpicture', () => {
-        // Keep video element active in document so browser does not release wake lock or suspend audio
-        UIElements.videoModal.classList.add('pip-active');
-        document.body.classList.remove('modal-open');
+    UIElements.videoElement.addEventListener('enterpictureinpicture', (e) => {
+        clearPipWindowWatch();
         requestScreenWakeLock();
+
+        // If PiP was triggered via native <video> controls while #video-modal-container was in Fullscreen,
+        // exit Fullscreen immediately so #video-modal.pip-active doesn't hold an invisible Fullscreen Space.
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
+            if (document.exitFullscreen) {
+                document.exitFullscreen().catch(() => {});
+            } else if (document.webkitExitFullscreen) {
+                document.webkitExitFullscreen().catch(() => {});
+            }
+        }
+
+        const activatePipModalHide = () => {
+            requestAnimationFrame(() => {
+                if (document.pictureInPictureElement === UIElements.videoElement && !isStoppingPlayer) {
+                    // Keep video element active in document so browser does not release wake lock or suspend audio
+                    setPipModalActive(true);
+                }
+            });
+        };
+
+        const pipWin = e && e.pictureInPictureWindow;
+        if (!pipWin || (pipWin.width > 0 && pipWin.height > 0)) {
+            activatePipModalHide();
+            return;
+        }
+
+        // Wait briefly for OS PiP window dimensions; if it remains 0x0 in foreground (e.g. responsive emulation),
+        // exit phantom PiP instead of hiding #video-modal and trapping the user with audio only.
+        activePipWindowRef = pipWin;
+        activePipResizeHandler = () => {
+            if (pipWin.width > 0 && pipWin.height > 0) {
+                clearPipWindowWatch();
+                activatePipModalHide();
+            }
+        };
+        pipWin.addEventListener('resize', activePipResizeHandler);
+
+        pipWindowCheckTimer = setTimeout(() => {
+            const stillZero = (!pipWin.width || !pipWin.height);
+            clearPipWindowWatch();
+            if (stillZero && document.pictureInPictureElement === UIElements.videoElement && document.visibilityState === 'visible') {
+                setPipModalActive(false);
+                document.exitPictureInPicture().catch(() => {});
+                showNotification("Picture-in-Picture window is unavailable in this view.", true, 2500);
+            }
+        }, 500);
     });
     UIElements.videoElement.addEventListener('leavepictureinpicture', () => {
+        clearPipWindowWatch();
+        if (isStoppingPlayer) {
+            setPipModalActive(false);
+            return;
+        }
+
         isTransitioningFromPip = true;
         isUserInitiatedPause = false; // User returning to player indicates intention to view
         setTimeout(() => {
             isTransitioningFromPip = false;
         }, 800);
 
-        UIElements.videoModal.classList.remove('pip-active');
-        const hasActiveStream = !!(appState.player || appState.hlsPlayer || currentLocalStreamUrl || (UIElements.videoElement && (UIElements.videoElement.src || UIElements.videoElement.currentSrc)));
+        const wasModalPipHidden = Boolean(UIElements.videoModal?.classList.contains('pip-active'));
+        setPipModalActive(false);
+        const hasDirectSrc = Boolean(UIElements.videoElement && UIElements.videoElement.getAttribute('src'));
+        const hasActiveStream = Boolean(appState.player || appState.hlsPlayer || appState.shakaPlayer || currentLocalStreamUrl || currentStreamUrlToPlay || directAudioHandoff || hasDirectSrc);
         if (hasActiveStream) {
             openModal(UIElements.videoModal);
             if (!isAudioOnly) {
                 requestScreenWakeLock();
             }
-            // Android / iOS PiP enlargement animation momentarily pauses the video.
-            // Stagger multiple resume attempts so playback continues smoothly as soon as the OS window transition ends.
-            const tryPlay = () => {
-                if (UIElements.videoElement && UIElements.videoElement.paused) {
-                    UIElements.videoElement.play().catch(e => console.log('[PLAYER] PiP resume play promise:', e));
-                }
-            };
-            tryPlay();
-            setTimeout(tryPlay, 150);
-            setTimeout(tryPlay, 350);
-            setTimeout(tryPlay, 650);
+            if (wasModalPipHidden) {
+                // Android / iOS PiP enlargement animation momentarily pauses the video.
+                // Stagger multiple resume attempts so playback continues smoothly as soon as the OS window transition ends.
+                const tryPlay = () => {
+                    if (!isStoppingPlayer && UIElements.videoElement && UIElements.videoElement.paused && !isUserInitiatedPause) {
+                        UIElements.videoElement.play().catch(e => console.log('[PLAYER] PiP resume play promise:', e));
+                    }
+                };
+                tryPlay();
+                setTimeout(tryPlay, 150);
+                setTimeout(tryPlay, 350);
+                setTimeout(tryPlay, 650);
+            }
         } else {
             stopAndCleanupPlayer();
         }
@@ -1876,6 +2364,13 @@ export function setupPlayerEventListeners() {
     window.addEventListener('focus', () => {
         const videoModal = document.getElementById('video-modal') || UIElements.videoModal;
         if (videoModal && !videoModal.classList.contains('hidden')) {
+            const audioEl = getAudioElement();
+            if (directAudioHandoff && audioEl) {
+                if (audioEl.paused && !audioEl.ended && !isUserInitiatedPause) {
+                    audioEl.play().catch(() => {});
+                }
+                return;
+            }
             if (UIElements.videoElement && UIElements.videoElement.paused && !isUserInitiatedPause) {
                 UIElements.videoElement.play().catch(() => {});
             }

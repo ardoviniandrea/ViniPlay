@@ -5,7 +5,7 @@
  */
 
 import { guideState } from './state.js';
-import { getDeviceId } from './api.js';
+import { getDeviceId, withCsrfHeaders, appendCsrfQuery } from './api.js';
 
 let telemetryBuffer = [];
 let flushTimer = null;
@@ -17,7 +17,7 @@ const MAX_BUFFER_SIZE = 40;
  * @returns {boolean}
  */
 export function isTelemetryEnabled() {
-    return guideState?.settings?.clientTelemetryEnabled === true;
+    return Boolean(window.ViniAndroid) || guideState?.settings?.clientTelemetryEnabled === true;
 }
 
 /**
@@ -71,7 +71,7 @@ export function flushTelemetry(useBeacon = false) {
     if (useBeacon && typeof navigator.sendBeacon === 'function') {
         try {
             const blob = new Blob([payload], { type: 'application/json' });
-            const sent = navigator.sendBeacon('/api/logs/client', blob);
+            const sent = navigator.sendBeacon(appendCsrfQuery('/api/logs/client'), blob);
             if (sent) return;
         } catch (e) {
             // Fall back to keepalive fetch
@@ -80,7 +80,7 @@ export function flushTelemetry(useBeacon = false) {
 
     fetch('/api/logs/client', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withCsrfHeaders({ 'Content-Type': 'application/json' }),
         body: payload,
         keepalive: true
     }).catch(() => {

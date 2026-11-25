@@ -3,6 +3,8 @@
  * * Contains generic helper and utility functions, like parsers.
  */
 
+import { guideState } from './state.js';
+
 /**
  * Routes an external image URL through the server-side image proxy so that
  * plain-http images (e.g. provider `tvg-logo` URLs) are not blocked as mixed
@@ -12,9 +14,13 @@
  * @returns {string} The proxied URL, or the input unchanged when no proxying is needed.
  */
 export function proxiedImageUrl(url) {
-    return url && url.startsWith('http')
-        ? `/api/image-proxy?url=${encodeURIComponent(url)}`
-        : (url || '');
+    if (!url || typeof url !== 'string') return '';
+    if (url.startsWith('https://placehold.co/')) return url;
+    if (url.startsWith('http')) {
+        const cb = guideState?.settings?.posterCacheClearedAt;
+        return `/api/image-proxy?url=${encodeURIComponent(url)}${cb ? `&_cb=${cb}` : ''}`;
+    }
+    return url;
 }
 
 /**

@@ -6,6 +6,7 @@
 import { UIElements, appState } from './state.js';
 import { initMainApp } from '../main.js';
 import { showNotification } from './ui.js'; // Import showNotification for consistent error display
+import { setCsrfToken, withCsrfHeaders } from './api.js';
 
 /**
  * Populates the UIElements object with references to DOM elements.
@@ -72,11 +73,36 @@ const initializeUIElements = () => {
     UIElements.mobileNavMultiview = document.getElementById('mobile-nav-multiview');
     UIElements.multiviewHeader = document.getElementById('multiview-header');
     UIElements.multiviewContainer = document.getElementById('multiview-container');
+    UIElements.multiviewGrid = document.getElementById('multiview-grid');
     UIElements.multiviewAddPlayer = document.getElementById('multiview-add-player');
+    UIElements.multiviewDecrementPlayer = document.getElementById('multiview-decrement-player');
     UIElements.multiviewRemovePlayer = document.getElementById('multiview-remove-player');
+    UIElements.multiviewPlayerCountBadge = document.getElementById('multiview-player-count-badge');
+    UIElements.multiviewMobileMoreBtn = document.getElementById('multiview-mobile-more-btn');
+    UIElements.multiviewSecondaryControls = document.getElementById('multiview-secondary-controls');
     UIElements.layoutBtnAuto = document.getElementById('layout-btn-auto');
     UIElements.layoutBtn2x2 = document.getElementById('layout-btn-2x2');
     UIElements.layoutBtn1x3 = document.getElementById('layout-btn-1x3');
+    UIElements.layoutBtnFreeform = document.getElementById('layout-btn-freeform');
+    UIElements.multiviewPinControlsBtn = document.getElementById('multiview-pin-controls-btn');
+    UIElements.multiviewImmersiveFab = document.getElementById('multiview-immersive-fab');
+    UIElements.multiviewImmersiveToolbarBtn = document.getElementById('multiview-immersive-toolbar-btn');
+    UIElements.multiviewImmersiveExitBtn = document.getElementById('multiview-immersive-exit-btn');
+    UIElements.multiviewDrawerToggleBtn = document.getElementById('multiview-drawer-toggle-btn');
+    UIElements.multiviewChannelDrawer = document.getElementById('multiview-channel-drawer');
+    UIElements.multiviewDrawerCloseBtn = document.getElementById('multiview-drawer-close-btn');
+    UIElements.multiviewDrawerTargetBadge = document.getElementById('multiview-drawer-target-badge');
+    UIElements.multiviewDrawerTabList = document.getElementById('multiview-drawer-tab-list');
+    UIElements.multiviewDrawerTabCustom = document.getElementById('multiview-drawer-tab-custom');
+    UIElements.multiviewDrawerListControls = document.getElementById('multiview-drawer-list-controls');
+    UIElements.multiviewDrawerCustomControls = document.getElementById('multiview-drawer-custom-controls');
+    UIElements.multiviewDrawerGroupSelect = document.getElementById('multiview-drawer-group-select');
+    UIElements.multiviewDrawerSearch = document.getElementById('multiview-drawer-search');
+    UIElements.multiviewDrawerChannelList = document.getElementById('multiview-drawer-channel-list');
+    UIElements.multiviewDrawerChannelCount = document.getElementById('multiview-drawer-channel-count');
+    UIElements.multiviewDrawerCustomUrl = document.getElementById('multiview-drawer-custom-url');
+    UIElements.multiviewDrawerCustomName = document.getElementById('multiview-drawer-custom-name');
+    UIElements.multiviewDrawerCustomPlayBtn = document.getElementById('multiview-drawer-custom-play-btn');
     UIElements.multiviewChannelSelectorModal = document.getElementById('multiview-channel-selector-modal');
     UIElements.channelSelectorList = document.getElementById('channel-selector-list');
     UIElements.channelSelectorSearch = document.getElementById('channel-selector-search');
@@ -90,7 +116,7 @@ const initializeUIElements = () => {
     UIElements.saveLayoutName = document.getElementById('save-layout-name');
     UIElements.saveLayoutCancelBtn = document.getElementById('save-layout-cancel-btn');
     UIElements.multiviewChannelFilter = document.getElementById('multiview-channel-filter');
-    // NEW: Multi-view custom URL elements
+    // NEW: Multi-view custom URL elements (modal fallback for DVR/Admin)
     UIElements.multiviewSourceListBtn = document.getElementById('multiview-source-list-btn');
     UIElements.multiviewSourceCustomBtn = document.getElementById('multiview-source-custom-btn');
     UIElements.multiviewCustomUrlContainer = document.getElementById('multiview-custom-url-container');
@@ -211,21 +237,44 @@ const initializeUIElements = () => {
     UIElements.vodDetailsPoster = document.getElementById('vod-details-poster');
     UIElements.vodDetailsTitle = document.getElementById('vod-details-title');
     UIElements.vodDetailsMeta = document.getElementById('vod-details-meta');
+    UIElements.vodDetailsBadges = document.getElementById('vod-details-badges');
     UIElements.vodDetailsYear = document.getElementById('vod-details-year');
     UIElements.vodDetailsRating = document.getElementById('vod-details-rating');
     UIElements.vodDetailsType = document.getElementById('vod-details-type');
     UIElements.vodDetailsDuration = document.getElementById('vod-details-duration');
+    UIElements.vodDetailsTmdb = document.getElementById('vod-details-tmdb');
+    UIElements.vodDetailsReleaseDateRow = document.getElementById('vod-details-releasedate-row');
+    UIElements.vodDetailsReleaseDate = document.getElementById('vod-details-releasedate');
     UIElements.vodDetailsGenre = document.getElementById('vod-details-genre');
     UIElements.vodDetailsDirector = document.getElementById('vod-details-director');
     UIElements.vodDetailsCast = document.getElementById('vod-details-cast');
+    UIElements.vodDetailsCountryRow = document.getElementById('vod-details-country-row');
+    UIElements.vodDetailsCountry = document.getElementById('vod-details-country');
     UIElements.vodDetailsDesc = document.getElementById('vod-details-desc');
     UIElements.vodDetailsMovieActions = document.getElementById('vod-details-movie-actions');
     UIElements.vodPlayMovieBtn = document.getElementById('vod-play-movie-btn');
+    UIElements.vodWatchTrailerBtn = document.getElementById('vod-watch-trailer-btn');
+    UIElements.vodCopyLinkBtn = document.getElementById('vod-copy-link-btn');
+    UIElements.vodDetailsExternalLinks = document.getElementById('vod-details-external-links');
+    UIElements.vodLinkImdb = document.getElementById('vod-link-imdb');
+    UIElements.vodLinkTmdb = document.getElementById('vod-link-tmdb');
+    UIElements.vodLinkTrakt = document.getElementById('vod-link-trakt');
+    UIElements.vodLinkRt = document.getElementById('vod-link-rt');
+    UIElements.vodLinkLetterboxd = document.getElementById('vod-link-letterboxd');
+    UIElements.vodDetailsTechInfo = document.getElementById('vod-details-tech-info');
+    UIElements.vodTechProviderBadge = document.getElementById('vod-tech-provider-badge');
+    UIElements.vodTechStreamDetails = document.getElementById('vod-tech-stream-details');
     UIElements.vodDetailsSeriesActions = document.getElementById('vod-details-series-actions');
     UIElements.vodSeasonSelect = document.getElementById('vod-season-select');
     UIElements.vodSeasonTabs = document.getElementById('vod-season-tabs');
     UIElements.vodEpisodesCountBadge = document.getElementById('vod-episodes-count-badge');
     UIElements.vodEpisodeList = document.getElementById('vod-episode-list');
+
+    // --- VOD Trailer Modal ---
+    UIElements.vodTrailerModal = document.getElementById('vod-trailer-modal');
+    UIElements.vodTrailerTitle = document.getElementById('vod-trailer-title');
+    UIElements.vodTrailerCloseBtn = document.getElementById('vod-trailer-close-btn');
+    UIElements.vodTrailerIframe = document.getElementById('vod-trailer-iframe');
     // --- END VOD Elements ---
 
     // Settings Buttons
@@ -264,6 +313,21 @@ const initializeUIElements = () => {
     UIElements.clearLogsBtn = document.getElementById('clear-logs-btn');
     // --- END Log Management Elements ---
 
+    // --- Logo & Image Cache Management Elements ---
+    UIElements.logoCacheManagementSection = document.getElementById('logo-cache-management-section');
+    UIElements.logoSyncStatusBadge = document.getElementById('logo-sync-status-badge');
+    UIElements.logoCacheCount = document.getElementById('logo-cache-count');
+    UIElements.logoCacheSize = document.getElementById('logo-cache-size');
+    UIElements.logoChannelCoverage = document.getElementById('logo-channel-coverage');
+    UIElements.posterCacheCount = document.getElementById('poster-cache-count');
+    UIElements.posterCacheSize = document.getElementById('poster-cache-size');
+    UIElements.storeLogosInternallyToggle = document.getElementById('store-logos-internally-toggle');
+    UIElements.smartLogoMatchingToggle = document.getElementById('smart-logo-matching-toggle');
+    UIElements.syncLogosNowBtn = document.getElementById('sync-logos-now-btn');
+    UIElements.clearChannelLogosBtn = document.getElementById('clear-channel-logos-btn');
+    UIElements.clearVodPostersBtn = document.getElementById('clear-vod-posters-btn');
+    // --- END Logo & Image Cache Management Elements ---
+
     // --- Resume Playback Modal Elements ---
     UIElements.resumePlaybackModal = document.getElementById('resume-playback-modal');
     UIElements.resumePlaybackTitle = document.getElementById('resume-playback-title');
@@ -274,6 +338,20 @@ const initializeUIElements = () => {
     UIElements.resumePlaybackCloseBtn = document.getElementById('resume-playback-close-btn');
 };
 
+
+const syncAndroidServerButtons = () => {
+    if (window.ViniAndroid && typeof window.ViniAndroid.openServerSettings === 'function') {
+        document.querySelectorAll('.android-change-server-btn').forEach((btn) => {
+            btn.classList.remove('hidden');
+            if (!btn.__viniServerBound) {
+                btn.__viniServerBound = true;
+                btn.addEventListener('click', () => {
+                    window.ViniAndroid.openServerSettings();
+                });
+            }
+        });
+    }
+};
 
 /**
  * Shows the login form.
@@ -294,6 +372,7 @@ export const showLoginScreen = (errorMsg = null) => {
     loginForm.classList.remove('hidden');
     setupForm.classList.add('hidden');
     authLoader.classList.add('hidden'); // Hide loader
+    syncAndroidServerButtons();
     if (errorMsg) {
         loginError.textContent = errorMsg;
         loginError.classList.remove('hidden');
@@ -321,6 +400,7 @@ const showSetupScreen = () => {
     setupForm.classList.remove('hidden');
     authLoader.classList.add('hidden'); // Hide loader
     setupError.classList.add('hidden'); // Clear previous setup errors
+    syncAndroidServerButtons();
 };
 
 /**
@@ -381,6 +461,7 @@ export async function checkAuthStatus() {
         console.log('[AUTH] /api/auth/status response:', status);
 
         if (status.isLoggedIn) {
+            if (status.csrfToken) setCsrfToken(status.csrfToken);
             console.log('[AUTH] User is logged in. Showing app.');
             showApp(status.user);
         } else {
@@ -413,6 +494,7 @@ export async function checkAuthStatus() {
  */
 export function setupAuthEventListeners() {
     console.log('[AUTH] Setting up authentication event listeners.');
+    syncAndroidServerButtons();
     // These elements are always present from the start, so it's safe to get them here.
     const loginForm = document.getElementById('login-form');
     const loginUsername = document.getElementById('login-username');
@@ -442,6 +524,7 @@ export function setupAuthEventListeners() {
             console.log('[AUTH_EVENT] Login API response:', data);
 
             if (res.ok) {
+                if (data.csrfToken) setCsrfToken(data.csrfToken);
                 console.log('[AUTH_EVENT] Login successful.');
                 showApp(data.user);
             } else {
@@ -473,6 +556,7 @@ export function setupAuthEventListeners() {
             console.log('[AUTH_EVENT] Setup API response:', data);
 
             if (res.ok) {
+                if (data.csrfToken) setCsrfToken(data.csrfToken);
                 console.log('[AUTH_EVENT] Admin setup successful.');
                 showApp(data.user);
             } else {
@@ -490,20 +574,16 @@ export function setupAuthEventListeners() {
     logoutBtn.addEventListener('click', async () => {
         console.log('[AUTH_EVENT] Logout button clicked.');
         try {
-            const res = await fetch('/api/auth/logout', { method: 'POST' });
+            const res = await fetch('/api/auth/logout', {
+                method: 'POST',
+                headers: withCsrfHeaders()
+            });
             if (!res.ok) {
                 console.warn(`[AUTH_EVENT] Logout API returned non-OK status: ${res.status}`);
             }
-            const data = await res.json().catch(() => ({}));
-            if (data && data.redirect) {
-                // Reverse-proxy auth: go to the proxy sign-out so a plain reload isn't
-                // immediately re-authenticated by the proxy header.
-                console.log('[AUTH_EVENT] Logout request sent. Redirecting to proxy sign-out.');
-                window.location.href = data.redirect;
-            } else {
-                console.log('[AUTH_EVENT] Logout request sent. Reloading window.');
-                window.location.reload(); // Full reload to clear client state
-            }
+            setCsrfToken(null);
+            console.log('[AUTH_EVENT] Logout request sent. Reloading window.');
+            window.location.reload(); // Full reload to clear client state
         } catch (error) {
             console.error('[AUTH_EVENT] Logout fetch error:', error);
             showNotification("Failed to log out. Please try again.", true);

@@ -5,7 +5,7 @@
 
 import { showNotification } from './ui.js';
 import { UIElements, guideState, appState } from './state.js';
-import { stopStream } from './api.js';
+import { stopStream, withCsrfHeaders } from './api.js';
 import { forceRefreshStream } from './player.js';
 
 const APPLICATION_ID = 'CC1AD845'; // Default Media Receiver App ID
@@ -35,7 +35,7 @@ async function stopCastStream(streamUrl) {
         const activeCastProfileId = guideState.settings?.activeCastProfileId || 'cast-default';
         const response = await fetch('/api/stream/stop', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withCsrfHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ url: streamUrl, profileId: activeCastProfileId })
         });
 
@@ -278,7 +278,7 @@ export async function loadMedia(url, name, logo) {
         console.log('[CAST] Requesting authentication token...');
         const response = await fetch('/api/cast/generate-token', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withCsrfHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ streamUrl: url })
         });
 

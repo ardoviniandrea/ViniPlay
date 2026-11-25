@@ -7,7 +7,7 @@
 import { appState, UIElements, guideState } from './state.js'; // Keep guideState for settings
 import { openModal, closeModal, showNotification, showResumePrompt } from './ui.js';
 import { ICONS } from './icons.js';
-import { saveUserSetting, fetchVodLibrary, fetchSeriesDetails, getWatchProgress, deleteWatchProgress } from './api.js';
+import { saveUserSetting, fetchVodLibrary, fetchSeriesDetails, fetchMovieDetails, getWatchProgress, deleteWatchProgress } from './api.js';
 import { playVOD } from './player.js';
 import { proxiedImageUrl } from './utils.js';
 
@@ -26,6 +26,9 @@ const vodState = {
         totalItems: 0,
         totalPages: 1,
     },
+    // Currently active movie or series in details modal
+    currentDetailsItem: null,
+    listenersInitialized: false,
 };
 
 /**
@@ -80,6 +83,217 @@ function formatEpisodeDate(dateStr) {
     } catch (e) { /* ignore */ }
     return clean;
 }
+
+/**
+ * Extracts a YouTube embed URL from an ID or full YouTube URL.
+ * Returns null if not valid.
+ */
+function getYouTubeEmbedUrl(input) {
+    if (!input || typeof input !== 'string') return null;
+    const clean = input.trim();
+    if (!clean || clean.toLowerCase() === 'n/a') return null;
+
+    // Match patterns like youtube.com/watch?v=ID, youtu.be/ID, youtube.com/embed/ID
+    const urlMatch = clean.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/);
+    if (urlMatch && urlMatch[1]) {
+        return `https://www.youtube-nocookie.com/embed/${urlMatch[1]}?autoplay=1`;
+    }
+
+    // Direct 11-char ID
+    if (/^[\w-]{11}$/.test(clean)) {
+        return `https://www.youtube-nocookie.com/embed/${clean}?autoplay=1`;
+    }
+
+    return null;
+}
+
+/**
+ * Copies a stream URL to the clipboard with user feedback.
+ */
+function copyStreamLinkToClipboard(url) {
+    if (!url) {
+        showNotification('No stream URL available to copy.', true);
+        return;
+    }
+
+    const onCopied = () => {
+        showNotification('Stream link copied to clipboard (ready for VLC/external players)', false, 2500);
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(onCopied).catch(() => {
+            fallbackCopyText(url, onCopied);
+        });
+    } else {
+        fallbackCopyText(url, onCopied);
+    }
+}
+
+function fallbackCopyText(text, successCb) {
+    try {
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-9999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        const successful = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        if (successful) {
+            if (successCb) successCb();
+            else showNotification('Stream link copied to clipboard (ready for VLC/external players)', false, 2500);
+        } else {
+            showNotification('Could not copy link to clipboard.', true);
+        }
+    } catch (err) {
+        console.error('[VOD] Fallback copy error:', err);
+        showNotification('Could not copy link to clipboard.', true);
+    }
+}
+
+/**
+ * Opens the in-app YouTube trailer modal.
+ */
+function openTrailerModal(title, embedUrl) {
+    if (!UIElements.vodTrailerModal) return;
+    if (UIElements.vodTrailerTitle) {
+        UIElements.vodTrailerTitle.textContent = title ? `${title} - Trailer` : 'Movie Trailer';
+    }
+    if (UIElements.vodTrailerIframe) {
+        UIElements.vodTrailerIframe.src = embedUrl;
+    }
+    openModal(UIElements.vodTrailerModal);
+}
+
+/**
+ * Closes the trailer modal and clears iframe src to prevent background audio.
+ */
+function closeTrailerModal() {
+    if (!UIElements.vodTrailerModal) return;
+    closeModal(UIElements.vodTrailerModal);
+    if (UIElements.vodTrailerIframe) {
+        UIElements.vodTrailerIframe.src = '';
+    }
+}
+
+/**
+ * Sanitizes IPTV media titles to remove provider prefixes, quality tags, and season indicators
+ * for accurate searches on IMDb, TMDB, Trakt, Rotten Tomatoes, and Letterboxd.
+ * e.g., "4K-IT - Cape Fear (2026) (US)" -> "Cape Fear"
+ */
+function cleanMediaTitle(rawTitle) {
+    if (!rawTitle || typeof rawTitle !== 'string') return '';
+    let title = rawTitle.trim();
+    // Strip common IPTV provider/country prefixes: "4K-IT - ", "IT | ", "EN - ", "4K - ", "FHD : ", "IT: "
+    title = title.replace(/^[A-Za-z0-9_\-\s]{1,10}\s*[-|:]\s*/i, '');
+    // Strip bracketed quality/source tags: [4K], [UHD], [FHD], [HD], [1080p], [720p], [HEVC], [HDR], [Sub-ITA]
+    title = title.replace(/\[[^\]]*(?:4k|uhd|fhd|hd|1080p|720p|hevc|hdr|aac|sub|ita|eng)[^\]]*\]/gi, '');
+    // Strip parenthesized tags that are not a 4-digit year: (US), (UK), (IT), (Extended Cut), (4K), (UHD)
+    title = title.replace(/\((?!\d{4}\b)[^)]*\)/g, '');
+    // Strip trailing season markers: S01, Season 1, etc.
+    title = title.replace(/\b(?:s\d{1,2}|season\s*\d{1,2})\b.*/gi, '');
+    // Strip remaining 4-digit year in parentheses so cleanTitle is just the pure title
+    title = title.replace(/\(\d{4}\)/g, '');
+    return title.trim().replace(/\s+/g, ' ');
+}
+
+/**
+ * Builds external aggregator links (IMDb, TMDB, Trakt, Rotten Tomatoes, Letterboxd).
+ * Uses direct IDs if present; falls back to smart sanitized search query.
+ */
+function buildExternalMediaLinks(item) {
+    if (!item) return {};
+    const isMovie = item.type === 'movie';
+    const cleanTitle = cleanMediaTitle(item.name || '');
+    const rawYear = item.year || (item.release_date ? item.release_date.split('-')[0] : '');
+    const cleanYear = rawYear && /^\d{4}$/.test(String(rawYear).trim()) ? String(rawYear).trim() : '';
+
+    const query = cleanYear ? `${cleanTitle} ${cleanYear}` : cleanTitle;
+    const encodedQuery = encodeURIComponent(query);
+    const encodedTitle = encodeURIComponent(cleanTitle);
+
+    const links = {
+        imdb: null,
+        tmdb: null,
+        trakt: null,
+        rt: null,
+        letterboxd: null
+    };
+
+    if (cleanTitle) {
+        // 1. IMDb
+        if (item.imdb_id) {
+            links.imdb = `https://www.imdb.com/title/${item.imdb_id}/`;
+        } else {
+            links.imdb = `https://www.imdb.com/find/?q=${encodedQuery}&s=tt`;
+        }
+
+        // 2. TMDB
+        if (item.tmdb_id) {
+            links.tmdb = `https://www.themoviedb.org/${isMovie ? 'movie' : 'tv'}/${item.tmdb_id}`;
+        } else {
+            links.tmdb = `https://www.themoviedb.org/search?query=${encodedTitle}`;
+        }
+
+        // 3. Trakt (Trakt web app uses ?q= parameter)
+        links.trakt = `https://trakt.tv/search?q=${encodedTitle}`;
+
+        // 4. Rotten Tomatoes (Searches by sanitized title)
+        links.rt = `https://www.rottentomatoes.com/search?search=${encodedTitle}`;
+
+        // 5. Letterboxd (Movies ONLY)
+        if (isMovie) {
+            if (item.tmdb_id) {
+                links.letterboxd = `https://letterboxd.com/tmdb/${item.tmdb_id}/`;
+            } else if (item.imdb_id) {
+                links.letterboxd = `https://letterboxd.com/imdb/${item.imdb_id}/`;
+            } else {
+                links.letterboxd = `https://letterboxd.com/search/${encodedTitle}/`;
+            }
+        }
+    }
+
+    return links;
+}
+
+/**
+ * Updates the external aggregator links bar in the VOD details modal.
+ * Shows buttons that have a valid link and hides any whose link is empty/null.
+ * If all links are empty/null, the entire row is hidden.
+ */
+function updateExternalLinksUI(item) {
+    if (!UIElements.vodDetailsExternalLinks) return;
+
+    const links = buildExternalMediaLinks(item);
+    let visibleCount = 0;
+
+    const configureLinkBtn = (btnElement, url) => {
+        if (!btnElement) return;
+        if (url) {
+            btnElement.href = url;
+            btnElement.classList.remove('hidden');
+            visibleCount++;
+        } else {
+            btnElement.href = '#';
+            btnElement.classList.add('hidden');
+        }
+    };
+
+    configureLinkBtn(UIElements.vodLinkImdb, links.imdb);
+    configureLinkBtn(UIElements.vodLinkTmdb, links.tmdb);
+    configureLinkBtn(UIElements.vodLinkTrakt, links.trakt);
+    configureLinkBtn(UIElements.vodLinkRt, links.rt);
+    configureLinkBtn(UIElements.vodLinkLetterboxd, links.letterboxd);
+
+    if (visibleCount > 0) {
+        UIElements.vodDetailsExternalLinks.classList.remove('hidden');
+    } else {
+        UIElements.vodDetailsExternalLinks.classList.add('hidden');
+    }
+}
+
+
 
 /**
  * Main initialization function for the VOD page.
@@ -235,6 +449,8 @@ function renderVodGrid() {
                     <span class="vod-type-badge">${itemType}</span>
                     <div class="vod-item-poster">
                         <img src="${proxiedLogo}"
+                             loading="lazy"
+                             decoding="async"
                              alt="${displayName.replace(/"/g, '&quot;')}"
                              onerror="this.onerror=null; this.src='${placeholderImageUrl}'; this.style.objectFit='cover';">
                     </div>
@@ -255,39 +471,141 @@ function renderVodGrid() {
 
 /**
  * Opens the VOD details modal and populates it with item info.
- * Handles lazy loading for series episodes.
+ * Enriches metadata lazily for both movies and series with unified pill badges,
+ * backdrop, in-app trailer playback, and stream link copying.
  * @param {object} item - The movie or series object (basic info) to display.
  */
-async function openVodDetails(item) { // Make the function async
+async function openVodDetails(item) {
     if (!item) return;
 
+    vodState.currentDetailsItem = item;
+
     try {
-        // --- Common Fields (with image proxy) ---
+        // --- 1. Basic Fields (with image proxy) ---
         if (UIElements.vodDetailsTitle) UIElements.vodDetailsTitle.textContent = item.name || '';
 
-        // Use image proxy for modal posters/backdrops
         const posterUrl = item.logo || `https://placehold.co/400x600/1f2937/d1d5db?text=${encodeURIComponent(item.name || 'VOD')}`;
         const proxiedPoster = proxiedImageUrl(posterUrl);
         if (UIElements.vodDetailsPoster) UIElements.vodDetailsPoster.src = proxiedPoster;
-        if (UIElements.vodDetailsBackdropImg) UIElements.vodDetailsBackdropImg.src = item.logo ? proxiedPoster : '';
 
-        if (UIElements.vodDetailsYear) UIElements.vodDetailsYear.textContent = item.year || '';
-        if (UIElements.vodDetailsRating) UIElements.vodDetailsRating.textContent = ''; // Placeholder
-        if (UIElements.vodDetailsDuration) UIElements.vodDetailsDuration.textContent = ''; // Placeholder
-        if (UIElements.vodDetailsGenre) UIElements.vodDetailsGenre.textContent = item.group || 'N/A';
+        const initialBackdrop = item.backdrop_url ? proxiedImageUrl(item.backdrop_url) : (item.logo ? proxiedPoster : '');
+        if (UIElements.vodDetailsBackdropImg) UIElements.vodDetailsBackdropImg.src = initialBackdrop;
+
+        // --- 2. Initial Badges ---
+        const initialYear = item.year || (item.release_date ? item.release_date.split('-')[0] : '');
+        if (UIElements.vodDetailsYear) {
+            if (initialYear) {
+                UIElements.vodDetailsYear.textContent = initialYear;
+                UIElements.vodDetailsYear.classList.remove('hidden');
+            } else {
+                UIElements.vodDetailsYear.classList.add('hidden');
+            }
+        }
+
+        if (UIElements.vodDetailsDuration) {
+            const initialDur = item.duration || (item.duration_secs ? formatEpisodeDuration(item.duration_secs) : '');
+            if (initialDur) {
+                UIElements.vodDetailsDuration.textContent = initialDur;
+                UIElements.vodDetailsDuration.classList.remove('hidden');
+            } else {
+                UIElements.vodDetailsDuration.classList.add('hidden');
+            }
+        }
+
+        if (UIElements.vodDetailsRating) {
+            const initialRating = item.rating;
+            if (initialRating && initialRating !== '0' && initialRating !== 'N/A') {
+                const rNum = parseFloat(initialRating);
+                UIElements.vodDetailsRating.innerHTML = `<span class="text-amber-400 font-bold">★</span> ${!isNaN(rNum) ? rNum.toFixed(1) : initialRating}`;
+                UIElements.vodDetailsRating.classList.remove('hidden');
+            } else {
+                UIElements.vodDetailsRating.classList.add('hidden');
+            }
+        }
+
+        if (UIElements.vodDetailsType) {
+            if (item.type === 'movie') {
+                UIElements.vodDetailsType.textContent = 'MOVIE';
+                UIElements.vodDetailsType.className = 'px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-600/30 text-blue-300 border border-blue-500/40';
+            } else {
+                UIElements.vodDetailsType.textContent = 'SERIES';
+                UIElements.vodDetailsType.className = 'px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-600/30 text-purple-300 border border-purple-500/40';
+            }
+        }
+
+        if (UIElements.vodDetailsTmdb) {
+            if (item.tmdb_id) {
+                UIElements.vodDetailsTmdb.classList.remove('hidden');
+            } else {
+                UIElements.vodDetailsTmdb.classList.add('hidden');
+            }
+        }
+
+        // --- 3. Initial Metadata Rows ---
+        if (UIElements.vodDetailsReleaseDateRow && UIElements.vodDetailsReleaseDate) {
+            if (item.release_date) {
+                UIElements.vodDetailsReleaseDate.textContent = formatEpisodeDate(item.release_date);
+                UIElements.vodDetailsReleaseDateRow.classList.remove('hidden');
+            } else {
+                UIElements.vodDetailsReleaseDateRow.classList.add('hidden');
+            }
+        }
+
+        if (UIElements.vodDetailsCountryRow && UIElements.vodDetailsCountry) {
+            if (item.country) {
+                UIElements.vodDetailsCountry.textContent = item.country;
+                UIElements.vodDetailsCountryRow.classList.remove('hidden');
+            } else {
+                UIElements.vodDetailsCountryRow.classList.add('hidden');
+            }
+        }
+
+        if (UIElements.vodDetailsGenre) UIElements.vodDetailsGenre.textContent = item.genre || item.group || 'N/A';
         if (UIElements.vodDetailsDirector) UIElements.vodDetailsDirector.textContent = item.director || 'N/A';
         if (UIElements.vodDetailsCast) UIElements.vodDetailsCast.textContent = item.cast || 'N/A';
-        if (UIElements.vodDetailsDesc) UIElements.vodDetailsDesc.textContent = item.description || `Details for ${item.name}.`; // Use description if available
+        if (UIElements.vodDetailsDesc) UIElements.vodDetailsDesc.textContent = item.description || `Details for ${item.name}.`;
 
-        // --- Reset visibility and clear previous dynamic content ---
+        // --- 4. Initial Trailer & Copy Link Buttons ---
+        const initialTrailerUrl = getYouTubeEmbedUrl(item.youtube_trailer);
+        if (UIElements.vodWatchTrailerBtn) {
+            if (initialTrailerUrl) {
+                UIElements.vodWatchTrailerBtn.classList.remove('hidden');
+                UIElements.vodWatchTrailerBtn.onclick = () => openTrailerModal(item.name, initialTrailerUrl);
+            } else {
+                UIElements.vodWatchTrailerBtn.classList.add('hidden');
+                UIElements.vodWatchTrailerBtn.onclick = null;
+            }
+        }
+
+        if (UIElements.vodCopyLinkBtn) {
+            if (item.type === 'movie' && item.url) {
+                UIElements.vodCopyLinkBtn.classList.remove('hidden');
+                UIElements.vodCopyLinkBtn.onclick = () => copyStreamLinkToClipboard(vodState.currentDetailsItem?.url || item.url);
+            } else {
+                UIElements.vodCopyLinkBtn.classList.add('hidden');
+            }
+        }
+
+        // --- 5. Initial Technical Info ---
+        if (UIElements.vodTechProviderBadge) {
+            UIElements.vodTechProviderBadge.textContent = item.provider_name || 'IPTV Source';
+        }
+        if (UIElements.vodTechStreamDetails) {
+            UIElements.vodTechStreamDetails.textContent = '';
+        }
+
+        // --- 6. Reset Actions Containers ---
         if (UIElements.vodDetailsMovieActions) UIElements.vodDetailsMovieActions.classList.add('hidden');
         if (UIElements.vodDetailsSeriesActions) UIElements.vodDetailsSeriesActions.classList.add('hidden');
         if (UIElements.vodSeasonSelect) UIElements.vodSeasonSelect.innerHTML = '';
         if (UIElements.vodSeasonTabs) UIElements.vodSeasonTabs.innerHTML = '';
         if (UIElements.vodEpisodesCountBadge) UIElements.vodEpisodesCountBadge.textContent = '0';
-        if (UIElements.vodEpisodeList) UIElements.vodEpisodeList.innerHTML = '<div class="p-6 text-center text-gray-400">Loading episodes...</div>'; // Show loading state
+        if (UIElements.vodEpisodeList) UIElements.vodEpisodeList.innerHTML = '<div class="p-6 text-center text-gray-400">Loading episodes...</div>';
 
-        // Open the modal immediately to show the loading state
+        // Update external aggregator links (IMDb, TMDB, Trakt, RT, Letterboxd)
+        updateExternalLinksUI(item);
+
+        // Open modal immediately to give instant visual feedback
         if (UIElements.vodDetailsModal) {
             openModal(UIElements.vodDetailsModal);
         }
@@ -296,64 +614,271 @@ async function openVodDetails(item) { // Make the function async
         if (UIElements.vodDetailsModal) openModal(UIElements.vodDetailsModal);
     }
 
-    // --- Movie Logic (No Change) ---
+    // --- 7. Movie Logic (Rich Metadata Enrichment & Play) ---
     if (item.type === 'movie') {
-        UIElements.vodDetailsType.textContent = 'Movie';
-        UIElements.vodDetailsMovieActions.classList.remove('hidden');
-        const movieUrl = item.url;
-        const movieName = item.name;
-        const movieLogo = item.logo; // Get the logo
-        UIElements.vodPlayMovieBtn.onclick = null;
-        UIElements.vodPlayMovieBtn.onclick = async () => {
-            const movieMediaInfo = {
-                contentType: 'vod_movie',
-                contentId: String(item.id),
-                title: movieName,
-                duration: item.duration || 0
-            };
-            closeModal(UIElements.vodDetailsModal);
+        if (UIElements.vodDetailsMovieActions) UIElements.vodDetailsMovieActions.classList.remove('hidden');
 
-            try {
-                const prog = await getWatchProgress('vod_movie', item.id);
-                if (prog && prog.progress_seconds >= 15 && (!prog.duration_seconds || prog.progress_seconds < prog.duration_seconds * 0.95)) {
-                    showResumePrompt({
-                        title: movieName,
-                        progressSeconds: prog.progress_seconds,
-                        durationSeconds: prog.duration_seconds || item.duration || 0,
-                        onResume: () => playVOD(movieUrl, movieName, movieLogo, prog.progress_seconds, item.duration || null, movieMediaInfo),
-                        onStartOver: () => {
-                            deleteWatchProgress('vod_movie', item.id);
-                            playVOD(movieUrl, movieName, movieLogo, 0, item.duration || null, movieMediaInfo);
-                        }
-                    });
-                    return;
+        // Helper to bind the play movie click action with watch progress
+        const bindMoviePlayBtn = (targetMovie) => {
+            const movieUrl = targetMovie.url;
+            const movieName = targetMovie.name;
+            const movieLogo = targetMovie.logo;
+            const durationSecs = targetMovie.duration_secs || (typeof targetMovie.duration === 'number' ? targetMovie.duration : null);
+
+            UIElements.vodPlayMovieBtn.onclick = null;
+            UIElements.vodPlayMovieBtn.onclick = async () => {
+                const movieMediaInfo = {
+                    contentType: 'vod_movie',
+                    contentId: String(targetMovie.id),
+                    title: movieName,
+                    duration: durationSecs || 0
+                };
+                closeModal(UIElements.vodDetailsModal);
+
+                try {
+                    const prog = await getWatchProgress('vod_movie', targetMovie.id);
+                    if (prog && prog.progress_seconds >= 15 && (!prog.duration_seconds || prog.progress_seconds < prog.duration_seconds * 0.95)) {
+                        showResumePrompt({
+                            title: movieName,
+                            progressSeconds: prog.progress_seconds,
+                            durationSeconds: prog.duration_seconds || durationSecs || 0,
+                            onResume: () => playVOD(movieUrl, movieName, movieLogo, prog.progress_seconds, durationSecs || null, movieMediaInfo),
+                            onStartOver: () => {
+                                deleteWatchProgress('vod_movie', targetMovie.id);
+                                playVOD(movieUrl, movieName, movieLogo, 0, durationSecs || null, movieMediaInfo);
+                            }
+                        });
+                        return;
+                    }
+                } catch (err) {
+                    console.warn('[VOD] Error checking movie watch progress:', err);
                 }
-            } catch (err) {
-                console.warn('[VOD] Error checking movie watch progress:', err);
-            }
 
-            playVOD(movieUrl, movieName, movieLogo, 0, item.duration || null, movieMediaInfo);
+                playVOD(movieUrl, movieName, movieLogo, 0, durationSecs || null, movieMediaInfo);
+            };
         };
 
-        // --- Series Logic (Lazy Loading & Season Tabs) ---
+        // Bind initial handler
+        bindMoviePlayBtn(item);
+
+        // Fetch rich movie details lazily from server
+        const fullMovieData = await fetchMovieDetails(item.id);
+        if (fullMovieData) {
+            console.log(`[VOD] Enriched movie data for ID ${item.id}:`, fullMovieData);
+            vodState.currentDetailsItem = fullMovieData;
+
+            // Update Backdrop
+            if (fullMovieData.backdrop_url && UIElements.vodDetailsBackdropImg) {
+                UIElements.vodDetailsBackdropImg.src = proxiedImageUrl(fullMovieData.backdrop_url);
+            }
+
+            // Update Year
+            const movieYear = (fullMovieData.release_date ? fullMovieData.release_date.split('-')[0] : '') || fullMovieData.year || item.year;
+            if (UIElements.vodDetailsYear) {
+                if (movieYear) {
+                    UIElements.vodDetailsYear.textContent = movieYear;
+                    UIElements.vodDetailsYear.classList.remove('hidden');
+                } else {
+                    UIElements.vodDetailsYear.classList.add('hidden');
+                }
+            }
+
+            // Update Duration
+            const dur = fullMovieData.duration || (fullMovieData.duration_secs ? formatEpisodeDuration(fullMovieData.duration_secs) : null);
+            if (UIElements.vodDetailsDuration) {
+                if (dur) {
+                    UIElements.vodDetailsDuration.textContent = dur;
+                    UIElements.vodDetailsDuration.classList.remove('hidden');
+                } else {
+                    UIElements.vodDetailsDuration.classList.add('hidden');
+                }
+            }
+
+            // Update Rating
+            if (UIElements.vodDetailsRating) {
+                const r = fullMovieData.rating;
+                if (r && r !== '0' && r !== 'N/A') {
+                    const num = parseFloat(r);
+                    UIElements.vodDetailsRating.innerHTML = `<span class="text-amber-400 font-bold">★</span> ${!isNaN(num) ? num.toFixed(1) : r}`;
+                    UIElements.vodDetailsRating.classList.remove('hidden');
+                } else {
+                    UIElements.vodDetailsRating.classList.add('hidden');
+                }
+            }
+
+            // Update TMDB Badge
+            if (UIElements.vodDetailsTmdb) {
+                if (fullMovieData.tmdb_id) {
+                    UIElements.vodDetailsTmdb.classList.remove('hidden');
+                } else {
+                    UIElements.vodDetailsTmdb.classList.add('hidden');
+                }
+            }
+
+            // Update Release Date Row
+            if (UIElements.vodDetailsReleaseDateRow && UIElements.vodDetailsReleaseDate) {
+                if (fullMovieData.release_date) {
+                    UIElements.vodDetailsReleaseDate.textContent = formatEpisodeDate(fullMovieData.release_date);
+                    UIElements.vodDetailsReleaseDateRow.classList.remove('hidden');
+                } else {
+                    UIElements.vodDetailsReleaseDateRow.classList.add('hidden');
+                }
+            }
+
+            // Update Country Row
+            if (UIElements.vodDetailsCountryRow && UIElements.vodDetailsCountry) {
+                if (fullMovieData.country) {
+                    UIElements.vodDetailsCountry.textContent = fullMovieData.country;
+                    UIElements.vodDetailsCountryRow.classList.remove('hidden');
+                } else {
+                    UIElements.vodDetailsCountryRow.classList.add('hidden');
+                }
+            }
+
+            // Update Director, Cast, Genre, Description
+            if (fullMovieData.director && UIElements.vodDetailsDirector) UIElements.vodDetailsDirector.textContent = fullMovieData.director;
+            if (fullMovieData.cast && UIElements.vodDetailsCast) UIElements.vodDetailsCast.textContent = fullMovieData.cast;
+            if (fullMovieData.genre && UIElements.vodDetailsGenre) UIElements.vodDetailsGenre.textContent = fullMovieData.genre;
+            if (fullMovieData.description && UIElements.vodDetailsDesc) UIElements.vodDetailsDesc.textContent = fullMovieData.description;
+
+            // Update Trailer Button
+            const embedUrl = getYouTubeEmbedUrl(fullMovieData.youtube_trailer);
+            if (UIElements.vodWatchTrailerBtn) {
+                if (embedUrl) {
+                    UIElements.vodWatchTrailerBtn.classList.remove('hidden');
+                    UIElements.vodWatchTrailerBtn.onclick = () => openTrailerModal(fullMovieData.name || item.name, embedUrl);
+                } else {
+                    UIElements.vodWatchTrailerBtn.classList.add('hidden');
+                    UIElements.vodWatchTrailerBtn.onclick = null;
+                }
+            }
+
+            // Update Copy Stream Link Button
+            const playableUrl = fullMovieData.url || item.url;
+            if (UIElements.vodCopyLinkBtn) {
+                if (playableUrl) {
+                    UIElements.vodCopyLinkBtn.classList.remove('hidden');
+                    UIElements.vodCopyLinkBtn.onclick = () => copyStreamLinkToClipboard(playableUrl);
+                } else {
+                    UIElements.vodCopyLinkBtn.classList.add('hidden');
+                }
+            }
+
+            // Update Technical Info
+            if (UIElements.vodTechProviderBadge) {
+                UIElements.vodTechProviderBadge.textContent = fullMovieData.provider_name || item.provider_name || 'IPTV Source';
+            }
+            if (UIElements.vodTechStreamDetails) {
+                const techParts = [];
+                if (fullMovieData.container_extension) techParts.push(`Format: ${fullMovieData.container_extension.toUpperCase()}`);
+                if (fullMovieData.stream_id) techParts.push(`Stream ID: ${fullMovieData.stream_id}`);
+                UIElements.vodTechStreamDetails.textContent = techParts.join(' • ');
+            }
+
+            // Update external aggregator links with enriched movie metadata
+            updateExternalLinksUI(fullMovieData);
+
+            // Re-bind play handler with the refreshed movie URL & metadata
+            bindMoviePlayBtn(fullMovieData);
+        }
+
+    // --- 8. Series Logic (Lazy Loading & Season Tabs) ---
     } else if (item.type === 'series') {
-        UIElements.vodDetailsType.textContent = 'Series';
-        UIElements.vodDetailsSeriesActions.classList.remove('hidden'); // Show series section immediately
+        if (UIElements.vodDetailsSeriesActions) UIElements.vodDetailsSeriesActions.classList.remove('hidden');
+        if (UIElements.vodCopyLinkBtn) UIElements.vodCopyLinkBtn.classList.add('hidden');
 
         // Fetch full series details including episodes
         const fullSeriesData = await fetchSeriesDetails(item.id);
         console.log(`[VOD] Fetched full series data for ID ${item.id}:`, fullSeriesData);
 
         if (fullSeriesData) {
-            if (fullSeriesData.director) {
-                UIElements.vodDetailsDirector.textContent = fullSeriesData.director;
+            vodState.currentDetailsItem = fullSeriesData;
+
+            // Update Backdrop
+            if (fullSeriesData.backdrop_url && UIElements.vodDetailsBackdropImg) {
+                UIElements.vodDetailsBackdropImg.src = proxiedImageUrl(fullSeriesData.backdrop_url);
             }
-            if (fullSeriesData.cast) {
-                UIElements.vodDetailsCast.textContent = fullSeriesData.cast;
+
+            // Update Year
+            const seriesYear = (fullSeriesData.release_date ? fullSeriesData.release_date.split('-')[0] : '') || fullSeriesData.year || item.year;
+            if (UIElements.vodDetailsYear) {
+                if (seriesYear) {
+                    UIElements.vodDetailsYear.textContent = seriesYear;
+                    UIElements.vodDetailsYear.classList.remove('hidden');
+                } else {
+                    UIElements.vodDetailsYear.classList.add('hidden');
+                }
             }
+
+            // Update Rating
+            if (UIElements.vodDetailsRating) {
+                const r = fullSeriesData.rating;
+                if (r && r !== '0' && r !== 'N/A') {
+                    const num = parseFloat(r);
+                    UIElements.vodDetailsRating.innerHTML = `<span class="text-amber-400 font-bold">★</span> ${!isNaN(num) ? num.toFixed(1) : r}`;
+                    UIElements.vodDetailsRating.classList.remove('hidden');
+                } else {
+                    UIElements.vodDetailsRating.classList.add('hidden');
+                }
+            }
+
+            // Update TMDB Badge
+            if (UIElements.vodDetailsTmdb) {
+                if (fullSeriesData.tmdb_id) {
+                    UIElements.vodDetailsTmdb.classList.remove('hidden');
+                } else {
+                    UIElements.vodDetailsTmdb.classList.add('hidden');
+                }
+            }
+
+            // Update Release Date Row
+            if (UIElements.vodDetailsReleaseDateRow && UIElements.vodDetailsReleaseDate) {
+                if (fullSeriesData.release_date) {
+                    UIElements.vodDetailsReleaseDate.textContent = formatEpisodeDate(fullSeriesData.release_date);
+                    UIElements.vodDetailsReleaseDateRow.classList.remove('hidden');
+                } else {
+                    UIElements.vodDetailsReleaseDateRow.classList.add('hidden');
+                }
+            }
+
+            // Update Country Row
+            if (UIElements.vodDetailsCountryRow && UIElements.vodDetailsCountry) {
+                if (fullSeriesData.country) {
+                    UIElements.vodDetailsCountry.textContent = fullSeriesData.country;
+                    UIElements.vodDetailsCountryRow.classList.remove('hidden');
+                } else {
+                    UIElements.vodDetailsCountryRow.classList.add('hidden');
+                }
+            }
+
+            // Update Director, Cast, Genre, Description
+            if (fullSeriesData.director && UIElements.vodDetailsDirector) UIElements.vodDetailsDirector.textContent = fullSeriesData.director;
+            if (fullSeriesData.cast && UIElements.vodDetailsCast) UIElements.vodDetailsCast.textContent = fullSeriesData.cast;
+            if (fullSeriesData.genre && UIElements.vodDetailsGenre) UIElements.vodDetailsGenre.textContent = fullSeriesData.genre;
+            if (fullSeriesData.description && UIElements.vodDetailsDesc) UIElements.vodDetailsDesc.textContent = fullSeriesData.description;
+
+            // Update Trailer Button
+            const embedUrl = getYouTubeEmbedUrl(fullSeriesData.youtube_trailer);
+            if (UIElements.vodWatchTrailerBtn) {
+                if (embedUrl) {
+                    UIElements.vodWatchTrailerBtn.classList.remove('hidden');
+                    UIElements.vodWatchTrailerBtn.onclick = () => openTrailerModal(fullSeriesData.name || item.name, embedUrl);
+                } else {
+                    UIElements.vodWatchTrailerBtn.classList.add('hidden');
+                    UIElements.vodWatchTrailerBtn.onclick = null;
+                }
+            }
+
+            // Update Technical Info
+            if (UIElements.vodTechProviderBadge) {
+                UIElements.vodTechProviderBadge.textContent = fullSeriesData.provider_name || item.provider_name || 'IPTV Source';
+            }
+
+            // Update external aggregator links with enriched series metadata
+            updateExternalLinksUI(fullSeriesData);
         }
 
-        // Store the logo on the episode list element to be accessed by the click listener
+        // Store logo on episode list for click player
         UIElements.vodEpisodeList.dataset.seriesLogo = fullSeriesData?.logo || item.logo || '';
 
         // Robust check for invalid or empty series data
@@ -366,6 +891,9 @@ async function openVodDetails(item) { // Make the function async
             if (UIElements.vodEpisodesCountBadge) {
                 UIElements.vodEpisodesCountBadge.textContent = '0';
             }
+            if (UIElements.vodDetailsDuration) {
+                UIElements.vodDetailsDuration.classList.add('hidden');
+            }
             return;
         }
 
@@ -375,8 +903,22 @@ async function openVodDetails(item) { // Make the function async
         sortedSeasonKeys.forEach(k => {
             totalEpisodes += fullSeriesData.seasons[k]?.length || 0;
         });
+
         if (UIElements.vodEpisodesCountBadge) {
             UIElements.vodEpisodesCountBadge.textContent = totalEpisodes;
+        }
+
+        if (UIElements.vodDetailsDuration) {
+            if (sortedSeasonKeys.length > 0) {
+                UIElements.vodDetailsDuration.textContent = `${sortedSeasonKeys.length} Season${sortedSeasonKeys.length > 1 ? 's' : ''}`;
+                UIElements.vodDetailsDuration.classList.remove('hidden');
+            } else {
+                UIElements.vodDetailsDuration.classList.add('hidden');
+            }
+        }
+
+        if (UIElements.vodTechStreamDetails) {
+            UIElements.vodTechStreamDetails.textContent = `${sortedSeasonKeys.length} Season${sortedSeasonKeys.length > 1 ? 's' : ''} • ${totalEpisodes} Episode${totalEpisodes > 1 ? 's' : ''}`;
         }
 
         const tabsContainer = UIElements.vodSeasonTabs;
@@ -453,9 +995,14 @@ function renderEpisodeList(series, seasonNum) {
                 <div class="episode-item-title" title="${originalTitle.replace(/"/g, '&quot;')}">${epName}</div>
                 <div class="episode-item-duration">${durationText}</div>
                 <div class="episode-item-date">${dateText}</div>
-                <button class="episode-item-play-btn" title="Play Episode" aria-label="Play Episode">
-                    ${ICONS.play}
-                </button>
+                <div class="episode-item-actions">
+                    <button class="episode-item-copy-btn" title="Copy stream link (for VLC/external players)" aria-label="Copy stream link">
+                        ${ICONS.clipboard}
+                    </button>
+                    <button class="episode-item-play-btn" title="Play Episode" aria-label="Play Episode">
+                        ${ICONS.play}
+                    </button>
+                </div>
             </div>
         `;
     }).join('');
@@ -466,6 +1013,9 @@ function renderEpisodeList(series, seasonNum) {
  * Sets up all event listeners for the VOD page and its modals.
  */
 function setupVodEventListeners() {
+    if (vodState.listenersInitialized) return;
+    vodState.listenersInitialized = true;
+
     // --- Filter Bar Listeners ---
     UIElements.vodTypeAll.addEventListener('click', () => {
         UIElements.vodTypeAll.classList.add('active');
@@ -550,51 +1100,81 @@ function setupVodEventListeners() {
     });
 
     // --- VOD Details Modal Listeners ---
-    UIElements.vodDetailsCloseBtn.addEventListener('click', () => {
-        closeModal(UIElements.vodDetailsModal);
-        // Clear backdrop when closing
-        UIElements.vodDetailsBackdropImg.src = '';
-    });
-
-    // Episode play click (Event Delegation)
-    UIElements.vodEpisodeList.addEventListener('click', async (e) => {
-        const episodeItem = e.target.closest('.episode-item');
-        if (episodeItem) {
-            const url = episodeItem.dataset.url;
-            const title = episodeItem.dataset.title;
-            const episodeId = episodeItem.dataset.id || url;
-            const seriesLogo = UIElements.vodEpisodeList.dataset.seriesLogo || ''; // Get logo from parent
-
-            const epMediaInfo = {
-                contentType: 'vod_episode',
-                contentId: String(episodeId),
-                title: title
-            };
-
+    if (UIElements.vodDetailsCloseBtn) {
+        UIElements.vodDetailsCloseBtn.addEventListener('click', () => {
             closeModal(UIElements.vodDetailsModal);
+            if (UIElements.vodDetailsBackdropImg) {
+                UIElements.vodDetailsBackdropImg.src = '';
+            }
+            closeTrailerModal();
+        });
+    }
 
-            try {
-                const prog = await getWatchProgress('vod_episode', episodeId);
-                if (prog && prog.progress_seconds >= 15 && (!prog.duration_seconds || prog.progress_seconds < prog.duration_seconds * 0.95)) {
-                    showResumePrompt({
-                        title: title,
-                        progressSeconds: prog.progress_seconds,
-                        durationSeconds: prog.duration_seconds || 0,
-                        onResume: () => playVOD(url, title, seriesLogo, prog.progress_seconds, null, epMediaInfo),
-                        onStartOver: () => {
-                            deleteWatchProgress('vod_episode', episodeId);
-                            playVOD(url, title, seriesLogo, 0, null, epMediaInfo);
-                        }
-                    });
-                    return;
-                }
-            } catch (err) {
-                console.warn('[VOD] Error checking episode watch progress:', err);
+    // --- VOD Trailer Modal Listeners ---
+    if (UIElements.vodTrailerCloseBtn) {
+        UIElements.vodTrailerCloseBtn.addEventListener('click', closeTrailerModal);
+    }
+    if (UIElements.vodTrailerModal) {
+        UIElements.vodTrailerModal.addEventListener('click', (e) => {
+            if (e.target === UIElements.vodTrailerModal) {
+                closeTrailerModal();
+            }
+        });
+    }
+
+    // Episode list delegation (Copy Stream Link & Play Episode)
+    if (UIElements.vodEpisodeList) {
+        UIElements.vodEpisodeList.addEventListener('click', async (e) => {
+            // Check if Copy Link button was clicked
+            const copyBtn = e.target.closest('.episode-item-copy-btn');
+            if (copyBtn) {
+                e.stopPropagation();
+                const episodeItem = copyBtn.closest('.episode-item');
+                const url = episodeItem ? episodeItem.dataset.url : null;
+                copyStreamLinkToClipboard(url);
+                return;
             }
 
-            playVOD(url, title, seriesLogo, 0, null, epMediaInfo);
-        }
-    });
+            // Episode play click
+            const playBtn = e.target.closest('.episode-item-play-btn');
+            const episodeItem = e.target.closest('.episode-item');
+            if (episodeItem && (playBtn || !e.target.closest('button'))) {
+                const url = episodeItem.dataset.url;
+                const title = episodeItem.dataset.title;
+                const episodeId = episodeItem.dataset.id || url;
+                const seriesLogo = UIElements.vodEpisodeList.dataset.seriesLogo || '';
+
+                const epMediaInfo = {
+                    contentType: 'vod_episode',
+                    contentId: String(episodeId),
+                    title: title
+                };
+
+                closeModal(UIElements.vodDetailsModal);
+
+                try {
+                    const prog = await getWatchProgress('vod_episode', episodeId);
+                    if (prog && prog.progress_seconds >= 15 && (!prog.duration_seconds || prog.progress_seconds < prog.duration_seconds * 0.95)) {
+                        showResumePrompt({
+                            title: title,
+                            progressSeconds: prog.progress_seconds,
+                            durationSeconds: prog.duration_seconds || 0,
+                            onResume: () => playVOD(url, title, seriesLogo, prog.progress_seconds, null, epMediaInfo),
+                            onStartOver: () => {
+                                deleteWatchProgress('vod_episode', episodeId);
+                                playVOD(url, title, seriesLogo, 0, null, epMediaInfo);
+                            }
+                        });
+                        return;
+                    }
+                } catch (err) {
+                    console.warn('[VOD] Error checking episode watch progress:', err);
+                }
+
+                playVOD(url, title, seriesLogo, 0, null, epMediaInfo);
+            }
+        });
+    }
 }
 
 /**

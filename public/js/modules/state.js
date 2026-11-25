@@ -34,12 +34,29 @@ export const guideState = {
         multiviewLayouts: [], // To store saved layouts for the user
         adminPageSize: 25, // NEW: Default page size for the admin history table
         vodDirectPlayEnabled: true, // Default to true (native <video> playback with full seeking)
+        storeLogosInternally: true, // Default to true (store and serve channel logos from /data/logos)
+        smartLogoMatching: true, // Default to true (match missing logos by normalized name / TVG-ID)
         // Default timezone offset based on browser's timezone (will be overridden by server settings)
         timezoneOffset: Math.round(-(new Date().getTimezoneOffset() / 60)),
     }, // This will hold both GLOBAL and USER settings, merged.
     guideDurationHours: 48,
     hourWidthPixels: window.innerWidth < 768 ? 200 : 300,
     currentDate: new Date(),
+    isViewingToday: true,
+    renderedGuideStartUtc: null,
+    renderedTimezoneOffset: null,
+    renderedDateStr: null,
+    nowLineTimer: null,
+    centerScrollTimer: null,
+    lastNowOffsetPx: null,
+    lastAutoScrollAt: 0,
+    lastUserHorizontalScrollAt: 0,
+    lastProgrammaticScrollAt: 0,
+    savedScrollTop: 0,
+    savedScrollLeft: 0,
+    needsViewportRefreshOnActivate: false,
+    needsCenterOnActivate: false,
+    updateVisibleRows: null,
     channelGroups: new Set(),
     channelSources: new Set(), // For the source filter
     visibleChannels: [],
@@ -57,6 +74,7 @@ export const dvrState = {
 export const adminState = {
     live: [],
     history: [],
+    users: [],
     liveDurationInterval: null,
     channelSelectorCallback: null,
     pagination: {
@@ -64,6 +82,25 @@ export const adminState = {
         pageSize: 25,
         totalPages: 1,
         totalItems: 0,
+        totalDurationSeconds: 0,
+    },
+    filters: {
+        search: '',
+        user: 'all',
+        mediaType: 'all',
+        streamMode: 'all',
+        dateFilter: 'all',
+        startDate: '',
+        endDate: '',
+        sortBy: 'start_time',
+        sortDir: 'desc',
+    },
+    deleteMode: false,
+    columns: {
+        ip: true,
+        platform: true,
+        streamMode: true,
+        stopped: true,
     },
     healthCheckInterval: null
 };
@@ -187,21 +224,44 @@ export const UIElements = {
     vodDetailsPoster: null,
     vodDetailsTitle: null,
     vodDetailsMeta: null,
+    vodDetailsBadges: null,
     vodDetailsYear: null,
     vodDetailsRating: null,
     vodDetailsType: null,
     vodDetailsDuration: null,
+    vodDetailsTmdb: null,
+    vodDetailsReleaseDateRow: null,
+    vodDetailsReleaseDate: null,
     vodDetailsGenre: null,
     vodDetailsDirector: null,
     vodDetailsCast: null,
+    vodDetailsCountryRow: null,
+    vodDetailsCountry: null,
     vodDetailsDesc: null,
     vodDetailsMovieActions: null,
     vodPlayMovieBtn: null,
+    vodWatchTrailerBtn: null,
+    vodCopyLinkBtn: null,
+    vodDetailsExternalLinks: null,
+    vodLinkImdb: null,
+    vodLinkTmdb: null,
+    vodLinkTrakt: null,
+    vodLinkRt: null,
+    vodLinkLetterboxd: null,
+    vodDetailsTechInfo: null,
+    vodTechProviderBadge: null,
+    vodTechStreamDetails: null,
     vodDetailsSeriesActions: null,
     vodSeasonSelect: null,
     vodSeasonTabs: null,
     vodEpisodesCountBadge: null,
     vodEpisodeList: null,
+
+    // --- VOD Trailer Modal ---
+    vodTrailerModal: null,
+    vodTrailerTitle: null,
+    vodTrailerCloseBtn: null,
+    vodTrailerIframe: null,
 
     // --- NEW: Group Filter Modal ---
     groupFilterModal: null,
@@ -235,6 +295,20 @@ export const UIElements = {
     logAutoDeleteDaysInput: null,
     downloadLogsBtn: null,
     clearLogsBtn: null,
+
+    // --- Logo & Image Cache Management Elements ---
+    logoCacheManagementSection: null,
+    logoSyncStatusBadge: null,
+    logoCacheCount: null,
+    logoCacheSize: null,
+    logoChannelCoverage: null,
+    posterCacheCount: null,
+    posterCacheSize: null,
+    storeLogosInternallyToggle: null,
+    smartLogoMatchingToggle: null,
+    syncLogosNowBtn: null,
+    clearChannelLogosBtn: null,
+    clearVodPostersBtn: null,
 
     // --- NEW: User Editor Elements ---
     userEditorSourceList: null,

@@ -5,13 +5,13 @@
  */
 
 import { UIElements, appState, guideState } from './state.js';
-import { refreshUserList, updateUIFromSettings } from './settings.js';
+import { refreshUserList, updateUIFromSettings, refreshLogoCacheInfo, switchSettingsSection } from './settings.js';
 import { loadAndScheduleNotifications, renderNotifications } from './notification.js';
 import { initMultiView, isMultiViewActive, cleanupMultiView } from './multiview.js';
 import { initDvrPage } from './dvr.js';
 import { stopAndCleanupPlayer } from './player.js';
 import { initDirectPlayer, isDirectPlayerActive, cleanupDirectPlayer } from './player_direct.js';
-import { finalizeGuideLoad, handleGuideLoad } from './guide.js';
+import { finalizeGuideLoad, handleGuideLoad, onGuideTabActivated } from './guide.js';
 import { fetchConfig, saveUserSetting, saveDeviceSetting } from './api.js';
 import { initActivityPage } from './admin.js';
 import { initVodPage } from './vod.js';
@@ -19,7 +19,7 @@ import { sendTelemetry } from './telemetry.js';
 
 
 let confirmCallback = null;
-let currentPage = '/';
+let currentPage = null;
 let activeModalCloseListener = null;
 let isResizing = false;
 // FINAL FIX: Flag to temporarily block config reloads after a setting is saved.
@@ -50,6 +50,45 @@ export const showNotification = (message, isError = false, duration = 3000) => {
     UIElements.notificationModal.classList.remove('hidden');
 
     setTimeout(() => { UIElements.notificationModal.classList.add('hidden'); }, duration);
+};
+
+// Signal to Android runtime bridge that native touch ghost-click shielding is active
+if (typeof window !== 'undefined') {
+    window.__viniModalTouchShieldActive = true;
+}
+
+/**
+ * Absorbs synthesized mobile click/mouse events that browsers fire ~5-300ms after touchend
+ * when closing a modal overlay, preventing click-through onto elements underneath (e.g. #guide-grid).
+ */
+const suppressSynthesizedGhostClick = (x, y) => {
+    const startedAt = Date.now();
+    const swallow = (ev) => {
+        if (Date.now() - startedAt > 450) {
+            teardown();
+            return;
+        }
+        const dist = (typeof ev.clientX === 'number' && typeof ev.clientY === 'number')
+            ? Math.hypot(ev.clientX - x, ev.clientY - y)
+            : 0;
+        if (dist <= 32) {
+            if (ev.cancelable) ev.preventDefault();
+            ev.stopPropagation();
+            ev.stopImmediatePropagation();
+            if (ev.type === 'click') {
+                teardown();
+            }
+        }
+    };
+    const teardown = () => {
+        window.removeEventListener('mousedown', swallow, true);
+        window.removeEventListener('mouseup', swallow, true);
+        window.removeEventListener('click', swallow, true);
+    };
+    window.addEventListener('mousedown', swallow, true);
+    window.addEventListener('mouseup', swallow, true);
+    window.addEventListener('click', swallow, true);
+    setTimeout(teardown, 450);
 };
 
 /**
@@ -100,6 +139,12 @@ export const openModal = (modal) => {
                         cleanupListeners();
                         return;
                     }
+                    // Suppress synthesized mobile click so elements behind the modal (e.g. TV Guide programmes) are not clicked
+                    if (touch || upEvent.type === 'touchend') {
+                        if (upEvent.cancelable) upEvent.preventDefault();
+                        upEvent.stopPropagation();
+                        suppressSynthesizedGhostClick(endX, endY);
+                    }
                     sendTelemetry('BACKDROP_TOUCH', `Backdrop tap detected -> triggering ${modal === UIElements.videoModal || modal.id === 'video-modal' ? 'stopAndCleanupPlayer()' : 'closeModal()'}`, {
                         modalId: modal.id,
                         startX, startY, endX, endY, distance, duration,
@@ -121,7 +166,7 @@ export const openModal = (modal) => {
             };
 
             document.addEventListener('mouseup', handleRelease, { once: true });
-            document.addEventListener('touchend', handleRelease, { once: true });
+            document.addEventListener('touchend', handleRelease, { once: true, passive: false });
             document.addEventListener('touchcancel', cleanupListeners, { once: true });
         }
     };
@@ -516,8 +561,8 @@ export const tempBlockConfigReload = () => {
  * Handles client-side routing by showing/hiding pages.
  */
 export const handleRouteChange = () => {
-    const wasMultiView = currentPage.startsWith('/multiview');
-    const wasPlayer = currentPage.startsWith('/player');
+    const wasMultiView = currentPage?.startsWith('/multiview') || false;
+    const wasPlayer = currentPage?.startsWith('/player') || false;
     const path = window.location.pathname;
 
     if (wasMultiView && !path.startsWith('/multiview')) {
@@ -557,43 +602,125 @@ export const handleRouteChange = () => {
     proceedWithRouteChange(path);
 };
 
+export const ALL_USER_TABS = ['guide', 'multiview', 'player', 'dvr', 'vod', 'notifications'];
+
+export function isTabAllowedForCurrentUser(tabId) {
+    const user = appState.currentUser;
+    if (!user || user.isAdmin) return true;
+    let allowed = user.allowed_tabs;
+    if (typeof allowed === 'string') {
+        try { allowed = JSON.parse(allowed); } catch (e) { allowed = null; }
+    }
+    if (!Array.isArray(allowed)) return true;
+    return allowed.includes(tabId);
+}
+
 /**
  * The core logic for switching pages after checks have passed.
- * MODIFIED: Now handles visibility of Settings and DVR tabs based on admin/user permissions.
+ * MODIFIED: Now handles visibility of Settings, DVR, and per-user allowed_tabs.
  * @param {string} path - The new path to render.
  */
 async function proceedWithRouteChange(path) {
-    const isGuide = path.startsWith('/tvguide') || path === '/';
-    const isMultiView = path.startsWith('/multiview');
-    const isPlayer = path.startsWith('/player');
-    const isDvr = path.startsWith('/dvr');
-    const isVod = path.startsWith('/vod');
-    const isActivity = path.startsWith('/activity');
-    const isNotifications = path.startsWith('/notifications');
-    const isSettings = path.startsWith('/settings');
+    const isAdmin = Boolean(appState.currentUser?.isAdmin);
+
+    const allowGuide = isTabAllowedForCurrentUser('guide');
+    const allowMultiView = isTabAllowedForCurrentUser('multiview');
+    const allowPlayer = isTabAllowedForCurrentUser('player');
+    const allowDvr = isTabAllowedForCurrentUser('dvr');
+    const allowVod = isTabAllowedForCurrentUser('vod');
+    const allowNotifications = isTabAllowedForCurrentUser('notifications');
+
+    const tabRouteMap = [
+        { id: 'guide', allowed: allowGuide, path: '/tvguide' },
+        { id: 'multiview', allowed: allowMultiView, path: '/multiview' },
+        { id: 'player', allowed: allowPlayer, path: '/player' },
+        { id: 'dvr', allowed: allowDvr, path: '/dvr' },
+        { id: 'vod', allowed: allowVod, path: '/vod' },
+        { id: 'notifications', allowed: allowNotifications, path: '/notifications' }
+    ];
+
+    let isGuide = path.startsWith('/tvguide') || path === '/';
+    let isMultiView = path.startsWith('/multiview');
+    let isPlayer = path.startsWith('/player');
+    let isDvr = path.startsWith('/dvr');
+    let isVod = path.startsWith('/vod');
+    let isActivity = path.startsWith('/activity');
+    let isNotifications = path.startsWith('/notifications');
+    let isSettings = path.startsWith('/settings');
+
+    // Redirect if the user is trying to access a tab they don't have permission for
+    const currentTabBlocked =
+        (isGuide && !allowGuide) ||
+        (isMultiView && !allowMultiView) ||
+        (isPlayer && !allowPlayer) ||
+        (isDvr && !allowDvr) ||
+        (isVod && !allowVod) ||
+        (isNotifications && !allowNotifications) ||
+        ((isActivity || isSettings) && !isAdmin);
+
+    if (currentTabBlocked) {
+        const fallback = tabRouteMap.find(t => t.allowed)?.path || '/tvguide';
+        if (fallback !== path) {
+            window.history.replaceState({}, '', fallback);
+            path = fallback;
+            isGuide = path.startsWith('/tvguide') || path === '/';
+            isMultiView = path.startsWith('/multiview');
+            isPlayer = path.startsWith('/player');
+            isDvr = path.startsWith('/dvr');
+            isVod = path.startsWith('/vod');
+            isActivity = false;
+            isNotifications = path.startsWith('/notifications');
+            isSettings = false;
+        }
+    }
 
     closeMobileMenu();
 
-    const isAdmin = appState.currentUser?.isAdmin;
-
     // Toggle desktop and mobile nav button visibility and active state
-    UIElements.tabGuide?.classList.toggle('active', isGuide);
-    UIElements.mobileNavGuide?.classList.toggle('active', isGuide);
+    if (UIElements.tabGuide) {
+        UIElements.tabGuide.classList.toggle('active', isGuide && allowGuide);
+        UIElements.tabGuide.classList.toggle('hidden', !allowGuide);
+    }
+    if (UIElements.mobileNavGuide) {
+        UIElements.mobileNavGuide.classList.toggle('active', isGuide && allowGuide);
+        UIElements.mobileNavGuide.classList.toggle('hidden', !allowGuide);
+    }
 
-    UIElements.tabMultiview?.classList.toggle('active', isMultiView);
-    UIElements.mobileNavMultiview?.classList.toggle('active', isMultiView);
+    if (UIElements.tabMultiview) {
+        UIElements.tabMultiview.classList.toggle('active', isMultiView && allowMultiView);
+        UIElements.tabMultiview.classList.toggle('hidden', !allowMultiView);
+    }
+    if (UIElements.mobileNavMultiview) {
+        UIElements.mobileNavMultiview.classList.toggle('active', isMultiView && allowMultiView);
+        UIElements.mobileNavMultiview.classList.toggle('hidden', !allowMultiView);
+    }
 
-    UIElements.tabPlayer?.classList.toggle('active', isPlayer);
-    UIElements.mobileNavPlayer?.classList.toggle('active', isPlayer);
+    if (UIElements.tabPlayer) {
+        UIElements.tabPlayer.classList.toggle('active', isPlayer && allowPlayer);
+        UIElements.tabPlayer.classList.toggle('hidden', !allowPlayer);
+    }
+    if (UIElements.mobileNavPlayer) {
+        UIElements.mobileNavPlayer.classList.toggle('active', isPlayer && allowPlayer);
+        UIElements.mobileNavPlayer.classList.toggle('hidden', !allowPlayer);
+    }
 
-    // DVR tab is visible to all users to see completed recordings
-    if (UIElements.tabDvr) UIElements.tabDvr.classList.toggle('active', isDvr);
-    if (UIElements.mobileNavDvr) UIElements.mobileNavDvr.classList.toggle('active', isDvr);
+    if (UIElements.tabDvr) {
+        UIElements.tabDvr.classList.toggle('active', isDvr && allowDvr);
+        UIElements.tabDvr.classList.toggle('hidden', !allowDvr);
+    }
+    if (UIElements.mobileNavDvr) {
+        UIElements.mobileNavDvr.classList.toggle('active', isDvr && allowDvr);
+        UIElements.mobileNavDvr.classList.toggle('hidden', !allowDvr);
+    }
 
-    // VOD tab is visible to all
-    if (UIElements.tabVod) UIElements.tabVod.classList.toggle('active', isVod);
-    if (UIElements.mobileNavVod) UIElements.mobileNavVod.classList.toggle('active', isVod);
-    // --- END ADD ---
+    if (UIElements.tabVod) {
+        UIElements.tabVod.classList.toggle('active', isVod && allowVod);
+        UIElements.tabVod.classList.toggle('hidden', !allowVod);
+    }
+    if (UIElements.mobileNavVod) {
+        UIElements.mobileNavVod.classList.toggle('active', isVod && allowVod);
+        UIElements.mobileNavVod.classList.toggle('hidden', !allowVod);
+    }
 
     // Activity tab is for admins only
     if (UIElements.tabActivity) {
@@ -605,8 +732,14 @@ async function proceedWithRouteChange(path) {
         UIElements.mobileNavActivity.classList.toggle('hidden', !isAdmin);
     }
 
-    UIElements.tabNotifications?.classList.toggle('active', isNotifications);
-    UIElements.mobileNavNotifications?.classList.toggle('active', isNotifications);
+    if (UIElements.tabNotifications) {
+        UIElements.tabNotifications.classList.toggle('active', isNotifications && allowNotifications);
+        UIElements.tabNotifications.classList.toggle('hidden', !allowNotifications);
+    }
+    if (UIElements.mobileNavNotifications) {
+        UIElements.mobileNavNotifications.classList.toggle('active', isNotifications && allowNotifications);
+        UIElements.mobileNavNotifications.classList.toggle('hidden', !allowNotifications);
+    }
 
     // Settings tab is for admins only
     if (UIElements.tabSettings) {
@@ -618,30 +751,33 @@ async function proceedWithRouteChange(path) {
         UIElements.mobileNavSettings.classList.toggle('hidden', !isAdmin);
     }
 
+    // Save guide scroll positions before hiding the guide page so display:none does not lose them
+    if ((!isGuide || !allowGuide) && UIElements.pageGuide && !UIElements.pageGuide.classList.contains('hidden') && UIElements.guideContainer) {
+        guideState.savedScrollTop = UIElements.guideContainer.scrollTop;
+        guideState.savedScrollLeft = UIElements.guideContainer.scrollLeft;
+    }
+
     // Toggle page visibility
-    UIElements.pageGuide.classList.toggle('hidden', !isGuide);
-    UIElements.pageGuide.classList.toggle('flex', isGuide);
+    UIElements.pageGuide.classList.toggle('hidden', !isGuide || !allowGuide);
+    UIElements.pageGuide.classList.toggle('flex', isGuide && allowGuide);
 
-    UIElements.pageMultiview.classList.toggle('hidden', !isMultiView);
-    UIElements.pageMultiview.classList.toggle('flex', isMultiView);
+    UIElements.pageMultiview.classList.toggle('hidden', !isMultiView || !allowMultiView);
+    UIElements.pageMultiview.classList.toggle('flex', isMultiView && allowMultiView);
 
-    UIElements.pagePlayer.classList.toggle('hidden', !isPlayer);
-    UIElements.pagePlayer.classList.toggle('flex', isPlayer);
+    UIElements.pagePlayer.classList.toggle('hidden', !isPlayer || !allowPlayer);
+    UIElements.pagePlayer.classList.toggle('flex', isPlayer && allowPlayer);
 
-    // Show DVR page to everyone; content inside is handled by dvr.js
-    UIElements.pageDvr.classList.toggle('hidden', !isDvr);
-    UIElements.pageDvr.classList.toggle('flex', isDvr);
+    UIElements.pageDvr.classList.toggle('hidden', !isDvr || !allowDvr);
+    UIElements.pageDvr.classList.toggle('flex', isDvr && allowDvr);
 
-    // Show VOD page to everyone
-    UIElements.pageVod.classList.toggle('hidden', !isVod);
-    UIElements.pageVod.classList.toggle('flex', isVod);
-    // --- END ADD ---
+    UIElements.pageVod.classList.toggle('hidden', !isVod || !allowVod);
+    UIElements.pageVod.classList.toggle('flex', isVod && allowVod);
 
     UIElements.pageActivity.classList.toggle('hidden', !isActivity || !isAdmin);
     UIElements.pageActivity.classList.toggle('flex', isActivity && isAdmin);
 
-    UIElements.pageNotifications.classList.toggle('hidden', !isNotifications);
-    UIElements.pageNotifications.classList.toggle('flex', isNotifications);
+    UIElements.pageNotifications.classList.toggle('hidden', !isNotifications || !allowNotifications);
+    UIElements.pageNotifications.classList.toggle('flex', isNotifications && allowNotifications);
 
     // Show settings page only to admins
     UIElements.pageSettings.classList.toggle('hidden', !isSettings || !isAdmin);
@@ -651,33 +787,62 @@ async function proceedWithRouteChange(path) {
 
     if (isGuide) {
         if (appContainer) appContainer.classList.remove('header-collapsed');
-        if (UIElements.guideContainer) UIElements.guideContainer.scrollTop = 0;
 
         if (blockConfigReload) {
-            console.log(`%c[DEBUG] RACE_CONDITION_FIX: Navigation to Guide tab occurred while config reload was blocked. Skipping reload.`, 'color: #fca5a5; font-weight: bold;');
+            console.log(`%c[DEBUG] RACE_CONDITION_FIX: Navigation to Guide tab occurred while config reload was blocked. Activating existing guide state.`, 'color: #fca5a5; font-weight: bold;');
+            onGuideTabActivated();
+            currentPage = path;
             return;
         }
 
-        if (!appState.isNavigating) {
-            console.log('[UI] Refreshing TV Guide data on tab switch.');
-            const config = await fetchConfig();
-            if (config) {
-                Object.assign(guideState.settings, config.settings || {});
-                // --- FIX: Add VOD data to the global state ---
-                //guideState.vodMovies = config.vodMovies || [];
-                //guideState.vodSeries = config.vodSeries || [];
-                finalizeGuideLoad(true);
+        if (!appState.isNavigating && currentPage !== null) {
+            if (guideState.channels && guideState.channels.length > 0) {
+                console.log('[UI] Activating TV Guide tab with existing guide state.');
+                onGuideTabActivated();
+            } else {
+                console.log('[UI] TV Guide has no channels in memory; fetching config.');
+                const config = await fetchConfig();
+                if (config) {
+                    const preservedChannelWidth = guideState.settings?.channelColumnWidth;
+                    const preservedTz = guideState.settings?.timezoneOffset;
+                    Object.assign(guideState.settings, config.settings || {});
+                    if (preservedChannelWidth !== undefined) {
+                        guideState.settings.channelColumnWidth = preservedChannelWidth;
+                    }
+                    if (guideState.settings.timezoneOffset === undefined && preservedTz !== undefined) {
+                        guideState.settings.timezoneOffset = preservedTz;
+                    }
+                    if (config.m3uContent) {
+                        const { parseM3U } = await import('./utils.js');
+                        guideState.channels = parseM3U(config.m3uContent);
+                        if (appState.db) {
+                            try {
+                                const tx = appState.db.transaction(['guideData'], 'readwrite');
+                                tx.objectStore('guideData').put(guideState.channels, 'channels');
+                                if (config.settings?.sourcesLastUpdated) {
+                                    tx.objectStore('guideData').put(config.settings.sourcesLastUpdated, 'sourcesLastUpdated');
+                                }
+                            } catch (e) { }
+                        }
+                    }
+                    finalizeGuideLoad(true);
+                }
             }
         } else {
-            console.log('[UI] Skipping soft refresh because a navigation action is in progress.');
+            console.log('[UI] Skipping redundant config refresh on initial load or active navigation.');
+            if (!appState.isNavigating) {
+                onGuideTabActivated();
+            }
         }
 
     } else {
         if (appContainer) appContainer.classList.remove('header-collapsed');
 
         if (isSettings && isAdmin) {
+            switchSettingsSection('sources');
             if (blockConfigReload) {
                 console.log(`%c[DEBUG] RACE_CONDITION_FIX: Navigation to Settings tab occurred while config reload was blocked. Skipping reload.`, 'color: #fca5a5; font-weight: bold;');
+                refreshLogoCacheInfo();
             } else {
                 updateUIFromSettings();
                 if (appState.currentUser?.isAdmin) refreshUserList();
@@ -752,7 +917,15 @@ export async function refreshGuideAfterProcessing() {
 
     // 3. Update the global state
     if (config) {
+        const preservedChannelWidth = guideState.settings?.channelColumnWidth;
+        const preservedTz = guideState.settings?.timezoneOffset;
         Object.assign(guideState.settings, config.settings || {});
+        if (preservedChannelWidth !== undefined) {
+            guideState.settings.channelColumnWidth = preservedChannelWidth;
+        }
+        if (guideState.settings.timezoneOffset === undefined && preservedTz !== undefined) {
+            guideState.settings.timezoneOffset = preservedTz;
+        }
     }
 
     // 4. Load guide data FIRST (this processes and stores the data in memory)

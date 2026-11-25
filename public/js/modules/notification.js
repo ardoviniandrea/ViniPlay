@@ -66,6 +66,18 @@ async function unsubscribeCurrentUser() {
  */
 export async function subscribeUserToPush(force = false) {
     console.log(`[NOTIF] Initiating push subscription process. Force mode: ${force}`);
+    if (window.ViniAndroid) {
+        isSubscribed = true;
+        if (typeof window.ViniAndroid.requestNotificationPermission === 'function') {
+            try { window.ViniAndroid.requestNotificationPermission(); } catch (e) {}
+        }
+        if (force) {
+            await loadAndScheduleNotifications();
+            showNotification('Native Android notifications synced!');
+        }
+        return;
+    }
+
     if (!appState.swRegistration) {
         console.warn('[NOTIF] Service worker not registered yet. Cannot subscribe.');
         return;
@@ -108,7 +120,7 @@ export async function subscribeUserToPush(force = false) {
         }
     } catch (error) {
         console.error('[NOTIF] Failed to subscribe user:', error);
-        if (Notification.permission === 'denied') {
+        if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
             showNotification('Notifications are blocked by your browser. Please enable them manually.', true, 8000);
         } else {
             showNotification('Failed to set up notifications. Check browser console.', true);
@@ -123,6 +135,14 @@ export const loadAndScheduleNotifications = async () => {
         const notifications = await getProgramNotifications();
         guideState.userNotifications = notifications;
         console.log(`[NOTIF] Loaded ${notifications.length} scheduled notifications from server.`);
+
+        if (window.ViniAndroid && typeof window.ViniAndroid.syncNotifications === 'function') {
+            try {
+                window.ViniAndroid.syncNotifications(JSON.stringify(notifications || []));
+            } catch (e) {
+                console.warn('[NOTIF] Error syncing notifications to ViniAndroid:', e);
+            }
+        }
 
         renderNotificationSettings();
         renderNotifications();
@@ -153,23 +173,27 @@ export const addOrRemoveNotification = async (programDetails) => {
             }
         );
     } else {
-        if (Notification.permission === 'denied') {
-            showNotification('Notifications are blocked. Please enable them in site settings.', true, 8000);
-            return;
-        }
-
-        if (Notification.permission !== 'granted') {
-            const permission = await Notification.requestPermission();
-            if (permission !== 'granted') {
-                showNotification('Permission denied. Cannot set alert.', true);
+        if (!window.ViniAndroid) {
+            if (Notification.permission === 'denied') {
+                showNotification('Notifications are blocked. Please enable them in site settings.', true, 8000);
                 return;
             }
-        }
 
-        await subscribeUserToPush();
-        if (!isSubscribed) {
-            showNotification('Could not subscribe to notifications. Cannot set alert.', true);
-            return;
+            if (Notification.permission !== 'granted') {
+                const permission = await Notification.requestPermission();
+                if (permission !== 'granted') {
+                    showNotification('Permission denied. Cannot set alert.', true);
+                    return;
+                }
+            }
+
+            await subscribeUserToPush();
+            if (!isSubscribed) {
+                showNotification('Could not subscribe to notifications. Cannot set alert.', true);
+                return;
+            }
+        } else {
+            await subscribeUserToPush();
         }
 
         let notificationLeadTime = parseInt(guideState.settings.notificationLeadTime, 10);

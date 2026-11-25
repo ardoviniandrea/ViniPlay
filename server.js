@@ -6,7 +6,7 @@ require('dotenv').config();
 
 const express = require('express');
 const crypto = require('crypto');
-const { spawn, exec } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
@@ -69,6 +69,7 @@ const VAPID_KEYS_PATH = path.join(DATA_DIR, 'vapid.json');
 const SOURCES_DIR = path.join(DATA_DIR, 'sources');
 const RAW_CACHE_DIR = path.join(SOURCES_DIR, 'raw_cache');
 const IMAGE_CACHE_DIR = path.join(DATA_DIR, 'image_cache'); // NEW: VOD poster image cache
+const LOGOS_DIR = path.join(DATA_DIR, 'logos'); // NEW: Internal persistent channel logo store
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DB_PATH = path.join(DATA_DIR, 'viniplay.db');
 const LIVE_CHANNELS_M3U_PATH = path.join(DATA_DIR, 'live_channels.m3u'); // Renamed
@@ -107,6 +108,7 @@ try {
     if (!fs.existsSync(RAW_CACHE_DIR)) fs.mkdirSync(RAW_CACHE_DIR, { recursive: true });
     if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
     if (!fs.existsSync(IMAGE_CACHE_DIR)) fs.mkdirSync(IMAGE_CACHE_DIR, { recursive: true });
+    if (!fs.existsSync(LOGOS_DIR)) fs.mkdirSync(LOGOS_DIR, { recursive: true });
     console.log(`[INIT] All required directories checked/created.`);
 } catch (mkdirError) {
     console.error(`[INIT] FATAL: Failed to create necessary directories: ${mkdirError.message}`);
@@ -115,19 +117,33 @@ try {
 
 
 // --- Database Setup ---
+let resolveDbReady;
+const dbReady = new Promise((resolve) => {
+    resolveDbReady = resolve;
+});
+
 const db = new sqlite3.Database(DB_PATH, (err) => {
     if (err) {
         console.error("[DB] Error opening database:", err.message);
         process.exit(1);
     } else {
         console.log("[DB] Connected to the SQLite database.");
+        db.configure('busyTimeout', 5000);
         db.serialize(() => {
-            db.run(`CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT, isAdmin INTEGER DEFAULT 0, canUseDvr INTEGER DEFAULT 0, allowed_sources TEXT)`, (err) => {
+            db.run("PRAGMA journal_mode = WAL;");
+            db.run("PRAGMA synchronous = NORMAL;");
+            db.run(`CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT, password_plain TEXT, isAdmin INTEGER DEFAULT 0, canUseDvr INTEGER DEFAULT 0, allowed_sources TEXT, allowed_tabs TEXT, created_at TEXT, last_login TEXT)`, (err) => {
                 if (err) {
                     console.error("[DB] Error creating 'users' table:", err.message);
                 } else {
                     db.run("ALTER TABLE users ADD COLUMN canUseDvr INTEGER DEFAULT 0", () => { });
                     db.run("ALTER TABLE users ADD COLUMN allowed_sources TEXT", () => { });
+                    db.run("ALTER TABLE users ADD COLUMN password_plain TEXT", () => { });
+                    db.run("ALTER TABLE users ADD COLUMN allowed_tabs TEXT", () => { });
+                    db.run("ALTER TABLE users ADD COLUMN created_at TEXT", () => {
+                        db.run("UPDATE users SET created_at = datetime('now') WHERE created_at IS NULL", () => { });
+                    });
+                    db.run("ALTER TABLE users ADD COLUMN last_login TEXT", () => { });
                     db.run("UPDATE users SET allowed_sources = NULL WHERE allowed_sources = '{}' OR isAdmin = 1 OR id = 1", () => { });
                 }
             });
@@ -154,7 +170,21 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 				provider_unique_id TEXT UNIQUE,
 				created_at TEXT DEFAULT CURRENT_TIMESTAMP,
 				updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-			)`, (err) => { if (err) console.error("[DB] Error creating 'movies' table:", err.message); });
+			)`, (err) => {
+                if (err) console.error("[DB] Error creating 'movies' table:", err.message);
+                else {
+                    db.run("ALTER TABLE movies ADD COLUMN director TEXT", () => { });
+                    db.run("ALTER TABLE movies ADD COLUMN cast TEXT", () => { });
+                    db.run("ALTER TABLE movies ADD COLUMN genre TEXT", () => { });
+                    db.run("ALTER TABLE movies ADD COLUMN rating TEXT", () => { });
+                    db.run("ALTER TABLE movies ADD COLUMN duration TEXT", () => { });
+                    db.run("ALTER TABLE movies ADD COLUMN duration_secs INTEGER", () => { });
+                    db.run("ALTER TABLE movies ADD COLUMN release_date TEXT", () => { });
+                    db.run("ALTER TABLE movies ADD COLUMN country TEXT", () => { });
+                    db.run("ALTER TABLE movies ADD COLUMN backdrop_url TEXT", () => { });
+                    db.run("ALTER TABLE movies ADD COLUMN youtube_trailer TEXT", () => { });
+                }
+            });
 
             db.run(`CREATE TABLE IF NOT EXISTS series (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,6 +205,12 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
                 else {
                     db.run("ALTER TABLE series ADD COLUMN director TEXT", () => { });
                     db.run("ALTER TABLE series ADD COLUMN cast TEXT", () => { });
+                    db.run("ALTER TABLE series ADD COLUMN genre TEXT", () => { });
+                    db.run("ALTER TABLE series ADD COLUMN rating TEXT", () => { });
+                    db.run("ALTER TABLE series ADD COLUMN release_date TEXT", () => { });
+                    db.run("ALTER TABLE series ADD COLUMN country TEXT", () => { });
+                    db.run("ALTER TABLE series ADD COLUMN backdrop_url TEXT", () => { });
+                    db.run("ALTER TABLE series ADD COLUMN youtube_trailer TEXT", () => { });
                 }
             });
 
@@ -262,12 +298,24 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
                 status TEXT NOT NULL,
                 client_ip TEXT,
                 channel_logo TEXT,
-                stream_profile_name TEXT
+                stream_profile_name TEXT,
+                media_type TEXT DEFAULT 'live',
+                client_info TEXT
             )`, (err) => {
                 if (!err) {
                     // Add new columns non-destructively if the table already exists
                     db.run("ALTER TABLE stream_history ADD COLUMN channel_logo TEXT", () => { });
                     db.run("ALTER TABLE stream_history ADD COLUMN stream_profile_name TEXT", () => { });
+                    db.run("ALTER TABLE stream_history ADD COLUMN client_info TEXT", () => { });
+                    db.run("ALTER TABLE stream_history ADD COLUMN media_type TEXT DEFAULT 'live'", () => {
+                        // Clean up IPv6-mapped IPv4 addresses and backfill media_type on existing rows
+                        db.run(`UPDATE stream_history SET client_ip = SUBSTR(client_ip, 8) WHERE client_ip LIKE '::ffff:%'`, () => { });
+                        db.run(`UPDATE stream_history SET media_type = CASE
+                            WHEN channel_name LIKE '%S0%E0%' OR channel_name LIKE '%S0%E1%' OR channel_name LIKE '%S1%E0%' OR channel_name LIKE '%Season %' THEN 'series'
+                            WHEN channel_id IS NULL AND channel_name IS NOT NULL AND channel_name != 'Direct Stream' THEN 'movie'
+                            ELSE 'live'
+                        END WHERE media_type IS NULL OR media_type = ''`, () => { });
+                    });
                 }
             });
 
@@ -283,6 +331,35 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
                 PRIMARY KEY (user_id, content_type, content_id)
             )`, (err) => {
                 if (err) console.error("[DB] Error creating 'watch_progress' table:", err.message);
+            });
+
+            // --- NEW: Internal Channel Logo Store Table ---
+            db.run(`CREATE TABLE IF NOT EXISTS channel_logos (
+                channel_key TEXT PRIMARY KEY,
+                channel_id TEXT,
+                tvg_id TEXT,
+                normalized_name TEXT,
+                channel_name TEXT,
+                source_url TEXT,
+                epg_icon_url TEXT,
+                file_name TEXT,
+                content_type TEXT,
+                content_hash TEXT,
+                file_size INTEGER DEFAULT 0,
+                match_type TEXT DEFAULT 'direct',
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )`, (err) => {
+                if (err) {
+                    console.error("[DB] Error creating 'channel_logos' table:", err.message);
+                }
+            });
+            db.run("ALTER TABLE channel_logos ADD COLUMN epg_icon_url TEXT", () => { });
+            db.run("ALTER TABLE channel_logos ADD COLUMN match_type TEXT DEFAULT 'direct'", () => { });
+            db.run("CREATE INDEX IF NOT EXISTS idx_channel_logos_tvg_id ON channel_logos(tvg_id)", () => { });
+            db.run("CREATE INDEX IF NOT EXISTS idx_channel_logos_norm_name ON channel_logos(normalized_name)", () => { });
+            db.get("SELECT 1", () => {
+                console.log("[DB] Database schema and tables initialized.");
+                if (typeof resolveDbReady === 'function') resolveDbReady();
             });
             // --- DVR Job Loading, Scheduling and Restart Recovery ---
             console.log('[DVR] Checking and recovering pending/active DVR jobs from database...');
@@ -474,8 +551,18 @@ const updateAndScheduleSourceRefreshes = () => {
     console.log(`[SCHEDULER] Finished scheduling. Active timers: ${sourceRefreshTimers.size}`);
 };
 
+let cachedLogoSettings = {
+    storeLogosInternally: true,
+    smartLogoMatching: true
+};
+let settingsValidatedOnce = false;
+
 function saveSettings(settings) {
     try {
+        if (settings && typeof settings === 'object') {
+            cachedLogoSettings.storeLogosInternally = settings.storeLogosInternally !== false;
+            cachedLogoSettings.smartLogoMatching = settings.smartLogoMatching !== false;
+        }
         fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
         console.log('[SETTINGS] Settings saved successfully.');
         updateAndScheduleSourceRefreshes();
@@ -508,164 +595,178 @@ if (sessionSecret.includes('replace_this')) {
     console.warn('[SECURITY] Using a weak or default SESSION_SECRET. Please replace it.');
 }
 
-// Give the session store's SQLite connection a busy_timeout so a write waits for a
-// held lock instead of failing immediately with SQLITE_BUSY. This matters when the
-// shared DB is briefly busy (e.g. startup source processing) or when several
-// requests persist a session at nearly the same moment — notably the burst of
-// parallel API calls a client fires on first load when reverse-proxy auth
-// (PROXY_AUTH_ENABLED) logs it in.
-const sessionStore = new SQLiteStore({ db: 'viniplay.db', dir: DATA_DIR, table: 'sessions' });
-sessionStore.db.run('PRAGMA busy_timeout = 8000');
-
 app.use(
     session({
-        store: sessionStore,
+        store: new SQLiteStore({ db: 'viniplay.db', dir: DATA_DIR, table: 'sessions', concurrentDB: true }),
         secret: sessionSecret,
         resave: false,
         saveUninitialized: false,
-        cookie: { maxAge: 30 * 24 * 60 * 60 * 1000, httpOnly: true, secure: process.env.NODE_ENV === 'production' },
+        cookie: {
+            maxAge: 30 * 24 * 60 * 60 * 1000,
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'strict',
+        },
     })
 );
+
+// --- Security Helpers: URL validation, safe FFmpeg arg builder, and CSRF protection ---
+function isValidHttpStreamUrl(rawUrl) {
+    if (typeof rawUrl !== 'string') return false;
+    const trimmed = rawUrl.trim();
+    if (!trimmed || trimmed.length > 4096) return false;
+    if (/[\r\n\0]/.test(trimmed)) return false;
+    try {
+        const parsed = new URL(trimmed);
+        return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+        return false;
+    }
+}
+
+function buildSafeFfmpegArgs(templateString, replacements = {}) {
+    const rawTokens = (templateString.match(/(?:[^\s"]+|"[^"]*")+/g) || [])
+        .map(arg => arg.replace(/^"|"$/g, ''));
+    return rawTokens.map(token => {
+        let out = token;
+        for (const [placeholder, value] of Object.entries(replacements)) {
+            if (out.includes(placeholder)) {
+                const sanitized = String(value ?? '').replace(/[\r\n\0]/g, '');
+                out = out.split(placeholder).join(sanitized);
+            }
+        }
+        return out;
+    });
+}
+
+function tokensMatchSafe(a, b) {
+    if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;
+    const bufA = Buffer.from(a, 'utf8');
+    const bufB = Buffer.from(b, 'utf8');
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+}
+
+function parseCookieHeader(cookieHeader, name) {
+    if (!cookieHeader || typeof cookieHeader !== 'string') return null;
+    const parts = cookieHeader.split(';');
+    for (const part of parts) {
+        const idx = part.indexOf('=');
+        if (idx === -1) continue;
+        const k = part.slice(0, idx).trim();
+        if (k === name) {
+            try {
+                return decodeURIComponent(part.slice(idx + 1).trim());
+            } catch {
+                return part.slice(idx + 1).trim();
+            }
+        }
+    }
+    return null;
+}
+
+function setCsrfCookie(res, token) {
+    res.cookie('viniplay_csrf', token, {
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+        httpOnly: false,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/',
+    });
+}
+
+function ensureCsrfToken(req, res, forceRotate = false) {
+    if (!req.session) return null;
+    let minted = false;
+    if (forceRotate || !req.session.csrfToken) {
+        req.session.csrfToken = crypto.randomBytes(32).toString('hex');
+        minted = true;
+    }
+    const existingCookie = parseCookieHeader(req.headers.cookie, 'viniplay_csrf');
+    if (forceRotate || existingCookie !== req.session.csrfToken) {
+        setCsrfCookie(res, req.session.csrfToken);
+    }
+    if (minted && typeof req.session.save === 'function') {
+        req.session.save(() => {});
+    }
+    return req.session.csrfToken;
+}
+
+const csrfProtection = (req, res, next) => {
+    if (req.session && req.session.userId) {
+        ensureCsrfToken(req, res);
+    }
+
+    const method = (req.method || 'GET').toUpperCase();
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') {
+        return next();
+    }
+
+    // 1. Block cross-site browser requests via Fetch Metadata
+    const secFetchSite = (req.headers['sec-fetch-site'] || '').toLowerCase();
+    if (secFetchSite === 'cross-site') {
+        console.warn(`[SECURITY_CSRF] Blocked cross-site ${method} ${req.originalUrl} (Sec-Fetch-Site: cross-site)`);
+        return res.status(403).json({ error: 'Cross-site request blocked.' });
+    }
+
+    // 2. Validate Origin header when present
+    const originHeader = req.headers.origin;
+    if (originHeader) {
+        let originHost = null;
+        try {
+            originHost = new URL(originHeader).host.toLowerCase();
+        } catch {
+            originHost = null;
+        }
+        const allowedHosts = new Set();
+        const hostHeader = (req.get('host') || '').trim().toLowerCase();
+        if (hostHeader) allowedHosts.add(hostHeader);
+        const forwardedHost = (req.get('x-forwarded-host') || '').split(',')[0].trim().toLowerCase();
+        if (forwardedHost) allowedHosts.add(forwardedHost);
+
+        if (!originHost || !allowedHosts.has(originHost)) {
+            console.warn(`[SECURITY_CSRF] Blocked ${method} ${req.originalUrl} from mismatched Origin: ${originHeader}`);
+            return res.status(403).json({ error: 'Invalid request origin.' });
+        }
+    }
+
+    // 3. Verify per-session cryptographic CSRF token for authenticated state-changing requests
+    if (req.session && req.session.userId) {
+        // Backward compatibility for native Android ViniLogger client (non-browser, no Origin/Sec-Fetch-Site)
+        const isNativeAndroidLogger =
+            req.path === '/api/logs/client' &&
+            req.headers['user-agent'] === 'ViniPlayAndroid/1.0' &&
+            !originHeader &&
+            !secFetchSite;
+
+        if (!isNativeAndroidLogger) {
+            const providedToken =
+                req.get('x-csrf-token') ||
+                (typeof req.query?._csrf === 'string' ? req.query._csrf : '') ||
+                (req.body && typeof req.body === 'object' && typeof req.body._csrf === 'string' ? req.body._csrf : '');
+
+            if (!tokensMatchSafe(providedToken, req.session.csrfToken)) {
+                console.warn(`[SECURITY_CSRF] Missing or invalid CSRF token on ${method} ${req.originalUrl} for user ${req.session.userId}`);
+                return res.status(403).json({ error: 'Invalid or missing CSRF token.' });
+            }
+        }
+    }
+
+    next();
+};
+
+app.use(csrfProtection);
 
 app.use((req, res, next) => {
     // Add client IP to the request object for logging
     req.clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-    if (req.path === '/api/events') {
+    if (req.path === '/api/events' || req.path === '/api/image-proxy' || req.path.startsWith('/api/logos/channel/')) {
         return next();
     }
     const user_info = req.session.userId ? `User ID: ${req.session.userId}, Admin: ${req.session.isAdmin}, DVR: ${req.session.canUseDvr}` : 'No session';
     console.log(`[HTTP_TRACE] ${req.method} ${req.originalUrl} - IP: ${req.clientIp} - Session: [${user_info}]`);
     next();
-});
-
-// --- Reverse-proxy (trusted-header) authentication (opt-in) ---
-// When ViniPlay runs behind an authenticating reverse proxy (oauth2-proxy,
-// Authelia, Authentik, Traefik forward-auth, ...), that proxy has already
-// authenticated the user. With this enabled, ViniPlay trusts an identity header
-// set by the proxy and logs the user in automatically, so the built-in login
-// form is skipped and no parallel password has to be maintained.
-//
-// SECURITY: the identity header is trusted ONLY when the request's real TCP peer
-// (req.socket.remoteAddress) is in PROXY_AUTH_TRUSTED_IPS. This check deliberately
-// uses the socket peer, never X-Forwarded-For, because a forwarded header can be
-// spoofed by any client. If enabled without a trusted-IP list the header is never
-// trusted (fail closed) and a warning is logged. Keep this OFF unless a proxy in
-// front of ViniPlay is the only way in.
-const PROXY_AUTH_ENABLED = String(process.env.PROXY_AUTH_ENABLED).toLowerCase() === 'true';
-const PROXY_AUTH_HEADER = (process.env.PROXY_AUTH_HEADER || 'X-Forwarded-Email').toLowerCase();
-const PROXY_AUTH_TRUSTED_IPS = (process.env.PROXY_AUTH_TRUSTED_IPS || '')
-    .split(',').map(s => s.trim()).filter(Boolean);
-const PROXY_AUTH_ADMIN_USERS = (process.env.PROXY_AUTH_ADMIN_USERS || '')
-    .split(',').map(s => s.trim()).filter(Boolean);
-// Where to send the browser on logout when proxy auth is active. Without this, the
-// app's logout only clears the ViniPlay session and the very next request is
-// re-authenticated by the proxy header — so the user never actually leaves. Point it
-// at the proxy's sign-out (e.g. "/oauth2/sign_out" for oauth2-proxy) to end the
-// upstream session too.
-const PROXY_AUTH_LOGOUT_URL = (process.env.PROXY_AUTH_LOGOUT_URL || '').trim();
-
-if (PROXY_AUTH_ENABLED) {
-    if (PROXY_AUTH_TRUSTED_IPS.length === 0) {
-        console.warn('[PROXY_AUTH] PROXY_AUTH_ENABLED is set but PROXY_AUTH_TRUSTED_IPS is empty — the identity header will NEVER be trusted (fail closed). Set PROXY_AUTH_TRUSTED_IPS to the reverse-proxy source IP/CIDR.');
-    } else {
-        console.log(`[PROXY_AUTH] Enabled. Header="${PROXY_AUTH_HEADER}", trusted peer IPs: ${PROXY_AUTH_TRUSTED_IPS.join(', ')}`);
-    }
-}
-
-// Normalize an IPv4-mapped IPv6 address ("::ffff:1.2.3.4") to plain IPv4.
-function normalizeIp(ip) {
-    if (!ip) return '';
-    return ip.startsWith('::ffff:') ? ip.slice(7) : ip;
-}
-
-// True if `ip` matches any entry in `list`. Entries may be an exact IP (IPv4 or
-// IPv6) or an IPv4 CIDR ("172.31.0.0/16"). IPv6 is matched only exactly.
-function ipMatchesList(ip, list) {
-    ip = normalizeIp(ip);
-    for (const entry of list) {
-        if (!entry.includes('/')) {
-            if (entry === ip) return true;
-            continue;
-        }
-        const [range, bitsStr] = entry.split('/');
-        const bits = parseInt(bitsStr, 10);
-        const ipParts = ip.split('.');
-        const rangeParts = range.split('.');
-        if (ipParts.length !== 4 || rangeParts.length !== 4 || isNaN(bits) || bits < 0 || bits > 32) continue;
-        const toInt = p => ((parseInt(p[0], 10) << 24) | (parseInt(p[1], 10) << 16) | (parseInt(p[2], 10) << 8) | parseInt(p[3], 10)) >>> 0;
-        const mask = bits === 0 ? 0 : (0xFFFFFFFF << (32 - bits)) >>> 0;
-        if ((toInt(ipParts) & mask) === (toInt(rangeParts) & mask)) return true;
-    }
-    return false;
-}
-
-// Find the ViniPlay user for a proxy-supplied identity, auto-provisioning one on
-// first sight. New users become admin if listed in PROXY_AUTH_ADMIN_USERS, or if
-// no admin exists yet (bootstrap, so the first SSO user can administer). The local
-// password is left NULL — these users authenticate only through the proxy.
-// An identity listed in PROXY_AUTH_ADMIN_USERS is also promoted to admin if its
-// account already exists as non-admin (grant only — the list never removes admin).
-function findOrProvisionProxyUser(identity, callback) {
-    db.get("SELECT * FROM users WHERE username = ?", [identity], (err, user) => {
-        if (err) return callback(err);
-        if (user) {
-            if (PROXY_AUTH_ADMIN_USERS.includes(identity) && user.isAdmin !== 1) {
-                return db.run("UPDATE users SET isAdmin = 1 WHERE id = ?", [user.id], (uerr) => {
-                    if (uerr) return callback(uerr);
-                    console.log(`[PROXY_AUTH] Promoted existing user "${identity}" to admin (in PROXY_AUTH_ADMIN_USERS).`);
-                    user.isAdmin = 1;
-                    callback(null, user);
-                });
-            }
-            return callback(null, user);
-        }
-        db.get("SELECT COUNT(*) as count FROM users WHERE isAdmin = 1", [], (err2, row) => {
-            if (err2) return callback(err2);
-            const isAdmin = (PROXY_AUTH_ADMIN_USERS.includes(identity) || row.count === 0) ? 1 : 0;
-            db.run("INSERT OR IGNORE INTO users (username, password, isAdmin, canUseDvr) VALUES (?, NULL, ?, ?)",
-                [identity, isAdmin, isAdmin], (err3) => {
-                    if (err3) return callback(err3);
-                    // Re-select to get the row, whether we just inserted it or lost an insert race.
-                    db.get("SELECT * FROM users WHERE username = ?", [identity], callback);
-                });
-        });
-    });
-}
-
-app.use((req, res, next) => {
-    if (!PROXY_AUTH_ENABLED) return next();
-    // Already authenticated (local login, or an earlier proxy-auth request) — nothing to do.
-    if (req.session && req.session.userId) return next();
-
-    let identity = req.headers[PROXY_AUTH_HEADER];
-    if (Array.isArray(identity)) identity = identity[0];
-    identity = (identity || '').trim();
-    if (!identity) return next();
-
-    const peerTrusted = PROXY_AUTH_TRUSTED_IPS.length > 0 && ipMatchesList(req.socket.remoteAddress, PROXY_AUTH_TRUSTED_IPS);
-    if (!peerTrusted) {
-        // A header is present but the request did not come from a trusted proxy —
-        // possibly a spoof attempt reaching ViniPlay directly. Never trust it.
-        console.warn(`[PROXY_AUTH] Ignoring "${PROXY_AUTH_HEADER}" header from untrusted peer ${normalizeIp(req.socket.remoteAddress)}.`);
-        return next();
-    }
-
-    findOrProvisionProxyUser(identity, (err, user) => {
-        if (err || !user) {
-            console.error('[PROXY_AUTH] Failed to resolve proxy-authenticated user:', err ? err.message : 'no user');
-            return next(); // fall through to the normal login screen
-        }
-        req.session.userId = user.id;
-        req.session.username = user.username;
-        req.session.isAdmin = user.isAdmin === 1;
-        req.session.canUseDvr = user.canUseDvr === 1;
-        req.session.save(saveErr => {
-            if (saveErr) console.error('[PROXY_AUTH] Session save failed:', saveErr.message);
-            else console.log(`[PROXY_AUTH] Auto-logged in "${user.username}" (ID: ${user.id}, admin: ${user.isAdmin === 1}) from ${normalizeIp(req.socket.remoteAddress)}.`);
-            next();
-        });
-    });
 });
 
 // MODIFIED: requireAuth now checks if the user still exists in the database on every request.
@@ -683,6 +784,7 @@ const requireAuth = (req, res, next) => {
             console.warn(`[AUTH_MIDDLEWARE] User ID ${req.session.userId} from session not found in DB. Destroying session.`);
             req.session.destroy();
             res.clearCookie('connect.sid');
+            res.clearCookie('viniplay_csrf', { path: '/' });
             return res.status(401).json({ error: 'User account no longer exists. Please log in again.' });
         }
         // User exists, proceed.
@@ -803,7 +905,7 @@ async function detectHardwareAcceleration() {
 
     console.log('[HW] Detecting hardware acceleration capabilities...');
     // Detect NVIDIA GPU
-    exec('nvidia-smi --query-gpu=gpu_name --format=csv,noheader', (err, stdout, stderr) => {
+    execFile('nvidia-smi', ['--query-gpu=gpu_name', '--format=csv,noheader'], { windowsHide: true }, (err, stdout, stderr) => {
         if (err || stderr) {
             console.log('[HW] NVIDIA GPU not detected or nvidia-smi failed.');
         } else {
@@ -816,7 +918,7 @@ async function detectHardwareAcceleration() {
     // MODIFIED: Use 'vainfo' for more robust detection of AMD, Intel VA-API
     // and QSV GPUs. vainfo gives driver detection info on stderr and full
     // detected GPU detail on stdout.
-    exec('vainfo', (err, stdout, stderr) => {
+    execFile('vainfo', [], { windowsHide: true }, (err, stdout, stderr) => {
         if (stderr) {
             let found = false;
             const trimmed_stdout = stdout.trim()
@@ -922,6 +1024,55 @@ function sendSseEvent(userId, eventName, data) {
     }
 }
 
+function cleanClientIp(ip) {
+    if (!ip) return 'Unknown';
+    let cleaned = String(ip).trim();
+    if (cleaned.startsWith('::ffff:')) {
+        cleaned = cleaned.substring(7);
+    }
+    if (cleaned === '::1') return '127.0.0.1';
+    return cleaned;
+}
+
+function parseClientPlatform(ua = '') {
+    if (!ua) return 'Web Client';
+    const s = String(ua);
+    let os = 'Web';
+    if (/Android\s+TV|BRAVIA|AFTM|AFTT|AFTS|AFTB|Shield/i.test(s)) os = 'Android TV';
+    else if (/CrKey|Chromecast/i.test(s)) os = 'Chromecast';
+    else if (/iPhone|iPod/i.test(s)) os = 'iOS';
+    else if (/iPad/i.test(s)) os = 'iPadOS';
+    else if (/Android/i.test(s)) os = 'Android';
+    else if (/Macintosh|Mac OS X/i.test(s)) os = 'macOS';
+    else if (/Windows NT/i.test(s)) os = 'Windows';
+    else if (/CrOS/i.test(s)) os = 'ChromeOS';
+    else if (/Linux/i.test(s)) os = 'Linux';
+
+    let browser = '';
+    if (/VLC/i.test(s)) browser = 'VLC';
+    else if (/Lavf|FFmpeg/i.test(s)) browser = 'FFmpeg';
+    else if (/Edg\//i.test(s)) browser = 'Edge';
+    else if (/OPR\/|Opera/i.test(s)) browser = 'Opera';
+    else if (/Firefox\//i.test(s)) browser = 'Firefox';
+    else if (/Chrome\//i.test(s) && !/Edg\//i.test(s)) browser = 'Chrome';
+    else if (/Safari\//i.test(s) && !/Chrome\//i.test(s)) browser = 'Safari';
+
+    return browser ? `${os} • ${browser}` : os;
+}
+
+function inferStreamMediaType({ mediaType, vodName, channelId, channelName, streamUrl }) {
+    const valid = ['live', 'movie', 'series', 'dvr'];
+    if (mediaType && valid.includes(String(mediaType).toLowerCase())) {
+        return String(mediaType).toLowerCase();
+    }
+    const urlStr = String(streamUrl || '');
+    const titleStr = String(vodName || channelName || '');
+    if (urlStr.startsWith('/dvr/') || urlStr.includes('/api/dvr/timeshift/')) return 'dvr';
+    if (/S\d{1,2}\s*E\d{1,3}/i.test(titleStr) || /\/series\//i.test(urlStr)) return 'series';
+    if (vodName || /\/movie\//i.test(urlStr) || (!channelId && /\.(mp4|mkv|avi|m4v)(\?|$)/i.test(urlStr))) return 'movie';
+    return 'live';
+}
+
 //-- ENHANCEMENT: New function to broadcast activity updates to all connected admins.
 function broadcastAdminUpdate() {
     // Combine transcoded and redirect streams into one list for the live view
@@ -933,7 +1084,9 @@ function broadcastAdminUpdate() {
         channelLogo: info.channelLogo,
         streamProfileName: info.streamProfileName,
         startTime: info.startTime,
-        clientIp: info.clientIp,
+        clientIp: cleanClientIp(info.clientIp),
+        clientInfo: info.clientInfo || 'Web Client',
+        mediaType: info.mediaType || 'live',
         isTranscoded: true,
     }));
 
@@ -946,7 +1099,9 @@ function broadcastAdminUpdate() {
         channelLogo: info.channelLogo,
         streamProfileName: info.streamProfileName,
         startTime: info.startTime,
-        clientIp: info.clientIp,
+        clientIp: cleanClientIp(info.clientIp),
+        clientInfo: info.clientInfo || 'Web Client',
+        mediaType: info.mediaType || 'live',
         isTranscoded: false,
     }));
 
@@ -964,7 +1119,7 @@ function broadcastAdminUpdate() {
 }
 
 // NEW: Broadcasts an event to ALL connected clients, regardless of user.
-function broadcastSseToAll(eventName, data) {
+function broadcastSseToAll(eventName, data, silent = false) {
     const message = `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
     let clientCount = 0;
     for (const clients of sseClients.values()) {
@@ -973,7 +1128,9 @@ function broadcastSseToAll(eventName, data) {
             clientCount++;
         });
     }
-    console.log(`[SSE_BROADCAST] Broadcasted event '${eventName}' to ${clientCount} total clients.`);
+    if (!silent) {
+        console.log(`[SSE_BROADCAST] Broadcasted event '${eventName}' to ${clientCount} total clients.`);
+    }
 }
 
 function getSettings() {
@@ -1031,6 +1188,8 @@ function getSettings() {
         notificationLeadTime: 10,
         sourcesLastUpdated: null,
         clientTelemetryEnabled: false,
+        storeLogosInternally: true,
+        smartLogoMatching: true,
         logs: {
             maxFiles: 5,
             maxFileSizeBytes: 5 * 1024 * 1024, // 5MB
@@ -1173,6 +1332,18 @@ function getSettings() {
             needsSave = true;
         }
 
+        if (settings.storeLogosInternally === undefined) {
+            console.log(`[SETTINGS_MIGRATE] Adding missing storeLogosInternally setting.`);
+            settings.storeLogosInternally = defaultSettings.storeLogosInternally;
+            needsSave = true;
+        }
+
+        if (settings.smartLogoMatching === undefined) {
+            console.log(`[SETTINGS_MIGRATE] Adding missing smartLogoMatching setting.`);
+            settings.smartLogoMatching = defaultSettings.smartLogoMatching;
+            needsSave = true;
+        }
+
         // Check that all expected settings are present and set and if not,
         // generate log to highlight missing setting(s) migration code. 
         if (!settings || typeof settings !== 'object') {
@@ -1186,7 +1357,10 @@ function getSettings() {
                 }
             }
             if (allSettingsValid) {
-                console.log('[SETTINGS_MIGRATE] Settings are all valid.');
+                if (!settingsValidatedOnce || needsSave) {
+                    console.log('[SETTINGS_MIGRATE] Settings are all valid.');
+                    settingsValidatedOnce = true;
+                }
                 if (needsSave) {
                     console.log('[SETTINGS_MIGRATE] Saving updated settings file after migration.');
                     fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
@@ -1195,6 +1369,9 @@ function getSettings() {
                 console.log('[SETTINGS_MIGRATE_ERROR] Settings are not all valid.');
             }
         }
+
+        cachedLogoSettings.storeLogosInternally = settings.storeLogosInternally !== false;
+        cachedLogoSettings.smartLogoMatching = settings.smartLogoMatching !== false;
 
         return settings;
 
@@ -1501,8 +1678,959 @@ function fetchUrlContent(url, options = {}, asBuffer = false) { // <-- MODIFIED
 }
 
 
+// --- SMART CHANNEL LOGO STORE ENGINE ---
+const inFlightLogoDownloads = new Map();
+const recentFailedLogoChannels = new Map(); // channelKey -> timestampMs
+const LOGO_RETRY_COOLDOWN_MS = 20 * 1000;   // 20s server cooldown (shorter than client 60s retry window so client retries are never blocked)
+const inFlightPosterDownloads = new Map();
+
+const logoHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 4 });
+const logoHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 4 });
+const MAX_CONCURRENT_LOGO_FETCHES = 3;
+let activeLogoFetches = 0;
+const logoFetchWaitQueue = [];
+
+function acquireLogoFetchSlot() {
+    if (activeLogoFetches < MAX_CONCURRENT_LOGO_FETCHES) {
+        activeLogoFetches++;
+        return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+        logoFetchWaitQueue.push(resolve);
+    });
+}
+
+function releaseLogoFetchSlot() {
+    setTimeout(() => {
+        if (logoFetchWaitQueue.length > 0) {
+            const nextResolve = logoFetchWaitQueue.shift();
+            nextResolve();
+        } else {
+            activeLogoFetches = Math.max(0, activeLogoFetches - 1);
+        }
+    }, 60);
+}
+
+const logoSyncState = {
+    inProgress: false,
+    cancelRequested: false,
+    processed: 0,
+    total: 0,
+    updated: 0,
+    matched: 0,
+    keptSafe: 0,
+    failed: 0,
+    lastCompletedAt: null
+};
+
+/**
+ * Normalizes a channel name for smart logo matching across sources and quality variants.
+ * Strips country/category prefixes (e.g., "4K-IT - ", "IT | ") and quality/feed suffixes
+ * (e.g., "FHD", "HD", "4K", "HEVC", "(Backup)") while preserving channel numbers and "+1"/"+24".
+ */
+function normalizeChannelNameForLogo(name) {
+    if (!name || typeof name !== 'string') return '';
+    let s = name
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim();
+
+    // 1. Strip leading channel number prefixes like "[101] ", "101 - ", "101. "
+    s = s.replace(/^(?:\[\s*\d+\s*\]|\(\s*\d+\s*\)|\d{1,4}\s*[-.:|])\s*/, '');
+
+    // 2. Strip leading bracketed tags like "[IT] ", "(VIP) ", "[4K-IT] "
+    s = s.replace(/^(?:(?:\[[^\]]+\]|\([^)]+\))\s*)+/, '');
+
+    // 3. Strip country/quality prefixes before "|", ":", or " - " (e.g. "4K-IT - ", "IT | ", "UK: ")
+    s = s.replace(/^(?:(?:4k|uhd|fhd|hd|sd|raw|hevc|vip|[a-z]{2,3})(?:[-_/\s](?:4k|uhd|fhd|hd|sd|raw|hevc|vip|[a-z]{2,3}))*\s*(?:\||:|\s-\s)\s*)+/i, '');
+
+    // 4. Preserve time-shift markers inside parentheses/brackets like "(+1)" or "[+24]" before stripping tags
+    s = s.replace(/\(\s*(\+\d+)\s*\)/g, ' $1 ').replace(/\[\s*(\+\d+)\s*\]/g, ' $1 ');
+
+    // 5. Strip remaining bracketed/parenthesized metadata like "[FHD]", "(Backup)", "(1080p)"
+    s = s.replace(/\[[^\]]*\]/g, ' ').replace(/\([^)]*\)/g, ' ');
+
+    // 6. Strip standalone quality/codec/feed tokens
+    s = s.replace(/\b(?:uhd|4k|fhd|fullhd|full\s*hd|hd|sd|hevc|h265|h\.265|h264|h\.264|raw|50fps|60fps|1080p|1080i|720p|2160p|backup|bk|bkp|alt|feed|low|lq|hq|vip|hdr|sdr|dvb|sat)\b/gi, ' ');
+
+    // 7. Strip trailing country code suffix like " - IT", " | IT"
+    s = s.replace(/\s+(?:[-|]\s*)?(?:it|ita|uk|us|usa|de|fr|es|pt|nl)$/i, '');
+
+    // 8. Collapse to alphanumeric + '+'
+    const cleaned = s.replace(/[^a-z0-9+]/g, '');
+    if (cleaned.length >= 2) return cleaned;
+
+    return name.toLowerCase().replace(/[^a-z0-9+]/g, '');
+}
+
+/**
+ * Validates that a downloaded buffer is a genuine, non-corrupted image via magic bytes / SVG inspection.
+ */
+function detectValidImageFormat(buffer, contentTypeHeader = '') {
+    if (!Buffer.isBuffer(buffer) || buffer.length < 64) {
+        return { valid: false, reason: 'Payload too small or empty' };
+    }
+
+    // PNG: 89 50 4E 47 0D 0A 1A 0A
+    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
+        return { valid: true, mime: 'image/png', ext: '.png' };
+    }
+    // JPEG: FF D8 FF
+    if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
+        return { valid: true, mime: 'image/jpeg', ext: '.jpg' };
+    }
+    // GIF: GIF87a / GIF89a
+    if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) {
+        return { valid: true, mime: 'image/gif', ext: '.gif' };
+    }
+    // WEBP: RIFF....WEBP
+    if (buffer.slice(0, 4).toString('ascii') === 'RIFF' && buffer.slice(8, 12).toString('ascii') === 'WEBP') {
+        return { valid: true, mime: 'image/webp', ext: '.webp' };
+    }
+    // BMP: BM
+    if (buffer[0] === 0x42 && buffer[1] === 0x4D && buffer.length > 100) {
+        return { valid: true, mime: 'image/bmp', ext: '.bmp' };
+    }
+    // ICO: 00 00 01 00 or 00 00 02 00
+    if (buffer[0] === 0x00 && buffer[1] === 0x00 && (buffer[2] === 0x01 || buffer[2] === 0x02) && buffer[3] === 0x00) {
+        return { valid: true, mime: 'image/x-icon', ext: '.ico' };
+    }
+    // AVIF: ....ftypavif / ....ftypavis
+    if (buffer.length > 12 && buffer.slice(4, 8).toString('ascii') === 'ftyp') {
+        const brand = buffer.slice(8, 12).toString('ascii');
+        if (['avif', 'avis', 'mif1'].includes(brand)) {
+            return { valid: true, mime: 'image/avif', ext: '.avif' };
+        }
+    }
+    // SVG: Check text header (up to 4KB to allow XML/Illustrator metadata blocks)
+    const headStr = buffer.slice(0, Math.min(buffer.length, 4096)).toString('utf8').trim().toLowerCase();
+    if (headStr.includes('<svg') && !headStr.includes('<!doctype html') && !headStr.includes('<html')) {
+        return { valid: true, mime: 'image/svg+xml', ext: '.svg' };
+    }
+
+    return { valid: false, reason: `Unrecognized image magic bytes (Content-Type: ${contentTypeHeader || 'none'})` };
+}
+
+/**
+ * Performs a single HTTP/HTTPS fetch and validation attempt for a logo URL.
+ */
+function fetchLogoOnce(rawUrl, timeoutMs = 12000) {
+    return new Promise((resolve) => {
+        const MAX_LOGO_BYTES = 8 * 1024 * 1024; // 8MB safety cap
+
+        const fetchWithRedirect = (url, redirectCount = 0) => {
+            if (redirectCount > 5) {
+                return resolve({ success: false, error: 'Too many redirects', retryable: false });
+            }
+
+            let parsedUrl;
+            try {
+                parsedUrl = new URL(url);
+            } catch (e) {
+                return resolve({ success: false, error: 'Malformed URL', retryable: false });
+            }
+
+            const isHttps = parsedUrl.protocol === 'https:';
+            const protocol = isHttps ? https : http;
+            const reqOptions = {
+                hostname: parsedUrl.hostname,
+                port: parsedUrl.port || (isHttps ? 443 : 80),
+                path: parsedUrl.pathname + parsedUrl.search,
+                agent: isHttps ? logoHttpsAgent : logoHttpAgent,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9'
+                }
+            };
+
+            const req = protocol.get(reqOptions, (res) => {
+                if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+                    res.resume();
+                    let nextUrl;
+                    try {
+                        nextUrl = res.headers.location.startsWith('http')
+                            ? res.headers.location
+                            : new URL(res.headers.location, url).href;
+                    } catch (e) {
+                        return resolve({ success: false, error: 'Invalid redirect URL', retryable: false });
+                    }
+                    return fetchWithRedirect(nextUrl, redirectCount + 1);
+                }
+
+                if (res.statusCode !== 200) {
+                    res.resume();
+                    const isRetryableHttp = res.statusCode === 429 || res.statusCode === 408 || res.statusCode >= 500;
+                    return resolve({ success: false, error: `HTTP ${res.statusCode}`, retryable: isRetryableHttp });
+                }
+
+                const chunks = [];
+                let totalBytes = 0;
+                let aborted = false;
+
+                res.on('data', (chunk) => {
+                    totalBytes += chunk.length;
+                    if (totalBytes > MAX_LOGO_BYTES) {
+                        aborted = true;
+                        req.destroy();
+                        return resolve({ success: false, error: 'Logo exceeds maximum size limit', retryable: false });
+                    }
+                    chunks.push(chunk);
+                });
+
+                res.on('end', () => {
+                    if (aborted) return;
+                    if (!res.complete) {
+                        return resolve({ success: false, error: 'Incomplete HTTP response stream', retryable: true });
+                    }
+                    const buffer = Buffer.concat(chunks);
+                    const format = detectValidImageFormat(buffer, res.headers['content-type']);
+                    if (!format.valid) {
+                        return resolve({ success: false, error: format.reason, retryable: false });
+                    }
+
+                    const contentHash = crypto.createHash('sha256').update(buffer).digest('hex');
+                    const fileName = `${contentHash}${format.ext}`;
+                    const filePath = path.join(LOGOS_DIR, fileName);
+
+                    try {
+                        if (!fs.existsSync(LOGOS_DIR)) {
+                            fs.mkdirSync(LOGOS_DIR, { recursive: true });
+                        }
+                        if (!fs.existsSync(filePath)) {
+                            const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}`;
+                            fs.writeFileSync(tmpPath, buffer);
+                            fs.renameSync(tmpPath, filePath);
+                        }
+                        return resolve({
+                            success: true,
+                            fileName,
+                            contentType: format.mime,
+                            contentHash,
+                            fileSize: buffer.length
+                        });
+                    } catch (writeErr) {
+                        return resolve({ success: false, error: `Disk write error: ${writeErr.message}`, retryable: false });
+                    }
+                });
+
+                res.on('error', (err) => {
+                    if (!aborted) resolve({ success: false, error: err.message, retryable: true });
+                });
+            });
+
+            req.setTimeout(timeoutMs, () => {
+                req.destroy(new Error('Logo request timed out'));
+            });
+
+            req.on('error', (err) => {
+                resolve({ success: false, error: err.message, retryable: true });
+            });
+        };
+
+        fetchWithRedirect(rawUrl);
+    });
+}
+
+/**
+ * Downloads, validates, and atomically stores a channel logo by its SHA-256 content hash.
+ * Deduplicates concurrent requests to the same upstream URL, throttles concurrency via a shared queue
+ * so Guide scroll bursts or background syncs never overwhelm upstream servers (like Dispatcharr),
+ * and retries transient network/5xx/429 errors with backoff.
+ */
+function downloadAndValidateLogo(rawUrl, timeoutMs = 12000) {
+    if (!rawUrl || typeof rawUrl !== 'string' || !rawUrl.startsWith('http')) {
+        return Promise.resolve({ success: false, error: 'Invalid URL' });
+    }
+    if (inFlightLogoDownloads.has(rawUrl)) {
+        return inFlightLogoDownloads.get(rawUrl);
+    }
+
+    const downloadPromise = (async () => {
+        const MAX_RETRIES = 2;
+        let lastResult = { success: false, error: 'Unknown error' };
+
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            if (attempt > 0) {
+                await new Promise(r => setTimeout(r, attempt * 450));
+            }
+            await acquireLogoFetchSlot();
+            try {
+                lastResult = await fetchLogoOnce(rawUrl, timeoutMs);
+            } finally {
+                releaseLogoFetchSlot();
+            }
+            if (lastResult.success || !lastResult.retryable) {
+                break;
+            }
+        }
+        return lastResult;
+    })().finally(() => {
+        inFlightLogoDownloads.delete(rawUrl);
+    });
+
+    inFlightLogoDownloads.set(rawUrl, downloadPromise);
+    return downloadPromise;
+}
+
+/**
+ * Matches channels missing a stored logo with other channels sharing the same tvg_id or normalized_name.
+ */
+async function applySmartLogoMatchesInDb() {
+    if (cachedLogoSettings.smartLogoMatching === false) {
+        await dbRun(db, `UPDATE channel_logos SET file_name = NULL, content_type = NULL, content_hash = NULL, file_size = 0, match_type = NULL WHERE match_type = 'smart'`);
+        return 0;
+    }
+
+    const rows = await dbAll(db, `SELECT * FROM channel_logos`);
+    const byTvgId = new Map();
+    const byNormName = new Map();
+
+    // Build lookup tables from verified direct/epg logos that exist on disk
+    for (const row of rows) {
+        if (row.file_name && row.match_type !== 'smart') {
+            const fullPath = path.join(LOGOS_DIR, row.file_name);
+            if (fs.existsSync(fullPath)) {
+                if (row.tvg_id && !row.tvg_id.startsWith('no-tvg-id-') && !byTvgId.has(row.tvg_id)) {
+                    byTvgId.set(row.tvg_id, row);
+                }
+                if (row.normalized_name && row.normalized_name.length >= 2 && !byNormName.has(row.normalized_name)) {
+                    byNormName.set(row.normalized_name, row);
+                }
+            }
+        }
+    }
+
+    const updatesToApply = [];
+    for (const row of rows) {
+        const hasValidFile = row.file_name && fs.existsSync(path.join(LOGOS_DIR, row.file_name));
+        if (hasValidFile) continue;
+
+        let donor = null;
+        if (row.tvg_id && !row.tvg_id.startsWith('no-tvg-id-')) {
+            donor = byTvgId.get(row.tvg_id);
+        }
+        if (!donor && row.normalized_name && row.normalized_name.length >= 2) {
+            donor = byNormName.get(row.normalized_name);
+        }
+
+        if (donor) {
+            updatesToApply.push({
+                fileName: donor.file_name,
+                contentType: donor.content_type,
+                contentHash: donor.content_hash,
+                fileSize: donor.file_size,
+                channelKey: row.channel_key
+            });
+        }
+    }
+
+    if (updatesToApply.length > 0) {
+        let inTx = false;
+        let stmt = null;
+        try {
+            await dbRun(db, "BEGIN TRANSACTION");
+            inTx = true;
+            stmt = db.prepare(`UPDATE channel_logos SET file_name = ?, content_type = ?, content_hash = ?, file_size = ?, match_type = 'smart', updated_at = CURRENT_TIMESTAMP WHERE channel_key = ?`);
+            for (const u of updatesToApply) {
+                await new Promise((resolve, reject) => {
+                    stmt.run(u.fileName, u.contentType, u.contentHash, u.fileSize, u.channelKey, (err) => err ? reject(err) : resolve());
+                });
+            }
+            await new Promise(resolve => stmt.finalize(resolve));
+            stmt = null;
+            await dbRun(db, "COMMIT");
+            inTx = false;
+        } catch (err) {
+            if (stmt) await new Promise(resolve => stmt.finalize(resolve));
+            if (inTx) {
+                try { await dbRun(db, "ROLLBACK"); } catch (e) { }
+            }
+            console.error('[LOGO_STORE] Error applying smart logo matches:', err.message);
+        }
+    }
+
+    return updatesToApply.length;
+}
+
+/**
+ * Rewrites tvg-logo attributes in LIVE_CHANNELS_M3U_PATH based on current settings and stored logos.
+ */
+async function rewriteLiveM3uLogosFromStore(inputM3uContent = null) {
+    try {
+        const m3uRaw = inputM3uContent !== null
+            ? inputM3uContent
+            : (fs.existsSync(LIVE_CHANNELS_M3U_PATH) ? fs.readFileSync(LIVE_CHANNELS_M3U_PATH, 'utf-8') : '');
+        if (!m3uRaw) return '';
+
+        const settings = getSettings();
+        const storeInternally = cachedLogoSettings.storeLogosInternally !== false;
+        const smartMatching = cachedLogoSettings.smartLogoMatching !== false;
+        const fallbackVTag = settings.logoCacheClearedAt ? String(settings.logoCacheClearedAt).slice(-8) : '1';
+
+        const rows = await dbAll(db, `SELECT * FROM channel_logos`);
+        const logoMap = new Map();
+        const normAvailable = new Set();
+        const tvgAvailable = new Set();
+
+        for (const r of rows) {
+            logoMap.set(r.channel_key, r);
+            if (r.file_name && (smartMatching || r.match_type !== 'smart') && fs.existsSync(path.join(LOGOS_DIR, r.file_name))) {
+                if (r.normalized_name && r.normalized_name.length >= 2) normAvailable.add(r.normalized_name);
+                if (r.tvg_id && !r.tvg_id.startsWith('no-tvg-id-')) tvgAvailable.add(r.tvg_id);
+            }
+        }
+
+        const lines = m3uRaw.split('\n');
+        const outLines = [];
+
+        for (let i = 0; i < lines.length; i++) {
+            let line = lines[i];
+            if (line.startsWith('#EXTINF:')) {
+                const idMatch = line.match(/tvg-id="([^"]*)"/);
+                const channelKey = idMatch ? idMatch[1] : '';
+                const origMatch = line.match(/vini-orig-logo="([^"]*)"/);
+                const logoMatch = line.match(/tvg-logo="([^"]*)"/);
+                const currentLogoVal = logoMatch ? logoMatch[1] : '';
+
+                const row = logoMap.get(channelKey);
+                const rawFromM3u = origMatch
+                    ? origMatch[1]
+                    : (!currentLogoVal.startsWith('/api/logos/') ? currentLogoVal : '');
+
+                // Prefer latest non-empty source_url from channel_logos, falling back to M3U's vini-orig-logo
+                const origLogo = (row && row.source_url) ? row.source_url : rawFromM3u;
+                const safeOrig = (origLogo || '').replace(/"/g, '');
+
+                // Keep vini-orig-logo synchronized with the latest upstream source_url
+                if (origMatch) {
+                    line = line.replace(/vini-orig-logo="[^"]*"/, `vini-orig-logo="${safeOrig}"`);
+                } else {
+                    const idAttr = `tvg-id="${channelKey}"`;
+                    const idx = line.indexOf(idAttr);
+                    if (idx !== -1) {
+                        const insertPos = idx + idAttr.length;
+                        line = line.slice(0, insertPos) + ` vini-orig-logo="${safeOrig}"` + line.slice(insertPos);
+                    }
+                }
+
+                let targetLogo = '';
+
+                if (!storeInternally) {
+                    targetLogo = origLogo || row?.source_url || row?.epg_icon_url || '';
+                } else {
+                    const hasStoredFile = row && row.file_name && (smartMatching || row.match_type !== 'smart') && fs.existsSync(path.join(LOGOS_DIR, row.file_name));
+                    const hasCandidateUrl = Boolean(origLogo || row?.source_url || row?.epg_icon_url);
+                    const hasSmartDonor = smartMatching && row && (
+                        (row.tvg_id && tvgAvailable.has(row.tvg_id)) ||
+                        (row.normalized_name && normAvailable.has(row.normalized_name))
+                    );
+
+                    if (hasStoredFile || hasCandidateUrl || hasSmartDonor) {
+                        const vTag = (hasStoredFile && row.content_hash) ? row.content_hash.substring(0, 10) : fallbackVTag;
+                        targetLogo = `/api/logos/channel/${encodeURIComponent(channelKey)}?v=${vTag}`;
+                    }
+                }
+
+                if (/tvg-logo="[^"]*"/.test(line)) {
+                    line = line.replace(/tvg-logo="[^"]*"/, `tvg-logo="${targetLogo}"`);
+                } else {
+                    const colonIdx = line.indexOf(':');
+                    const insertAt = colonIdx !== -1 ? colonIdx + 1 : 8;
+                    line = line.slice(0, insertAt) + ` tvg-logo="${targetLogo}"` + line.slice(insertAt);
+                }
+            }
+            outLines.push(line);
+        }
+
+        const finalM3u = outLines.join('\n');
+        fs.writeFileSync(LIVE_CHANNELS_M3U_PATH, finalM3u);
+        return finalM3u;
+    } catch (err) {
+        console.error('[LOGO_STORE] Error rewriting M3U logos:', err.message);
+        return inputM3uContent || '';
+    }
+}
+
+/**
+ * Removes any logo files in LOGOS_DIR that are no longer referenced by any row in channel_logos.
+ */
+async function pruneOrphanedLogoFiles() {
+    try {
+        if (!fs.existsSync(LOGOS_DIR)) return 0;
+        const rows = await dbAll(db, `SELECT DISTINCT file_name FROM channel_logos WHERE file_name IS NOT NULL AND file_name != ''`);
+        const activeFiles = new Set(rows.map(r => r.file_name));
+        const diskFiles = fs.readdirSync(LOGOS_DIR);
+        let prunedCount = 0;
+        for (const f of diskFiles) {
+            if (f.includes('.tmp')) continue;
+            if (!activeFiles.has(f)) {
+                try {
+                    fs.unlinkSync(path.join(LOGOS_DIR, f));
+                    prunedCount++;
+                } catch (e) { }
+            }
+        }
+        if (prunedCount > 0) {
+            console.log(`[LOGO_STORE] Pruned ${prunedCount} replaced/orphaned logo file(s) from disk.`);
+        }
+        return prunedCount;
+    } catch (err) {
+        console.error('[LOGO_STORE] Error pruning orphaned logo files:', err.message);
+        return 0;
+    }
+}
+
+/**
+ * Fetches fresh live channel metadata from all active M3U and Xtream Codes sources (and cached EPG XMLs)
+ * to discover new upstream logo URLs (e.g. when logos are uploaded/replaced in Dispatcharr).
+ * Preserves existing source_url / epg_icon_url values whenever a logo is missing ("") in the updated source.
+ */
+async function refreshUpstreamChannelLogoUrls() {
+    const changedKeys = new Set();
+    try {
+        const settings = getSettings();
+        const activeM3uSources = (settings.m3uSources || []).filter(s => s && s.isActive);
+        if (activeM3uSources.length === 0) return changedKeys;
+
+        const freshMetaMap = new Map();
+        const epgChannelIcons = new Map();
+        const groupTitleRegex = /group-title="([^"]*)"/;
+
+        // 1. Extract EPG channel icons from cached EPG XML files on disk if available
+        const activeEpgSources = (settings.epgSources || []).filter(s => s && s.isActive);
+        for (const epgSource of activeEpgSources) {
+            try {
+                const epgFilePath = epgSource.type === 'file'
+                    ? epgSource.path
+                    : path.join(SOURCES_DIR, `epg_${epgSource.id}.xml`);
+                if (epgFilePath && fs.existsSync(epgFilePath)) {
+                    const xmlString = fs.readFileSync(epgFilePath, 'utf-8');
+                    const epgJson = xmlJS.xml2js(xmlString, { compact: true });
+                    const epgChannels = epgJson.tv && epgJson.tv.channel ? [].concat(epgJson.tv.channel) : [];
+                    for (const ch of epgChannels) {
+                        const rawChId = ch._attributes?.id;
+                        if (!rawChId) continue;
+                        const iconNode = Array.isArray(ch.icon) ? ch.icon[0] : ch.icon;
+                        const iconSrc = iconNode?._attributes?.src || '';
+                        if (iconSrc && iconSrc.startsWith('http') && !epgChannelIcons.has(rawChId)) {
+                            epgChannelIcons.set(rawChId, iconSrc.trim());
+                        }
+                    }
+                }
+            } catch (epgErr) {
+                console.warn(`[LOGO_STORE] Warning reading cached EPG icons for "${epgSource.name}":`, epgErr.message);
+            }
+        }
+
+        // 2. Fetch fresh live channel lists from active M3U / XC sources
+        for (const source of activeM3uSources) {
+            try {
+                let content = '';
+                if (source.type === 'file') {
+                    const sourceFilePath = path.join(SOURCES_DIR, path.basename(source.path));
+                    if (fs.existsSync(sourceFilePath)) {
+                        content = fs.readFileSync(sourceFilePath, 'utf-8');
+                    }
+                } else if (source.type === 'url') {
+                    content = await fetchUrlContent(source.path);
+                    try {
+                        const cacheFilePath = path.join(RAW_CACHE_DIR, `raw_${source.id}.m3u_cache`);
+                        fs.writeFileSync(cacheFilePath, content);
+                    } catch (e) { }
+                } else if (source.type === 'xc' && source.xc_data) {
+                    const xcInfo = JSON.parse(source.xc_data);
+                    const { server, username, password } = xcInfo;
+                    const liveExt = xcInfo.liveFormat === 'm3u8' ? 'm3u8' : 'ts';
+                    if (server && username && password) {
+                        const activeUserAgent = (settings.userAgents || []).find(ua => ua.id === settings.activeUserAgentId)?.value || 'VLC/3.0.20 (Linux; x86_64)';
+                        const m3uFetchOptions = { headers: { 'User-Agent': activeUserAgent } };
+                        const liveCategoriesUrl = `${server}/player_api.php?username=${username}&password=${password}&action=get_live_categories`;
+                        const liveStreamsUrl = `${server}/player_api.php?username=${username}&password=${password}&action=get_live_streams`;
+
+                        let liveCategories = [];
+                        try {
+                            const catResp = await fetchUrlContent(liveCategoriesUrl, m3uFetchOptions);
+                            liveCategories = JSON.parse(catResp);
+                        } catch (catErr) { }
+
+                        const streamsResp = await fetchUrlContent(liveStreamsUrl, m3uFetchOptions);
+                        const liveStreams = JSON.parse(streamsResp);
+                        let liveM3uContent = '';
+                        if (Array.isArray(liveStreams)) {
+                            for (const stream of liveStreams) {
+                                if (stream.stream_type === 'live') {
+                                    const streamUrl = `${server}/live/${username}/${password}/${stream.stream_id}.${liveExt}`;
+                                    const categoryName = Array.isArray(liveCategories)
+                                        ? liveCategories.find(cat => cat.category_id == stream.category_id)?.category_name || 'Live'
+                                        : 'Live';
+                                    const tvgId = stream.epg_channel_id || stream.stream_id;
+                                    liveM3uContent += `#EXTINF:-1 tvg-id="${tvgId}" tvg-name="${stream.name}" tvg-logo="${stream.stream_icon || ''}" group-title="${categoryName}",${stream.name}\n${streamUrl}\n`;
+                                }
+                            }
+                        }
+                        content = liveM3uContent;
+                        try {
+                            const cacheFilePath = path.join(RAW_CACHE_DIR, `raw_${source.id}.m3u_cache`);
+                            fs.writeFileSync(cacheFilePath, content);
+                        } catch (e) { }
+                    }
+                }
+
+                if (!content) continue;
+
+                const selectedGroups = Array.isArray(source.selectedGroups) ? source.selectedGroups : [];
+                const isGroupFilteringActive = selectedGroups.length > 0;
+                const lines = content.split('\n');
+                let currentExtInf = '';
+
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    if (line.startsWith('#EXTINF:')) {
+                        currentExtInf = line;
+                        continue;
+                    }
+                    if (line.startsWith('http') && currentExtInf) {
+                        const groupMatch = currentExtInf.match(groupTitleRegex);
+                        const groupTitle = (groupMatch && groupMatch[1]) ? groupMatch[1] : 'Uncategorized';
+                        if (isGroupFilteringActive && !selectedGroups.includes(groupTitle)) {
+                            currentExtInf = '';
+                            continue;
+                        }
+                        const idMatch = currentExtInf.match(/tvg-id="([^"]*)"/);
+                        const nameMatch = currentExtInf.match(/tvg-name="([^"]*)"/);
+                        const logoMatch = currentExtInf.match(/tvg-logo="([^"]*)"/);
+                        const rawLogoUrl = (logoMatch && logoMatch[1]) ? logoMatch[1].trim() : '';
+                        const commaIndex = currentExtInf.lastIndexOf(',');
+                        const name = (nameMatch && nameMatch[1]) ? nameMatch[1] : ((commaIndex !== -1) ? currentExtInf.substring(commaIndex + 1).trim() : 'Unknown');
+                        const originalTvgId = (idMatch && idMatch[1]) ? idMatch[1] : `no-tvg-id-${name.replace(/[^a-zA-Z0-9]/g, '')}`;
+                        const finalUniqueChannelId = `${source.id}_${originalTvgId}`;
+
+                        freshMetaMap.set(finalUniqueChannelId, {
+                            channelKey: finalUniqueChannelId,
+                            tvgId: originalTvgId,
+                            channelName: name,
+                            normalizedName: normalizeChannelNameForLogo(name),
+                            sourceUrl: rawLogoUrl,
+                            epgIconUrl: epgChannelIcons.get(originalTvgId) || ''
+                        });
+                        currentExtInf = '';
+                    }
+                }
+            } catch (srcErr) {
+                console.warn(`[LOGO_STORE] Could not refresh upstream channel list for source "${source.name}" during logo sync:`, srcErr.message);
+            }
+        }
+
+        if (freshMetaMap.size === 0) return changedKeys;
+
+        const existingRows = await dbAll(db, `SELECT * FROM channel_logos`);
+        const updates = [];
+        for (const row of existingRows) {
+            const fresh = freshMetaMap.get(row.channel_key);
+            if (!fresh) continue;
+
+            // Rule: If a logo is now missing from the source (""), keep the existing URL
+            const effectiveSourceUrl = (fresh.sourceUrl && fresh.sourceUrl.startsWith('http'))
+                ? fresh.sourceUrl
+                : (row.source_url || '');
+            const effectiveEpgIconUrl = (fresh.epgIconUrl && fresh.epgIconUrl.startsWith('http'))
+                ? fresh.epgIconUrl
+                : (row.epg_icon_url || '');
+
+            const urlChanged = (effectiveSourceUrl !== (row.source_url || '')) || (effectiveEpgIconUrl !== (row.epg_icon_url || ''));
+            if (urlChanged) {
+                changedKeys.add(row.channel_key);
+                updates.push([effectiveSourceUrl, effectiveEpgIconUrl, row.channel_key]);
+            }
+        }
+
+        if (updates.length > 0) {
+            let inTx = false;
+            let stmt = null;
+            try {
+                await dbRun(db, 'BEGIN TRANSACTION');
+                inTx = true;
+                stmt = db.prepare(`UPDATE channel_logos SET source_url = ?, epg_icon_url = ?, updated_at = CURRENT_TIMESTAMP WHERE channel_key = ?`);
+                for (const params of updates) {
+                    await new Promise((resolve, reject) => {
+                        stmt.run(params, (err) => err ? reject(err) : resolve());
+                    });
+                }
+                await new Promise(resolve => stmt.finalize(resolve));
+                stmt = null;
+                await dbRun(db, 'COMMIT');
+                inTx = false;
+                console.log(`[LOGO_STORE] Refreshed upstream logo URLs from active sources: ${updates.length} channel(s) have new logo URLs.`);
+            } catch (txErr) {
+                if (stmt) await new Promise(resolve => stmt.finalize(resolve));
+                if (inTx) {
+                    try { await dbRun(db, 'ROLLBACK'); } catch (e) { }
+                }
+                console.error('[LOGO_STORE] Error updating refreshed upstream logo URLs:', txErr.message);
+            }
+        }
+    } catch (err) {
+        console.warn('[LOGO_STORE] Error in refreshUpstreamChannelLogoUrls:', err.message);
+    }
+    return changedKeys;
+}
+
+/**
+ * Seeds channel_logos table from LIVE_CHANNELS_M3U_PATH if needed (e.g., after cache reset or upgrade)
+ * and removes any orphaned rows that are no longer present in LIVE_CHANNELS_M3U_PATH.
+ */
+async function ensureChannelLogosSeededFromM3u() {
+    if (!fs.existsSync(LIVE_CHANNELS_M3U_PATH)) return;
+    const m3uContent = fs.readFileSync(LIVE_CHANNELS_M3U_PATH, 'utf-8');
+    const lines = m3uContent.split('\n');
+    const existingRows = await dbAll(db, `SELECT channel_key FROM channel_logos`);
+    const existingSet = new Set(existingRows.map(r => r.channel_key));
+    const activeM3uKeys = new Set();
+
+    const rowsToInsert = [];
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line.startsWith('#EXTINF:')) continue;
+        const idMatch = line.match(/tvg-id="([^"]*)"/);
+        if (!idMatch || !idMatch[1]) continue;
+        const channelKey = idMatch[1];
+        activeM3uKeys.add(channelKey);
+        if (existingSet.has(channelKey)) continue;
+
+        const origMatch = line.match(/vini-orig-logo="([^"]*)"/);
+        const logoMatch = line.match(/tvg-logo="([^"]*)"/);
+        const rawLogo = origMatch ? origMatch[1] : ((logoMatch && !logoMatch[1].startsWith('/api/logos/')) ? logoMatch[1] : '');
+        const nameMatch = line.match(/tvg-name="([^"]*)"/);
+        const commaIdx = line.lastIndexOf(',');
+        const name = (nameMatch && nameMatch[1]) ? nameMatch[1] : (commaIdx !== -1 ? line.substring(commaIdx + 1).trim() : 'Unknown');
+        const usIdx = channelKey.indexOf('_');
+        const originalTvgId = usIdx !== -1 ? channelKey.substring(usIdx + 1) : channelKey;
+        const normName = normalizeChannelNameForLogo(name);
+
+        rowsToInsert.push([channelKey, channelKey, originalTvgId, normName, name, rawLogo]);
+        existingSet.add(channelKey);
+    }
+
+    const keysToPrune = existingRows
+        .map(r => r.channel_key)
+        .filter(k => !activeM3uKeys.has(k));
+
+    if (rowsToInsert.length > 0 || keysToPrune.length > 0) {
+        let inTx = false;
+        let stmt = null;
+        let delStmt = null;
+        try {
+            await dbRun(db, "BEGIN TRANSACTION");
+            inTx = true;
+            if (rowsToInsert.length > 0) {
+                stmt = db.prepare(`INSERT OR IGNORE INTO channel_logos (channel_key, channel_id, tvg_id, normalized_name, channel_name, source_url) VALUES (?, ?, ?, ?, ?, ?)`);
+                for (const params of rowsToInsert) {
+                    await new Promise((resolve, reject) => {
+                        stmt.run(...params, (err) => err ? reject(err) : resolve());
+                    });
+                }
+                await new Promise(resolve => stmt.finalize(resolve));
+                stmt = null;
+            }
+            if (keysToPrune.length > 0) {
+                delStmt = db.prepare(`DELETE FROM channel_logos WHERE channel_key = ?`);
+                for (const key of keysToPrune) {
+                    await new Promise((resolve, reject) => {
+                        delStmt.run(key, (err) => err ? reject(err) : resolve());
+                    });
+                }
+                await new Promise(resolve => delStmt.finalize(resolve));
+                delStmt = null;
+            }
+            await dbRun(db, "COMMIT");
+            inTx = false;
+        } catch (err) {
+            if (stmt) await new Promise(resolve => stmt.finalize(resolve));
+            if (delStmt) await new Promise(resolve => delStmt.finalize(resolve));
+            if (inTx) {
+                try { await dbRun(db, "ROLLBACK"); } catch (e) { }
+            }
+            console.error('[LOGO_STORE] Error seeding/pruning channel_logos from M3U:', err.message);
+        }
+    }
+}
+
+/**
+ * Synchronizes and validates channel logos in a throttled worker queue.
+ * - When forceVerify === false (normal sync): Fetches logos that are missing on disk ("?") or whose upstream URL changed (`changedChannelKeys`),
+ *   for sources with preDownloadLogos enabled. Channels that already have a valid stored logo on disk and unchanged URL are kept locked.
+ * - When forceVerify === true ("Check & Update Logos Now"): First refreshes upstream channel logo URLs from active sources, then re-verifies
+ *   all upstream URLs, updates any new/changed SHA-256 content hashes, skips identical hashes, and preserves existing stored logos if upstream is missing/broken.
+ */
+async function syncChannelLogos({ forceVerify = false, req = null, changedChannelKeys = new Set() } = {}) {
+    await dbReady;
+    if (logoSyncState.inProgress) {
+        console.log('[LOGO_STORE] Sync already in progress, skipping duplicate trigger.');
+        return { alreadyRunning: true, ...logoSyncState };
+    }
+
+    const settings = getSettings();
+    if (settings.storeLogosInternally === false && !forceVerify) {
+        return { skipped: true };
+    }
+
+    recentFailedLogoChannels.clear();
+
+    logoSyncState.inProgress = true;
+    logoSyncState.cancelRequested = false;
+    logoSyncState.processed = 0;
+    logoSyncState.total = 0;
+    logoSyncState.updated = 0;
+    logoSyncState.matched = 0;
+    logoSyncState.keptSafe = 0;
+    logoSyncState.failed = 0;
+
+    try {
+        await ensureChannelLogosSeededFromM3u();
+
+        // When manually checking & updating logos, query active sources first so new logo URLs (e.g. in Dispatcharr) are picked up
+        if (forceVerify) {
+            broadcastSseToAll('logo-sync-status', { status: 'running', ...logoSyncState }, true);
+            const refreshedKeys = await refreshUpstreamChannelLogoUrls();
+            for (const k of refreshedKeys) {
+                changedChannelKeys.add(k);
+            }
+        }
+
+        const allRows = await dbAll(db, `SELECT * FROM channel_logos`);
+
+        // Build set of source IDs that allow background pre-downloading
+        const enabledPreDownloadSourceIds = new Set(
+            (settings.m3uSources || [])
+                .filter(s => s.isActive && s.preDownloadLogos !== false)
+                .map(s => s.id)
+        );
+
+        const candidates = allRows.filter(row => {
+            const hasUrl = Boolean((row.source_url && row.source_url.startsWith('http')) || (row.epg_icon_url && row.epg_icon_url.startsWith('http')));
+            if (!hasUrl) return false;
+            if (forceVerify) return true;
+            if (changedChannelKeys && changedChannelKeys.has(row.channel_key)) return true;
+
+            // Respect per-source preDownloadLogos toggle for background sync
+            const usIdx = row.channel_key ? row.channel_key.indexOf('_') : -1;
+            const srcId = usIdx !== -1 ? row.channel_key.substring(0, usIdx) : null;
+            if (srcId && !enabledPreDownloadSourceIds.has(srcId)) {
+                return false;
+            }
+
+            // Once a direct/epg logo is stored on disk, keep it locked until manual "Check & Update Logos Now" or URL change
+            const hasStoredDirectFile = Boolean(row.file_name && row.match_type !== 'smart' && fs.existsSync(path.join(LOGOS_DIR, row.file_name)));
+            if (hasStoredDirectFile) {
+                return false;
+            }
+
+            return true;
+        });
+
+        logoSyncState.total = candidates.length;
+        console.log(`[LOGO_STORE] Starting logo sync (forceVerify=${forceVerify}). Candidates: ${candidates.length} / ${allRows.length} channels.`);
+        broadcastSseToAll('logo-sync-status', { status: 'running', ...logoSyncState }, true);
+
+        const CONCURRENCY = 2;
+        let index = 0;
+        const failureReasons = new Map();
+
+        const worker = async () => {
+            while (index < candidates.length && !logoSyncState.cancelRequested) {
+                const currentIdx = index++;
+                const row = candidates[currentIdx];
+                const hadExistingValidFile = Boolean(row.file_name && fs.existsSync(path.join(LOGOS_DIR, row.file_name)));
+
+                let dlResult = null;
+                let usedMatchType = 'direct';
+
+                if (row.source_url && row.source_url.startsWith('http')) {
+                    dlResult = await downloadAndValidateLogo(row.source_url, 12000);
+                }
+                if ((!dlResult || !dlResult.success) && row.epg_icon_url && row.epg_icon_url.startsWith('http')) {
+                    dlResult = await downloadAndValidateLogo(row.epg_icon_url, 12000);
+                    usedMatchType = 'epg';
+                }
+
+                if (logoSyncState.cancelRequested) break;
+
+                if (dlResult && dlResult.success) {
+                    const isChangedOrNew = !hadExistingValidFile || row.content_hash !== dlResult.contentHash || row.match_type === 'smart';
+                    if (isChangedOrNew || row.file_name !== dlResult.fileName || row.match_type !== usedMatchType) {
+                        await dbRun(
+                            db,
+                            `UPDATE channel_logos SET file_name = ?, content_type = ?, content_hash = ?, file_size = ?, match_type = ?, updated_at = CURRENT_TIMESTAMP WHERE channel_key = ?`,
+                            [dlResult.fileName, dlResult.contentType, dlResult.contentHash, dlResult.fileSize, usedMatchType, row.channel_key]
+                        );
+                    }
+                    if (isChangedOrNew) {
+                        logoSyncState.updated++;
+                    } else {
+                        logoSyncState.keptSafe++;
+                    }
+                } else {
+                    if (hadExistingValidFile) {
+                        logoSyncState.keptSafe++;
+                    } else {
+                        logoSyncState.failed++;
+                        const reason = dlResult?.error || 'Unknown error';
+                        failureReasons.set(reason, (failureReasons.get(reason) || 0) + 1);
+                    }
+                }
+
+                logoSyncState.processed++;
+                if (logoSyncState.processed % 10 === 0 || logoSyncState.processed === logoSyncState.total) {
+                    broadcastSseToAll('logo-sync-status', { status: 'running', ...logoSyncState }, true);
+                }
+            }
+        };
+
+        const workers = Array.from({ length: Math.min(CONCURRENCY, Math.max(1, candidates.length)) }, () => worker());
+        await Promise.all(workers);
+
+        if (!logoSyncState.cancelRequested) {
+            const newlyMatched = await applySmartLogoMatchesInDb();
+            logoSyncState.matched = newlyMatched;
+
+            await pruneOrphanedLogoFiles();
+            await rewriteLiveM3uLogosFromStore();
+
+            // Bump sourcesLastUpdated if any logos were updated or matched so clients refresh guide cache
+            if (logoSyncState.updated > 0 || logoSyncState.matched > 0 || forceVerify) {
+                const currentSettings = getSettings();
+                currentSettings.sourcesLastUpdated = new Date().toISOString();
+                saveSettings(currentSettings);
+            }
+        }
+
+        logoSyncState.inProgress = false;
+        logoSyncState.lastCompletedAt = new Date().toISOString();
+        const failureSummary = failureReasons.size > 0
+            ? ` | Failure reasons: ${Array.from(failureReasons.entries()).map(([k, v]) => `${k} (${v})`).join(', ')}`
+            : '';
+        console.log(`[LOGO_STORE] Logo sync complete: checked=${logoSyncState.processed}, updated=${logoSyncState.updated}, smartMatched=${logoSyncState.matched}, keptSafe=${logoSyncState.keptSafe}, failed=${logoSyncState.failed}${failureSummary}`);
+        broadcastSseToAll('logo-sync-status', { status: 'completed', ...logoSyncState }, true);
+        return { ...logoSyncState };
+    } catch (err) {
+        logoSyncState.inProgress = false;
+        console.error('[LOGO_STORE] Error during logo sync:', err.message);
+        broadcastSseToAll('logo-sync-status', { status: 'error', error: err.message, ...logoSyncState }, true);
+        return { error: err.message, ...logoSyncState };
+    } finally {
+        logoSyncState.inProgress = false;
+    }
+}
+// --- END SMART CHANNEL LOGO STORE ENGINE ---
+
+
 // --- EPG Parsing and Caching Logic ---
 const parseEpgTime = (timeStr, offsetHours = 0) => {
+    if (!timeStr || typeof timeStr !== 'string') {
+        return new Date();
+    }
     const match = timeStr.match(/(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\s*(([+-])(\d{2})(\d{2}))?/);
     if (!match) {
         console.warn(`[EPG_PARSE] Invalid time format encountered: ${timeStr}`);
@@ -1512,17 +2640,18 @@ const parseEpgTime = (timeStr, offsetHours = 0) => {
     const [, year, month, day, hours, minutes, seconds, , sign, tzHours, tzMinutes] = match;
     let date;
     if (sign && tzHours && tzMinutes) {
-        const epgOffsetMinutes = (parseInt(tzHours) * 60 + parseInt(tzMinutes)) * (sign === '+' ? 1 : -1);
-        date = new Date(Date.UTC(year, parseInt(month) - 1, day, hours, minutes, seconds));
+        const epgOffsetMinutes = (parseInt(tzHours, 10) * 60 + parseInt(tzMinutes, 10)) * (sign === '+' ? 1 : -1);
+        date = new Date(Date.UTC(year, parseInt(month, 10) - 1, day, hours, minutes, seconds));
         date.setUTCMinutes(date.getUTCMinutes() - epgOffsetMinutes);
     } else {
-        date = new Date(Date.UTC(year, parseInt(month) - 1, day, hours, minutes, seconds));
+        date = new Date(Date.UTC(year, parseInt(month, 10) - 1, day, hours, minutes, seconds));
         date.setUTCHours(date.getUTCHours() - offsetHours);
     }
     return date;
 };
 
 async function processAndMergeSources(req) {
+    await dbReady;
     console.log('[PROCESS] Starting to process and merge all active sources.');
     sendProcessingStatus(req, 'Starting to process sources...', 'info');
     const settings = getSettings();
@@ -1532,6 +2661,8 @@ async function processAndMergeSources(req) {
     //let mergedVodMovies = [];
     //let mergedVodSeries = [];
     let liveChannelIdSet = new Set(); // To track which channels need EPG
+    const liveChannelsMeta = new Map(); // channelKey -> metadata for Smart Logo Store
+    const epgChannelIcons = new Map(); // originalTvgId -> iconUrl from XMLTV <channel><icon/></channel>
     const groupTitleRegex = /group-title="([^"]*)"/;
     // ---
 
@@ -1723,9 +2854,11 @@ async function processAndMergeSources(req) {
                     liveStreamCount++;
                     let processedExtInf = currentExtInf;
                     const idMatch = currentExtInf.match(/tvg-id="([^"]*)"/); // Still needed for unique ID
-                    const nameMatch = line.match(/tvg-name="([^"]*)"/); // Get name if available
+                    const nameMatch = currentExtInf.match(/tvg-name="([^"]*)"/); // Get name if available
+                    const logoMatch = currentExtInf.match(/tvg-logo="([^"]*)"/);
+                    const rawLogoUrl = (logoMatch && logoMatch[1]) ? logoMatch[1].trim() : '';
                     const commaIndex = currentExtInf.lastIndexOf(',');
-                    const name = nameMatch ? nameMatch[1] : ((commaIndex !== -1) ? currentExtInf.substring(commaIndex + 1).trim() : 'Unknown');
+                    const name = (nameMatch && nameMatch[1]) ? nameMatch[1] : ((commaIndex !== -1) ? currentExtInf.substring(commaIndex + 1).trim() : 'Unknown');
 
                     // Consistent Unique Channel ID Generation
                     // Treat an empty tvg-id="" the same as a missing attribute: otherwise
@@ -1743,12 +2876,21 @@ async function processAndMergeSources(req) {
                         processedExtInf = processedExtInf.slice(0, extinfEnd) + ` tvg-id="${finalUniqueChannelId}"` + processedExtInf.slice(extinfEnd);
                     }
 
-                    // Inject source name
+                    // Inject source name and original logo reference
                     const tvgIdAttrEnd = processedExtInf.indexOf(`tvg-id="${finalUniqueChannelId}"`) + `tvg-id="${finalUniqueChannelId}"`.length;
-                    processedExtInf = processedExtInf.slice(0, tvgIdAttrEnd) + ` vini-source="${source.name}"` + processedExtInf.slice(tvgIdAttrEnd);
+                    processedExtInf = processedExtInf.slice(0, tvgIdAttrEnd) + ` vini-source="${source.name}" vini-orig-logo="${rawLogoUrl.replace(/"/g, '')}"` + processedExtInf.slice(tvgIdAttrEnd);
 
                     mergedLiveM3uContent += processedExtInf + '\n' + streamUrl + '\n';
                     liveChannelIdSet.add(finalUniqueChannelId);
+                    liveChannelsMeta.set(finalUniqueChannelId, {
+                        channelKey: finalUniqueChannelId,
+                        channelId: finalUniqueChannelId,
+                        tvgId: originalTvgId,
+                        channelName: name,
+                        normalizedName: normalizeChannelNameForLogo(name),
+                        sourceUrl: rawLogoUrl,
+                        epgIconUrl: ''
+                    });
                     // --- END LIVE CHANNEL PROCESSING ---
 
                     currentExtInf = ''; // Reset for next entry
@@ -1778,16 +2920,6 @@ async function processAndMergeSources(req) {
             source.statusMessage = `Processing failed: ${error.message.substring(0, 100)}...`;
         }
         source.lastUpdated = new Date().toISOString();
-    }
-
-    // --- Save the new separated files ---
-    try { // Try block for saving LIVE M3U
-        fs.writeFileSync(LIVE_CHANNELS_M3U_PATH, mergedLiveM3uContent);
-        console.log(`[M3U] Merged LIVE CHANNELS content saved to ${LIVE_CHANNELS_M3U_PATH}.`);
-        sendProcessingStatus(req, `Successfully merged all live channels.`, 'success');
-    } catch (writeErr) { // Catch block for saving LIVE M3U
-        console.error(`[PROCESS] Error writing LIVE M3U file: ${writeErr.message}`);
-        sendProcessingStatus(req, `Error writing live channels file: ${writeErr.message}`, 'error');
     }
 
     // --- EPG Processing (now filtered) ---
@@ -1838,6 +2970,22 @@ async function processAndMergeSources(req) {
             }
 
             const epgJson = xmlJS.xml2js(xmlString, { compact: true });
+
+            // --- Extract <channel><icon src="..."/></channel> from XMLTV EPG ---
+            const epgChannels = epgJson.tv && epgJson.tv.channel ? [].concat(epgJson.tv.channel) : [];
+            for (const ch of epgChannels) {
+                const rawChId = ch._attributes?.id;
+                if (!rawChId) continue;
+                let iconSrc = '';
+                if (ch.icon) {
+                    const iconNode = Array.isArray(ch.icon) ? ch.icon[0] : ch.icon;
+                    iconSrc = iconNode?._attributes?.src || '';
+                }
+                if (iconSrc && iconSrc.startsWith('http') && !epgChannelIcons.has(rawChId)) {
+                    epgChannelIcons.set(rawChId, iconSrc.trim());
+                }
+            }
+
             const programs = epgJson.tv && epgJson.tv.programme ? [].concat(epgJson.tv.programme) : [];
             let programCount = 0;
             let epgAddedCount = 0; // NEW: Count only added programs
@@ -1852,6 +3000,18 @@ async function processAndMergeSources(req) {
                 const originalChannelId = prog._attributes?.channel;
                 if (!originalChannelId) continue;
                 programCount++;
+
+                const startDate = parseEpgTime(prog._attributes.start, timezoneOffset);
+                const stopDate = parseEpgTime(prog._attributes.stop, timezoneOffset);
+                if (isNaN(startDate.getTime()) || isNaN(stopDate.getTime())) {
+                    continue;
+                }
+                const startIso = startDate.toISOString();
+                const stopIso = stopDate.toISOString();
+                const titleNode = prog.title && prog.title._cdata ? prog.title._cdata : (prog.title?._text || 'No Title');
+                const descNode = prog.desc && prog.desc._cdata ? prog.desc._cdata : (prog.desc?._text || '');
+                const titleText = String(titleNode).trim();
+                const descText = String(descNode).trim();
 
                 for (const m3uSource of m3uSourceProviders) {
                     const uniqueChannelId = `${m3uSource.id}_${originalChannelId}`;
@@ -1869,14 +3029,11 @@ async function processAndMergeSources(req) {
 
                     epgAddedCount++; // Increment count of *added* programs
 
-                    const titleNode = prog.title && prog.title._cdata ? prog.title._cdata : (prog.title?._text || 'No Title');
-                    const descNode = prog.desc && prog.desc._cdata ? prog.desc._cdata : (prog.desc?._text || '');
-
                     mergedProgramData[uniqueChannelId].push({
-                        start: parseEpgTime(prog._attributes.start, timezoneOffset).toISOString(),
-                        stop: parseEpgTime(prog._attributes.stop, timezoneOffset).toISOString(),
-                        title: titleNode.trim(),
-                        desc: descNode.trim()
+                        start: startIso,
+                        stop: stopIso,
+                        title: titleText,
+                        desc: descText
                     });
                 }
             }
@@ -1900,6 +3057,97 @@ async function processAndMergeSources(req) {
             source.lastUpdated = new Date().toISOString();
         }
     }
+
+    // --- Sync Live Channel Metadata to Internal Logo Store & Save M3U ---
+    const changedLogoChannelKeys = new Set();
+    recentFailedLogoChannels.clear();
+    try {
+        const existingLogoRows = await dbAll(db, `SELECT * FROM channel_logos`);
+        const existingLogoMap = new Map(existingLogoRows.map(r => [r.channel_key, r]));
+
+        const failedSourcePrefixes = (settings.m3uSources || [])
+            .filter(s => s && s.isActive && s.status === 'Error' && s.id)
+            .map(s => `${s.id}_`);
+
+        let inTx = false;
+        let insertStmt = null;
+        let updateStmt = null;
+        let deleteStmt = null;
+        try {
+            await dbRun(db, 'BEGIN TRANSACTION');
+            inTx = true;
+            insertStmt = db.prepare(`INSERT INTO channel_logos (channel_key, channel_id, tvg_id, normalized_name, channel_name, source_url, epg_icon_url) VALUES (?, ?, ?, ?, ?, ?, ?)`);
+            updateStmt = db.prepare(`UPDATE channel_logos SET tvg_id = ?, normalized_name = ?, channel_name = ?, source_url = ?, epg_icon_url = ? WHERE channel_key = ?`);
+            deleteStmt = db.prepare(`DELETE FROM channel_logos WHERE channel_key = ?`);
+
+            for (const [channelKey, meta] of liveChannelsMeta.entries()) {
+                if (meta.tvgId && epgChannelIcons.has(meta.tvgId)) {
+                    meta.epgIconUrl = epgChannelIcons.get(meta.tvgId);
+                }
+                const existing = existingLogoMap.get(channelKey);
+                if (!existing) {
+                    await new Promise((resolve, reject) => {
+                        insertStmt.run([channelKey, meta.channelId, meta.tvgId, meta.normalizedName, meta.channelName, meta.sourceUrl, meta.epgIconUrl], (err) => err ? reject(err) : resolve());
+                    });
+                    if (meta.sourceUrl || meta.epgIconUrl) {
+                        changedLogoChannelKeys.add(channelKey);
+                    }
+                } else {
+                    // Preserve existing source_url / epg_icon_url if upstream sent an empty value
+                    const effectiveSourceUrl = meta.sourceUrl || existing.source_url || '';
+                    const effectiveEpgIconUrl = meta.epgIconUrl || existing.epg_icon_url || '';
+                    if ((meta.sourceUrl && meta.sourceUrl !== existing.source_url) ||
+                        (meta.epgIconUrl && meta.epgIconUrl !== existing.epg_icon_url)) {
+                        changedLogoChannelKeys.add(channelKey);
+                    }
+                    await new Promise((resolve, reject) => {
+                        updateStmt.run([meta.tvgId, meta.normalizedName, meta.channelName, effectiveSourceUrl, effectiveEpgIconUrl, channelKey], (err) => err ? reject(err) : resolve());
+                    });
+                }
+            }
+
+            // Prune stale channel_logos rows from deleted sources or removed channels (preserve rows for sources that had a temporary fetch error)
+            for (const existingRow of existingLogoRows) {
+                if (!liveChannelsMeta.has(existingRow.channel_key)) {
+                    const belongsToFailedSource = failedSourcePrefixes.some(prefix => existingRow.channel_key.startsWith(prefix));
+                    if (!belongsToFailedSource) {
+                        await new Promise((resolve, reject) => {
+                            deleteStmt.run([existingRow.channel_key], (err) => err ? reject(err) : resolve());
+                        });
+                    }
+                }
+            }
+
+            await dbRun(db, 'COMMIT');
+            inTx = false;
+        } catch (txErr) {
+            if (inTx) {
+                try { await dbRun(db, 'ROLLBACK'); } catch (rbErr) { }
+            }
+            throw txErr;
+        } finally {
+            if (insertStmt) await new Promise(resolve => insertStmt.finalize(resolve));
+            if (updateStmt) await new Promise(resolve => updateStmt.finalize(resolve));
+            if (deleteStmt) await new Promise(resolve => deleteStmt.finalize(resolve));
+        }
+
+        await applySmartLogoMatchesInDb();
+        mergedLiveM3uContent = await rewriteLiveM3uLogosFromStore(mergedLiveM3uContent);
+        console.log(`[M3U] Merged LIVE CHANNELS content saved to ${LIVE_CHANNELS_M3U_PATH}.`);
+        sendProcessingStatus(req, `Successfully merged all live channels and linked stored logos.`, 'success');
+
+        if (settings.storeLogosInternally !== false) {
+            setImmediate(() => {
+                syncChannelLogos({ forceVerify: false, req, changedChannelKeys: changedLogoChannelKeys })
+                    .catch(err => console.error('[LOGO_STORE] Background logo sync error:', err.message));
+            });
+        }
+    } catch (writeErr) {
+        console.error(`[PROCESS] Error syncing logos or writing LIVE M3U file: ${writeErr.message}`);
+        try { fs.writeFileSync(LIVE_CHANNELS_M3U_PATH, mergedLiveM3uContent); } catch (e) { }
+        sendProcessingStatus(req, `Error writing live channels file: ${writeErr.message}`, 'error');
+    }
+
     for (const channelId in mergedProgramData) {
         mergedProgramData[channelId].sort((a, b) => new Date(a.start) - new Date(b.start));
     }
@@ -1958,7 +3206,8 @@ app.post('/api/auth/setup-admin', (req, res) => {
                 console.error('[AUTH_API] Error hashing password during admin setup:', err);
                 return res.status(500).json({ error: 'Error hashing password.' });
             }
-            db.run("INSERT INTO users (username, password, isAdmin, canUseDvr) VALUES (?, ?, 1, 1)", [username, hash], function (err) {
+            const nowIso = new Date().toISOString();
+            db.run("INSERT INTO users (username, password, password_plain, isAdmin, canUseDvr, created_at, last_login) VALUES (?, ?, ?, 1, 1, ?, ?)", [username, hash, password, nowIso, nowIso], function (err) {
                 if (err) {
                     console.error('[AUTH_API] Error inserting admin user:', err.message);
                     return res.status(500).json({ error: err.message });
@@ -1967,8 +3216,10 @@ app.post('/api/auth/setup-admin', (req, res) => {
                 req.session.username = username;
                 req.session.isAdmin = true;
                 req.session.canUseDvr = true;
+                req.session.allowed_tabs = null;
+                const csrfToken = ensureCsrfToken(req, res, true);
                 console.log(`[AUTH_API] Admin user "${username}" created successfully (ID: ${this.lastID}). Session set.`);
-                res.json({ success: true, user: { id: this.lastID, username: req.session.username, isAdmin: req.session.isAdmin, canUseDvr: req.session.canUseDvr } });
+                res.json({ success: true, csrfToken, user: { id: this.lastID, username: req.session.username, isAdmin: req.session.isAdmin, canUseDvr: req.session.canUseDvr, allowed_tabs: null } });
             });
         });
     });
@@ -1993,14 +3244,28 @@ app.post('/api/auth/login', (req, res) => {
                 return res.status(500).json({ error: 'Authentication error.' });
             }
             if (result) {
+                const nowIso = new Date().toISOString();
+                db.run("UPDATE users SET last_login = ?, password_plain = ?, created_at = COALESCE(created_at, ?) WHERE id = ?", [nowIso, password, nowIso, user.id], () => { });
+
+                let allowedTabs = null;
+                if (user.allowed_tabs && user.isAdmin !== 1 && user.id !== 1) {
+                    try {
+                        const parsed = JSON.parse(user.allowed_tabs);
+                        if (Array.isArray(parsed)) allowedTabs = parsed;
+                    } catch (e) { }
+                }
+
                 req.session.userId = user.id;
                 req.session.username = user.username;
                 req.session.isAdmin = user.isAdmin === 1;
                 req.session.canUseDvr = user.canUseDvr === 1;
+                req.session.allowed_tabs = allowedTabs;
+                const csrfToken = ensureCsrfToken(req, res, true);
                 console.log(`[AUTH_API] User "${username}" (ID: ${user.id}) logged in successfully. Session set.`);
                 res.json({
                     success: true,
-                    user: { id: user.id, username: user.username, isAdmin: user.isAdmin === 1, canUseDvr: user.canUseDvr === 1 }
+                    csrfToken,
+                    user: { id: user.id, username: user.username, isAdmin: user.isAdmin === 1, canUseDvr: user.canUseDvr === 1, allowed_tabs: allowedTabs }
                 });
             } else {
                 console.warn(`[AUTH_API] Login failed for username "${username}": Incorrect password.`);
@@ -2019,12 +3284,9 @@ app.post('/api/auth/logout', (req, res) => {
             return res.status(500).json({ error: 'Could not log out.' });
         }
         res.clearCookie('connect.sid');
+        res.clearCookie('viniplay_csrf', { path: '/' });
         console.log(`[AUTH_API] User ${username} logged out. Session destroyed.`);
-        // Under reverse-proxy auth, a plain reload would be re-authenticated by the
-        // proxy header immediately; hand the client the proxy sign-out URL so it can
-        // actually leave (when configured).
-        const redirect = (PROXY_AUTH_ENABLED && PROXY_AUTH_LOGOUT_URL) ? PROXY_AUTH_LOGOUT_URL : null;
-        res.json({ success: true, redirect });
+        res.json({ success: true });
     });
 });
 
@@ -2065,7 +3327,36 @@ app.post('/api/sources/fetch-groups', requireAuth, async (req, res) => {
 
         // --- Fetch if cache wasn't used or refresh was forced ---
         if (type === 'xc' && xc) {
-            const xcInfo = JSON.parse(xc);
+            if (!forceRefresh && usedCache && sourceToUse && sourceToUse.id) {
+                try {
+                    const liveSet = new Set();
+                    const groupTitleRegex = /group-title="([^"]+)"/;
+                    for (const line of content.split('\n')) {
+                        if (line.startsWith('#EXTINF:')) {
+                            const m = line.match(groupTitleRegex);
+                            if (m && m[1]) liveSet.add(m[1].trim());
+                        }
+                    }
+                    const dbMovies = await dbAll(db, `SELECT DISTINCT m.category_name FROM movies m JOIN provider_movie_relations r ON m.id = r.movie_id WHERE r.provider_id = ?`, [sourceToUse.id]);
+                    const dbSeries = await dbAll(db, `SELECT DISTINCT s.category_name FROM series s JOIN provider_series_relations r ON s.id = r.series_id WHERE r.provider_id = ?`, [sourceToUse.id]);
+                    const movieList = dbMovies.map(r => r.category_name?.trim()).filter(Boolean).sort((a, b) => a.localeCompare(b));
+                    const seriesList = dbSeries.map(r => r.category_name?.trim()).filter(Boolean).sort((a, b) => a.localeCompare(b));
+                    const liveList = Array.from(liveSet).sort((a, b) => a.localeCompare(b));
+
+                    if (liveList.length > 0 || movieList.length > 0 || seriesList.length > 0) {
+                        console.log(`[API_GROUPS] Served XC categories from local cache + DB for ${sourceToUse.id} (Live: ${liveList.length}, Movie: ${movieList.length}, Series: ${seriesList.length}).`);
+                        return res.json({
+                            success: true,
+                            groups: { live: liveList, movie: movieList, series: seriesList },
+                            usedCache: true
+                        });
+                    }
+                } catch (localXcErr) {
+                    console.warn('[API_GROUPS] Local XC cache/DB lookup failed, falling back to XtreamClient:', localXcErr.message);
+                }
+            }
+
+            const xcInfo = typeof xc === 'string' ? JSON.parse(xc) : xc;
             if (!xcInfo.server || !xcInfo.username || !xcInfo.password) {
                 return res.status(400).json({ error: 'XC source requires server, username, and password.' });
             }
@@ -2198,8 +3489,38 @@ app.post('/api/sources/fetch-groups', requireAuth, async (req, res) => {
 app.get('/api/auth/status', (req, res) => {
     console.log(`[AUTH_API] GET /api/auth/status - Checking session ID: ${req.sessionID}`);
     if (req.session && req.session.userId) {
-        console.log(`[AUTH_API_STATUS] Valid session found for user "${req.session.username}" (ID: ${req.session.userId}). Responding with isLoggedIn: true.`);
-        res.json({ isLoggedIn: true, user: { id: req.session.userId, username: req.session.username, isAdmin: req.session.isAdmin, canUseDvr: req.session.canUseDvr } });
+        db.get("SELECT id, username, isAdmin, canUseDvr, allowed_tabs FROM users WHERE id = ?", [req.session.userId], (err, row) => {
+            if (err || !row) {
+                console.log(`[AUTH_API_STATUS] Session user ID ${req.session.userId} not found in DB.`);
+                return res.json({ isLoggedIn: false });
+            }
+            const isAdmin = row.isAdmin === 1 || row.id === 1;
+            const canUseDvr = row.canUseDvr === 1 || isAdmin;
+            let allowedTabs = null;
+            if (!isAdmin && row.allowed_tabs) {
+                try {
+                    const parsed = JSON.parse(row.allowed_tabs);
+                    if (Array.isArray(parsed)) allowedTabs = parsed;
+                } catch (e) { }
+            }
+            req.session.username = row.username;
+            req.session.isAdmin = isAdmin;
+            req.session.canUseDvr = canUseDvr;
+            req.session.allowed_tabs = allowedTabs;
+            const csrfToken = ensureCsrfToken(req, res);
+            console.log(`[AUTH_API_STATUS] Valid session found for user "${row.username}" (ID: ${row.id}). Responding with isLoggedIn: true.`);
+            res.json({
+                isLoggedIn: true,
+                csrfToken,
+                user: {
+                    id: row.id,
+                    username: row.username,
+                    isAdmin: isAdmin,
+                    canUseDvr: canUseDvr,
+                    allowed_tabs: allowedTabs
+                }
+            });
+        });
     } else {
         console.log('[AUTH_API_STATUS] No valid session found. Responding with isLoggedIn: false.');
         res.json({ isLoggedIn: false });
@@ -2208,7 +3529,7 @@ app.get('/api/auth/status', (req, res) => {
 // ... existing User Management API Endpoints ...
 app.get('/api/users', requireAdmin, (req, res) => {
     console.log('[USER_API] Fetching all users.');
-    db.all("SELECT id, username, isAdmin, canUseDvr, allowed_sources FROM users ORDER BY username", [], (err, rows) => {
+    db.all("SELECT id, username, isAdmin, canUseDvr, allowed_sources, allowed_tabs, created_at, last_login, password_plain FROM users ORDER BY id ASC", [], (err, rows) => {
         if (err) {
             console.error('[USER_API] Error fetching users:', err.message);
             return res.status(500).json({ error: err.message });
@@ -2220,7 +3541,7 @@ app.get('/api/users', requireAdmin, (req, res) => {
 
 app.post('/api/users', requireAdmin, (req, res) => {
     console.log('[USER_API] Adding new user.');
-    const { username, password, isAdmin, canUseDvr, allowed_sources } = req.body;
+    const { username, password, isAdmin, canUseDvr, allowed_sources, allowed_tabs } = req.body;
     if (!username || !password) {
         console.warn('[USER_API] Add user failed: Username and/or password missing.');
         return res.status(400).json({ error: "Username and password are required." });
@@ -2231,24 +3552,33 @@ app.post('/api/users', requireAdmin, (req, res) => {
             console.error('[USER_API] Error hashing password for new user:', err);
             return res.status(500).json({ error: 'Error hashing password' });
         }
-        const allowedSourcesStr = allowed_sources ? JSON.stringify(allowed_sources) : null;
-        db.run("INSERT INTO users (username, password, isAdmin, canUseDvr, allowed_sources) VALUES (?, ?, ?, ?, ?)", [username, hash, isAdmin ? 1 : 0, canUseDvr ? 1 : 0, allowedSourcesStr], function (err) {
-            if (err) {
-                console.error('[USER_API] Error inserting new user:', err.message);
-                return res.status(400).json({ error: "Username already exists." });
+        const isUserAdmin = isAdmin ? 1 : 0;
+        const allowedSourcesStr = (!isUserAdmin && allowed_sources) ? JSON.stringify(allowed_sources) : null;
+        const allowedTabsStr = (!isUserAdmin && Array.isArray(allowed_tabs)) ? JSON.stringify(allowed_tabs) : null;
+        const nowIso = new Date().toISOString();
+        db.run(
+            "INSERT INTO users (username, password, password_plain, isAdmin, canUseDvr, allowed_sources, allowed_tabs, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [username, hash, password, isUserAdmin, (canUseDvr || isUserAdmin) ? 1 : 0, allowedSourcesStr, allowedTabsStr, nowIso],
+            function (err) {
+                if (err) {
+                    console.error('[USER_API] Error inserting new user:', err.message);
+                    return res.status(400).json({ error: "Username already exists." });
+                }
+                console.log(`[USER_API] User "${username}" added successfully (ID: ${this.lastID}).`);
+                res.json({ success: true, id: this.lastID });
             }
-            console.log(`[USER_API] User "${username}" added successfully (ID: ${this.lastID}).`);
-            res.json({ success: true, id: this.lastID });
-        });
+        );
     });
 });
 
 app.put('/api/users/:id', requireAdmin, (req, res) => {
     const { id } = req.params;
-    const { username, password, isAdmin, canUseDvr, allowed_sources } = req.body;
+    const { username, password, isAdmin, canUseDvr, allowed_sources, allowed_tabs } = req.body;
     console.log(`[USER_API] Updating user ID: ${id}. Username: ${username}, IsAdmin: ${isAdmin}, CanUseDvr: ${canUseDvr}`);
 
-    const allowedSourcesStr = allowed_sources ? JSON.stringify(allowed_sources) : null;
+    const isUserAdmin = (isAdmin || Number(id) === 1) ? 1 : 0;
+    const allowedSourcesStr = (!isUserAdmin && allowed_sources) ? JSON.stringify(allowed_sources) : null;
+    const allowedTabsStr = (!isUserAdmin && Array.isArray(allowed_tabs)) ? JSON.stringify(allowed_tabs) : null;
 
     const updateUser = () => {
         if (password) {
@@ -2257,36 +3587,46 @@ app.put('/api/users/:id', requireAdmin, (req, res) => {
                     console.error('[USER_API] Error hashing password during user update:', err);
                     return res.status(500).json({ error: 'Error hashing password' });
                 }
-                db.run("UPDATE users SET username = ?, password = ?, isAdmin = ?, canUseDvr = ?, allowed_sources = ? WHERE id = ?", [username, hash, isAdmin ? 1 : 0, canUseDvr ? 1 : 0, allowedSourcesStr, id], (err) => {
+                db.run(
+                    "UPDATE users SET username = ?, password = ?, password_plain = ?, isAdmin = ?, canUseDvr = ?, allowed_sources = ?, allowed_tabs = ? WHERE id = ?",
+                    [username, hash, password, isUserAdmin, (canUseDvr || isUserAdmin) ? 1 : 0, allowedSourcesStr, allowedTabsStr, id],
+                    (err) => {
+                        if (err) {
+                            console.error(`[USER_API] Error updating user ${id} with new password:`, err.message);
+                            return res.status(500).json({ error: err.message });
+                        }
+                        if (req.session.userId == id) {
+                            req.session.username = username;
+                            req.session.isAdmin = Boolean(isUserAdmin);
+                            req.session.canUseDvr = Boolean(canUseDvr || isUserAdmin);
+                            req.session.allowed_tabs = isUserAdmin ? null : (Array.isArray(allowed_tabs) ? allowed_tabs : null);
+                            console.log(`[USER_API] Current user's session (ID: ${id}) updated.`);
+                        }
+                        console.log(`[USER_API] User ${id} updated successfully (with password change).`);
+                        res.json({ success: true });
+                    }
+                );
+            });
+        } else {
+            db.run(
+                "UPDATE users SET username = ?, isAdmin = ?, canUseDvr = ?, allowed_sources = ?, allowed_tabs = ? WHERE id = ?",
+                [username, isUserAdmin, (canUseDvr || isUserAdmin) ? 1 : 0, allowedSourcesStr, allowedTabsStr, id],
+                (err) => {
                     if (err) {
-                        console.error(`[USER_API] Error updating user ${id} with new password:`, err.message);
+                        console.error(`[USER_API] Error updating user ${id} without password change:`, err.message);
                         return res.status(500).json({ error: err.message });
                     }
                     if (req.session.userId == id) {
                         req.session.username = username;
-                        req.session.isAdmin = isAdmin;
-                        req.session.canUseDvr = canUseDvr;
+                        req.session.isAdmin = Boolean(isUserAdmin);
+                        req.session.canUseDvr = Boolean(canUseDvr || isUserAdmin);
+                        req.session.allowed_tabs = isUserAdmin ? null : (Array.isArray(allowed_tabs) ? allowed_tabs : null);
                         console.log(`[USER_API] Current user's session (ID: ${id}) updated.`);
                     }
-                    console.log(`[USER_API] User ${id} updated successfully (with password change).`);
+                    console.log(`[USER_API] User ${id} updated successfully (without password change).`);
                     res.json({ success: true });
-                });
-            });
-        } else {
-            db.run("UPDATE users SET username = ?, isAdmin = ?, canUseDvr = ?, allowed_sources = ? WHERE id = ?", [username, isAdmin ? 1 : 0, canUseDvr ? 1 : 0, allowedSourcesStr, id], (err) => {
-                if (err) {
-                    console.error(`[USER_API] Error updating user ${id} without password change:`, err.message);
-                    return res.status(500).json({ error: err.message });
                 }
-                if (req.session.userId == id) {
-                    req.session.username = username;
-                    req.session.isAdmin = isAdmin;
-                    req.session.canUseDvr = canUseDvr;
-                    console.log(`[USER_API] Current user's session (ID: ${id}) updated.`);
-                }
-                console.log(`[USER_API] User ${id} updated successfully (without password change).`);
-                res.json({ success: true });
-            });
+            );
         }
     };
 
@@ -2420,15 +3760,26 @@ app.get('/api/config', requireAuth, async (req, res) => {
                                 // Check if this source is in allowedSources
                                 if (allowedSources[sourceId]) {
                                     // Check if specifically allowed (if we use { allowed: true }) or just presence
-                                    // Assuming format: { "sourceId": { allowed: true, groups: [] } }
+                                    // Assuming format: { "sourceId": { allowed: true, groups: [], excludedChannels: [] } }
                                     if (allowedSources[sourceId].allowed) {
                                         isAllowed = true;
-                                        // Check Group Restrictions
-                                        const groups = allowedSources[sourceId].groups;
-                                        if (groups && groups.length > 0) {
+                                        const perms = allowedSources[sourceId];
+                                        // Check Live Group Restrictions (supports explicit allLiveGroups flag + legacy groups array)
+                                        const allLiveGroups = perms.allLiveGroups !== undefined
+                                            ? Boolean(perms.allLiveGroups)
+                                            : (!Array.isArray(perms.groups) || perms.groups.length === 0);
+                                        if (!allLiveGroups) {
+                                            const groups = Array.isArray(perms.groups) ? perms.groups : [];
                                             const groupMatch = line.match(groupTitleRegex);
                                             const group = groupMatch ? groupMatch[1] : 'Uncategorized';
                                             if (!groups.includes(group)) {
+                                                isAllowed = false;
+                                            }
+                                        }
+                                        // Check optional specific channel exclusions (Tier 3)
+                                        const excludedChannels = perms.excludedChannels;
+                                        if (isAllowed && Array.isArray(excludedChannels) && excludedChannels.length > 0) {
+                                            if (excludedChannels.includes(fullId)) {
                                                 isAllowed = false;
                                             }
                                         }
@@ -2566,9 +3917,12 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
         // FETCH USER PERMISSIONS
         let allowedSources = null;
         try {
-            const user = await dbGet(db, "SELECT allowed_sources FROM users WHERE id = ?", [req.session.userId]);
-            if (user && user.allowed_sources) {
-                allowedSources = JSON.parse(user.allowed_sources);
+            const user = await dbGet(db, "SELECT id, isAdmin, allowed_sources FROM users WHERE id = ?", [req.session.userId]);
+            if (user && !user.isAdmin && user.id !== 1 && !req.session.isAdmin && user.allowed_sources) {
+                const parsed = JSON.parse(user.allowed_sources);
+                if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+                    allowedSources = parsed;
+                }
             }
         } catch (dbErr) {
             console.error("[API_VOD] Error fetching user permissions:", dbErr);
@@ -2619,7 +3973,9 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
 
         // 2. Fetch all movies from active providers
         const movieQuery = `
-            SELECT m.provider_unique_id, m.name, m.year, m.description, m.logo, m.tmdb_id, m.imdb_id, m.category_name, r.stream_id, r.container_extension, r.provider_id
+            SELECT m.provider_unique_id, m.name, m.year, m.description, m.logo, m.tmdb_id, m.imdb_id, m.category_name,
+                   m.director, m.cast, m.genre, m.rating, m.duration, m.duration_secs, m.release_date, m.country, m.backdrop_url, m.youtube_trailer,
+                   r.stream_id, r.container_extension, r.provider_id
             FROM movies m
             JOIN provider_movie_relations r ON m.id = r.movie_id
             WHERE r.provider_id IN (${providerIdPlaceholders})
@@ -2636,14 +3992,23 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
                 return null;
             }
 
-            // PERMISSION CHECK: Filter by category if strict groups are defined
+            // PERMISSION CHECK: Filter by movie category if strict movieGroups (or legacy groups) are defined
             if (allowedSources) {
                 const perms = allowedSources[m.provider_id];
                 if (perms && perms.allowed) {
-                    const allowedGroups = perms.groups || [];
-                    // If whitelist exists (length > 0) AND this category is NOT in it, skip
-                    if (allowedGroups.length > 0 && !allowedGroups.includes(m.category_name)) {
-                        return null;
+                    if (perms.allMovieGroups !== undefined) {
+                        if (!perms.allMovieGroups) {
+                            const allowedMovieGroups = Array.isArray(perms.movieGroups) ? perms.movieGroups : [];
+                            if (!allowedMovieGroups.includes(m.category_name)) {
+                                return null;
+                            }
+                        }
+                    } else {
+                        const allowedGroups = perms.groups || [];
+                        // Legacy fallback: If whitelist exists (length > 0) AND this category is NOT in it, skip
+                        if (allowedGroups.length > 0 && !allowedGroups.includes(m.category_name)) {
+                            return null;
+                        }
                     }
                 }
             }
@@ -2659,6 +4024,19 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
                 logo: m.logo,
                 tmdb_id: m.tmdb_id,
                 imdb_id: m.imdb_id,
+                director: m.director || null,
+                cast: m.cast || null,
+                genre: m.genre || null,
+                rating: m.rating || null,
+                duration: m.duration || null,
+                duration_secs: m.duration_secs || null,
+                release_date: m.release_date || null,
+                country: m.country || null,
+                backdrop_url: m.backdrop_url || null,
+                youtube_trailer: m.youtube_trailer || null,
+                provider_id: m.provider_id,
+                stream_id: m.stream_id,
+                container_extension: ext,
                 url: url, // The all-important URL
                 type: 'movie',
                 group: m.category_name
@@ -2669,7 +4047,9 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
         // 3. Fetch all series headers from active providers
         // Added r.provider_id to SELECT so we can filter permissions
         const seriesQuery = `
-            SELECT DISTINCT s.provider_unique_id, s.name, s.year, s.description, s.logo, s.tmdb_id, s.imdb_id, s.category_name, r.provider_id
+            SELECT DISTINCT s.provider_unique_id, s.name, s.year, s.description, s.logo, s.tmdb_id, s.imdb_id, s.category_name,
+                   s.director, s.cast, s.genre, s.rating, s.release_date, s.country, s.backdrop_url, s.youtube_trailer,
+                   r.provider_id
             FROM series s
             JOIN provider_series_relations r ON s.id = r.series_id
             WHERE r.provider_id IN (${providerIdPlaceholders})
@@ -2687,14 +4067,23 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
                 return null;
             }
 
-            // PERMISSION CHECK: Filter by category if strict groups are defined
+            // PERMISSION CHECK: Filter by series category if strict seriesGroups (or legacy groups) are defined
             if (allowedSources) {
                 const perms = allowedSources[series.provider_id];
                 if (perms && perms.allowed) {
-                    const allowedGroups = perms.groups || [];
-                    // If whitelist exists (length > 0) AND this category is NOT in it, skip
-                    if (allowedGroups.length > 0 && !allowedGroups.includes(series.category_name)) {
-                        return null;
+                    if (perms.allSeriesGroups !== undefined) {
+                        if (!perms.allSeriesGroups) {
+                            const allowedSeriesGroups = Array.isArray(perms.seriesGroups) ? perms.seriesGroups : [];
+                            if (!allowedSeriesGroups.includes(series.category_name)) {
+                                return null;
+                            }
+                        }
+                    } else {
+                        const allowedGroups = perms.groups || [];
+                        // Legacy fallback: If whitelist exists (length > 0) AND this category is NOT in it, skip
+                        if (allowedGroups.length > 0 && !allowedGroups.includes(series.category_name)) {
+                            return null;
+                        }
                     }
                 }
             }
@@ -2739,14 +4128,25 @@ app.get('/api/vod/library', requireAuth, async (req, res) => {
 const vodDurationCache = new Map();
 
 async function getStreamDurationSeconds(streamUrl, userAgentHeader) {
-    if (!streamUrl) return null;
+    if (!isValidHttpStreamUrl(streamUrl)) return null;
     if (vodDurationCache.has(streamUrl)) {
         return vodDurationCache.get(streamUrl);
     }
     return new Promise((resolve) => {
-        const uaFlag = userAgentHeader ? `-user_agent "${userAgentHeader.replace(/"/g, '')}"` : '';
-        const cmd = `ffprobe ${uaFlag} -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${streamUrl}"`;
-        exec(cmd, { timeout: 8000 }, (error, stdout) => {
+        const args = [];
+        if (userAgentHeader) {
+            const cleanUa = String(userAgentHeader).replace(/[\r\n\0]/g, '');
+            if (cleanUa) {
+                args.push('-user_agent', cleanUa);
+            }
+        }
+        args.push(
+            '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            '-i', streamUrl
+        );
+        execFile('ffprobe', args, { timeout: 8000, windowsHide: true }, (error, stdout) => {
             if (error || !stdout) {
                 return resolve(null);
             }
@@ -2766,10 +4166,10 @@ async function getStreamDurationSeconds(streamUrl, userAgentHeader) {
     });
 }
 
-app.get('/api/vod/duration', requireAuth, async (req, res) => {
-    const { url } = req.query;
-    if (!url) {
-        return res.status(400).json({ error: "Missing required 'url' parameter" });
+app.post('/api/vod/duration', requireAuth, async (req, res) => {
+    const { url } = req.body || {};
+    if (!url || !isValidHttpStreamUrl(url)) {
+        return res.status(400).json({ error: "Invalid or missing 'url' parameter. Must be a valid http(s) URL." });
     }
     try {
         const settings = getSettings();
@@ -2796,7 +4196,38 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
         }
         const numericSeriesId = seriesInfo.id; // Get the internal numeric ID for relations
 
-        // 2. Check if episodes exist in DB
+        // 2. Fetch relation and provider configuration
+        const relation = await dbGet(db, "SELECT provider_id, external_series_id FROM provider_series_relations WHERE series_id = ? LIMIT 1", [numericSeriesId]);
+        const settings = getSettings();
+        const providerConfig = relation ? (settings.m3uSources || []).find(s => s.id === relation.provider_id) : null;
+        const providerName = providerConfig?.name || 'Unknown Source';
+
+        // CHECK PERMISSIONS
+        if (relation) {
+            let permitted = true;
+            try {
+                const user = await dbGet(db, "SELECT allowed_sources FROM users WHERE id = ?", [req.session.userId]);
+                if (user && user.allowed_sources) {
+                    const allowedSources = JSON.parse(user.allowed_sources);
+                    if (allowedSources[relation.provider_id] && !allowedSources[relation.provider_id].allowed) {
+                        console.warn(`[API_VOD_SERIES] Access denied for user ${req.session.username} to provider ${relation.provider_id}`);
+                        permitted = false;
+                    }
+                    if (!allowedSources[relation.provider_id]) {
+                        console.warn(`[API_VOD_SERIES] Access denied (not in list) for user ${req.session.username} to provider ${relation.provider_id}`);
+                        permitted = false;
+                    }
+                }
+            } catch (dbErr) {
+                console.error("[API_VOD] Error checking user permissions:", dbErr);
+            }
+
+            if (!permitted && !req.session.isAdmin) {
+                return res.status(403).json({ error: "Access denied to this series." });
+            }
+        }
+
+        // 3. Check if episodes exist in DB
         const existingEpisodes = await dbAll(db, `
             SELECT e.*, r.provider_id, r.provider_stream_id, r.container_extension
             FROM episodes e
@@ -2808,46 +4239,17 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
         let episodesToReturn = existingEpisodes;
         const needsEpisodeFetch = existingEpisodes.length === 0 || existingEpisodes.some(ep => !ep.duration && !ep.duration_secs);
 
-        // 3. If no episodes in DB or missing metadata, fetch from XC API and save/update
-        if (needsEpisodeFetch) {
+        // 4. If no episodes in DB or missing metadata, fetch from XC API and save/update
+        if (needsEpisodeFetch && relation && providerConfig && providerConfig.type === 'xc' && providerConfig.xc_data) {
             console.log(`[API_VOD_SERIES] Fetching details and episode metadata from provider for Series ID ${numericSeriesId}...`);
 
-            // Find the provider details for this series
-            const relation = await dbGet(db, "SELECT provider_id, external_series_id FROM provider_series_relations WHERE series_id = ? LIMIT 1", [numericSeriesId]);
-            if (relation) {
-                // CHECK PERMISSIONS
-                let permitted = true;
-                try {
-                    const user = await dbGet(db, "SELECT allowed_sources FROM users WHERE id = ?", [req.session.userId]);
-                    if (user && user.allowed_sources) {
-                        const allowedSources = JSON.parse(user.allowed_sources);
-                        if (allowedSources[relation.provider_id] && !allowedSources[relation.provider_id].allowed) {
-                            console.warn(`[API_VOD_SERIES] Access denied for user ${req.session.username} to provider ${relation.provider_id}`);
-                            permitted = false;
-                        }
-                        if (!allowedSources[relation.provider_id]) {
-                            console.warn(`[API_VOD_SERIES] Access denied (not in list) for user ${req.session.username} to provider ${relation.provider_id}`);
-                            permitted = false;
-                        }
-                    }
-                } catch (dbErr) {
-                    console.error("[API_VOD] Error checking user permissions:", dbErr);
-                }
+            let xcInfo;
+            try {
+                xcInfo = JSON.parse(providerConfig.xc_data);
+            } catch (e) { }
 
-                if (!permitted && existingEpisodes.length === 0) {
-                    return res.status(403).json({ error: "Access denied to this series." });
-                }
-
-                const settings = getSettings();
-                const providerConfig = settings.m3uSources.find(s => s.id === relation.provider_id);
-                if (providerConfig && providerConfig.type === 'xc' && providerConfig.xc_data) {
-                    let xcInfo;
-                    try {
-                        xcInfo = JSON.parse(providerConfig.xc_data);
-                    } catch (e) { }
-
-                    if (xcInfo && xcInfo.server && xcInfo.username && xcInfo.password) {
-                        const activeUserAgent = settings.userAgents.find(ua => ua.id === settings.activeUserAgentId)?.value || 'VLC/3.0.20 (Linux; x86_64)';
+            if (xcInfo && xcInfo.server && xcInfo.username && xcInfo.password) {
+                const activeUserAgent = settings.userAgents?.find(ua => ua.id === settings.activeUserAgentId)?.value || 'VLC/3.0.20 (Linux; x86_64)';
                         const client = new XtreamClient(xcInfo.server, xcInfo.username, xcInfo.password, activeUserAgent);
                         let seriesDetails = null;
                         try {
@@ -2857,13 +4259,51 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
                         }
 
                         if (seriesDetails && seriesDetails.info) {
-                            const director = seriesDetails.info.director || seriesInfo.director || null;
-                            const cast = seriesDetails.info.cast || seriesInfo.cast || null;
-                            if ((director && director !== seriesInfo.director) || (cast && cast !== seriesInfo.cast)) {
-                                db.run("UPDATE series SET director = COALESCE(?, director), cast = COALESCE(?, cast) WHERE id = ?", [director, cast, numericSeriesId], () => { });
-                                seriesInfo.director = director || seriesInfo.director;
-                                seriesInfo.cast = cast || seriesInfo.cast;
+                            const sInfo = seriesDetails.info;
+                            const director = sInfo.director || seriesInfo.director || null;
+                            const cast = sInfo.cast || sInfo.actors || seriesInfo.cast || null;
+                            const genre = sInfo.genre || seriesInfo.genre || null;
+                            const rating = sInfo.rating || sInfo.rating_5based || seriesInfo.rating || null;
+                            const releaseDate = sInfo.releaseDate || sInfo.release_date || seriesInfo.release_date || null;
+                            const country = sInfo.country || seriesInfo.country || null;
+                            const youtubeTrailer = sInfo.youtube_trailer || seriesInfo.youtube_trailer || null;
+                            const tmdbId = sInfo.tmdb_id || sInfo.tmdb || seriesInfo.tmdb_id || null;
+                            const imdbId = sInfo.imdb_id || sInfo.imdb || seriesInfo.imdb_id || null;
+                            let backdrop = null;
+                            if (Array.isArray(sInfo.backdrop_path) && sInfo.backdrop_path.length > 0) {
+                                backdrop = sInfo.backdrop_path[0];
+                            } else if (typeof sInfo.backdrop_path === 'string' && sInfo.backdrop_path.trim()) {
+                                backdrop = sInfo.backdrop_path.trim();
+                            } else if (sInfo.cover) {
+                                backdrop = sInfo.cover;
                             }
+                            const backdropUrl = backdrop || seriesInfo.backdrop_url || null;
+
+                            db.run(`UPDATE series SET 
+                                director = COALESCE(?, director), 
+                                cast = COALESCE(?, cast),
+                                genre = COALESCE(?, genre),
+                                rating = COALESCE(?, rating),
+                                release_date = COALESCE(?, release_date),
+                                country = COALESCE(?, country),
+                                backdrop_url = COALESCE(?, backdrop_url),
+                                youtube_trailer = COALESCE(?, youtube_trailer),
+                                tmdb_id = COALESCE(?, tmdb_id),
+                                imdb_id = COALESCE(?, imdb_id)
+                                WHERE id = ?`,
+                                [director, cast, genre, rating, releaseDate, country, backdropUrl, youtubeTrailer, tmdbId, imdbId, numericSeriesId],
+                                () => { }
+                            );
+                            seriesInfo.director = director || seriesInfo.director;
+                            seriesInfo.cast = cast || seriesInfo.cast;
+                            seriesInfo.genre = genre || seriesInfo.genre;
+                            seriesInfo.rating = rating || seriesInfo.rating;
+                            seriesInfo.release_date = releaseDate || seriesInfo.release_date;
+                            seriesInfo.country = country || seriesInfo.country;
+                            seriesInfo.backdrop_url = backdropUrl || seriesInfo.backdrop_url;
+                            seriesInfo.youtube_trailer = youtubeTrailer || seriesInfo.youtube_trailer;
+                            seriesInfo.tmdb_id = tmdbId || seriesInfo.tmdb_id;
+                            seriesInfo.imdb_id = imdbId || seriesInfo.imdb_id;
                         }
 
                         if (seriesDetails && seriesDetails.episodes && typeof seriesDetails.episodes === 'object') {
@@ -2936,17 +4376,14 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
                             `, [numericSeriesId]);
                         }
                     }
-                }
+            } else {
+                console.log(`[API_VOD_SERIES] Found ${existingEpisodes.length} episodes with metadata in DB for Series ID ${numericSeriesId}.`);
             }
-        } else {
-            console.log(`[API_VOD_SERIES] Found ${existingEpisodes.length} episodes with metadata in DB for Series ID ${numericSeriesId}.`);
-        }
 
-        // 4. Build the response structure
-        const seasons = new Map();
-        const settings = getSettings();
-        const activeXcProviders = settings.m3uSources.filter(s => s.isActive && s.type === 'xc');
-        const providerMap = new Map();
+            // 5. Build the response structure
+            const seasons = new Map();
+            const activeXcProviders = (settings.m3uSources || []).filter(s => s.isActive && s.type === 'xc');
+            const providerMap = new Map();
         activeXcProviders.forEach(p => {
             try {
                 const xcInfo = JSON.parse(p.xc_data);
@@ -2988,9 +4425,19 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
             ...seriesInfo,
             director: seriesInfo.director || null,
             cast: seriesInfo.cast || null,
+            genre: seriesInfo.genre || null,
+            rating: seriesInfo.rating || null,
+            release_date: seriesInfo.release_date || null,
+            country: seriesInfo.country || null,
+            backdrop_url: seriesInfo.backdrop_url || null,
+            youtube_trailer: seriesInfo.youtube_trailer || null,
+            tmdb_id: seriesInfo.tmdb_id || null,
+            imdb_id: seriesInfo.imdb_id || null,
             id: seriesInfo.provider_unique_id, // Use the stable provider_unique_id
             type: 'series',
             group: seriesInfo.category_name,
+            provider_id: relation?.provider_id || null,
+            provider_name: providerName,
             seasons: Object.fromEntries(seasons)
         };
 
@@ -3001,7 +4448,182 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
         res.status(500).json({ error: "Could not retrieve series details." });
     }
 });
-// --- END NEW ENDPOINT ---
+// --- END SERIES ENDPOINT ---
+
+// --- NEW: Lazy Loading Endpoint for Movie Details ---
+app.get('/api/vod/movie/:movieId', requireAuth, async (req, res) => {
+    const movieIdParam = req.params.movieId;
+    console.log(`[API_VOD_MOVIE] Request received for Movie ID: ${movieIdParam}`);
+
+    try {
+        // 1. Fetch basic movie info using provider_unique_id
+        const movieInfo = await dbGet(db, "SELECT * FROM movies WHERE provider_unique_id = ?", [movieIdParam]);
+        if (!movieInfo) {
+            return res.status(404).json({ error: 'Movie not found.' });
+        }
+        const numericMovieId = movieInfo.id;
+
+        // 2. Fetch relation
+        const relation = await dbGet(db, "SELECT provider_id, stream_id, container_extension FROM provider_movie_relations WHERE movie_id = ? LIMIT 1", [numericMovieId]);
+
+        const settings = getSettings();
+        const providerConfig = relation ? (settings.m3uSources || []).find(s => s.id === relation.provider_id) : null;
+        const providerName = providerConfig?.name || 'Unknown Source';
+
+        // CHECK PERMISSIONS
+        if (relation) {
+            let permitted = true;
+            try {
+                const user = await dbGet(db, "SELECT allowed_sources FROM users WHERE id = ?", [req.session.userId]);
+                if (user && user.allowed_sources) {
+                    const allowedSources = JSON.parse(user.allowed_sources);
+                    if (allowedSources[relation.provider_id] && !allowedSources[relation.provider_id].allowed) {
+                        permitted = false;
+                    }
+                    if (!allowedSources[relation.provider_id]) {
+                        permitted = false;
+                    }
+                }
+            } catch (dbErr) {
+                console.error("[API_VOD_MOVIE] Error checking permissions:", dbErr);
+            }
+            if (!permitted && !req.session.isAdmin) {
+                return res.status(403).json({ error: "Access denied to this movie source." });
+            }
+        }
+
+        // 3. Check if rich metadata needs to be fetched from provider
+        const needsMetadataFetch = !movieInfo.director || !movieInfo.cast || !movieInfo.duration_secs || !movieInfo.genre || !movieInfo.backdrop_url;
+
+        if (needsMetadataFetch && relation && providerConfig && providerConfig.type === 'xc' && providerConfig.xc_data) {
+            console.log(`[API_VOD_MOVIE] Fetching rich metadata from provider for Movie ID ${numericMovieId} (Stream ID: ${relation.stream_id})...`);
+            let xcInfo;
+            try {
+                xcInfo = JSON.parse(providerConfig.xc_data);
+            } catch (e) { }
+
+            if (xcInfo && xcInfo.server && xcInfo.username && xcInfo.password) {
+                const activeUserAgent = settings.userAgents?.find(ua => ua.id === settings.activeUserAgentId)?.value || 'VLC/3.0.20 (Linux; x86_64)';
+                const client = new XtreamClient(xcInfo.server, xcInfo.username, xcInfo.password, activeUserAgent);
+                let vodDetails = null;
+                try {
+                    vodDetails = await client.getVodInfo(relation.stream_id);
+                } catch (xcErr) {
+                    console.error(`[API_VOD_MOVIE] XC Client error for movie ${numericMovieId}: ${xcErr.message}`);
+                }
+
+                if (vodDetails && vodDetails.info) {
+                    const info = vodDetails.info;
+                    const director = info.director || movieInfo.director || null;
+                    const cast = info.cast || info.actors || movieInfo.cast || null;
+                    const genre = info.genre || movieInfo.genre || null;
+                    const rating = info.rating || info.rating_5based || movieInfo.rating || null;
+                    const releaseDate = info.release_date || info.releasedate || movieInfo.release_date || null;
+                    const country = info.country || movieInfo.country || null;
+                    const youtubeTrailer = info.youtube_trailer || movieInfo.youtube_trailer || null;
+                    const tmdbId = info.tmdb_id || movieInfo.tmdb_id || null;
+                    const imdbId = info.imdb_id || info.imdb || movieInfo.imdb_id || null;
+                    const plot = info.plot || info.description || movieInfo.description || null;
+
+                    // Backdrop path
+                    let backdrop = null;
+                    if (Array.isArray(info.backdrop_path) && info.backdrop_path.length > 0) {
+                        backdrop = info.backdrop_path[0];
+                    } else if (typeof info.backdrop_path === 'string' && info.backdrop_path.trim()) {
+                        backdrop = info.backdrop_path.trim();
+                    } else if (info.movie_image) {
+                        backdrop = info.movie_image;
+                    } else if (info.cover_big) {
+                        backdrop = info.cover_big;
+                    }
+                    const backdropUrl = backdrop || movieInfo.backdrop_url || null;
+
+                    // Duration formatting
+                    let durationSecs = parseInt(info.duration_secs || 0, 10) || null;
+                    if (!durationSecs && info.episode_run_time) {
+                        const parsedMins = parseInt(info.episode_run_time, 10);
+                        if (!isNaN(parsedMins) && parsedMins > 0) durationSecs = parsedMins * 60;
+                    }
+                    let durationStr = info.duration || null;
+                    if (!durationStr && durationSecs) {
+                        const h = Math.floor(durationSecs / 3600);
+                        const m = Math.floor((durationSecs % 3600) / 60);
+                        durationStr = h > 0 ? `${h}h ${m}m` : `${m}m`;
+                    }
+
+                    // Save to SQLite
+                    await new Promise((resolve) => {
+                        db.run(`UPDATE movies SET 
+                            director = COALESCE(?, director),
+                            cast = COALESCE(?, cast),
+                            genre = COALESCE(?, genre),
+                            rating = COALESCE(?, rating),
+                            duration = COALESCE(?, duration),
+                            duration_secs = COALESCE(?, duration_secs),
+                            release_date = COALESCE(?, release_date),
+                            country = COALESCE(?, country),
+                            backdrop_url = COALESCE(?, backdrop_url),
+                            youtube_trailer = COALESCE(?, youtube_trailer),
+                            tmdb_id = COALESCE(?, tmdb_id),
+                            imdb_id = COALESCE(?, imdb_id),
+                            description = COALESCE(?, description)
+                            WHERE id = ?`,
+                            [director, cast, genre, rating, durationStr, durationSecs, releaseDate, country, backdropUrl, youtubeTrailer, tmdbId, imdbId, plot, numericMovieId],
+                            () => resolve()
+                        );
+                    });
+
+                    movieInfo.director = director;
+                    movieInfo.cast = cast;
+                    movieInfo.genre = genre;
+                    movieInfo.rating = rating;
+                    movieInfo.duration = durationStr;
+                    movieInfo.duration_secs = durationSecs;
+                    movieInfo.release_date = releaseDate;
+                    movieInfo.country = country;
+                    movieInfo.backdrop_url = backdropUrl;
+                    movieInfo.youtube_trailer = youtubeTrailer;
+                    movieInfo.tmdb_id = tmdbId;
+                    movieInfo.imdb_id = imdbId;
+                    movieInfo.description = plot;
+                }
+            }
+        }
+
+        // Build full playable URL
+        let streamUrl = '';
+        if (relation && providerConfig && providerConfig.type === 'xc' && providerConfig.xc_data) {
+            try {
+                const xcInfo = JSON.parse(providerConfig.xc_data);
+                const urlObj = new URL(xcInfo.server);
+                const baseUrl = `${urlObj.protocol}//${urlObj.host}`;
+                const ext = relation.container_extension || 'mp4';
+                streamUrl = `${baseUrl}/movie/${xcInfo.username}/${xcInfo.password}/${relation.stream_id}.${ext}`;
+            } catch (e) { }
+        }
+
+        const finalMovieData = {
+            ...movieInfo,
+            id: movieInfo.provider_unique_id,
+            type: 'movie',
+            group: movieInfo.category_name,
+            url: streamUrl,
+            provider_id: relation?.provider_id || null,
+            provider_name: providerName,
+            stream_id: relation?.stream_id || null,
+            container_extension: relation?.container_extension || 'mp4',
+            tmdb_id: movieInfo.tmdb_id || null,
+            imdb_id: movieInfo.imdb_id || null
+        };
+
+        res.json(finalMovieData);
+
+    } catch (error) {
+        console.error(`[API_VOD_MOVIE] Error fetching details for Movie ID ${movieIdParam}: ${error.message}`, error);
+        res.status(500).json({ error: "Could not retrieve movie details." });
+    }
+});
+// --- END MOVIE ENDPOINT ---
 
 // --- NEW: VOD Categories Endpoint ---
 app.get('/api/vod/categories', requireAuth, async (req, res) => {
@@ -3048,8 +4670,11 @@ const upload = multer({
 
 
 app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, res) => {
-    // ADD selectedGroups to the destructured body
-    const { sourceType, name, url, isActive, id, refreshHours, xc, selectedGroups } = req.body;
+    // ADD selectedGroups and preDownloadLogos to the destructured body
+    const { sourceType, name, url, isActive, id, refreshHours, xc, selectedGroups, preDownloadLogos } = req.body;
+    const parsedPreDownloadLogos = preDownloadLogos !== undefined
+        ? (preDownloadLogos === 'true' || preDownloadLogos === true)
+        : true;
 
     console.log(`[SOURCES_API] ${id ? 'Updating' : 'Adding'} source. Type: ${sourceType}, Name: ${name}`);
 
@@ -3074,6 +4699,11 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
         console.log(`[SOURCES_API] Found existing source for update: ${sourceToUpdate.name}`);
         sourceToUpdate.name = name;
         sourceToUpdate.isActive = isActive === 'true';
+        if (sourceType === 'm3u') {
+            sourceToUpdate.preDownloadLogos = preDownloadLogos !== undefined
+                ? parsedPreDownloadLogos
+                : (sourceToUpdate.preDownloadLogos !== false);
+        }
         sourceToUpdate.refreshHours = parseInt(refreshHours, 10) || 0;
         sourceToUpdate.lastUpdated = new Date().toISOString();
 
@@ -3260,6 +4890,7 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
                 path: xcData.server || 'Xtream Codes Source',
                 xc_data: xc,
                 isActive: isActive === 'true',
+                preDownloadLogos: parsedPreDownloadLogos,
                 refreshHours: parseInt(refreshHours, 10) || 0,
                 lastUpdated: new Date().toISOString(),
                 status: 'Pending',
@@ -3273,6 +4904,7 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
                 type: req.file ? 'file' : 'url',
                 path: req.file ? req.file.path : url,
                 isActive: isActive === 'true',
+                ...(sourceType === 'm3u' ? { preDownloadLogos: parsedPreDownloadLogos } : {}),
                 refreshHours: parseInt(refreshHours, 10) || 0,
                 lastUpdated: new Date().toISOString(),
                 status: 'Pending',
@@ -3414,8 +5046,17 @@ app.delete('/api/sources/:sourceType/:id', requireAuth, async (req, res) => {
     saveSettings(settings);
     console.log(`[SOURCES_API] Source ${id} deleted successfully from settings.`);
 
+    // --- Cleanup channel_logos rows for deleted M3U/XC source ---
+    if (sourceType === 'm3u') {
+        try {
+            await dbRun(db, `DELETE FROM channel_logos WHERE channel_key LIKE ?`, [`${id}_%`]);
+        } catch (logoCleanErr) {
+            console.warn(`[SOURCES_API] Warning cleaning up channel_logos for source ${id}:`, logoCleanErr.message);
+        }
+    }
+
     // --- NEW: VOD Database Cleanup ---
-    if (sourceType === 'm3u' && source.type === 'xc') {
+    if (sourceType === 'm3u' && source && source.type === 'xc') {
         try {
             console.log(`[SOURCES_API] Deleting VOD relations for provider: ${id}`);
             await dbRun(db, "BEGIN TRANSACTION");
@@ -3467,6 +5108,8 @@ app.post('/api/save/settings', requireAuth, async (req, res) => {
         let currentSettings = getSettings();
 
         const oldTimezone = currentSettings.timezoneOffset;
+        const oldStoreLogos = currentSettings.storeLogosInternally !== false;
+        const oldSmartLogos = currentSettings.smartLogoMatching !== false;
 
         const updatedSettings = { ...currentSettings };
         for (const key in req.body) {
@@ -3477,6 +5120,14 @@ app.post('/api/save/settings', requireAuth, async (req, res) => {
             }
         }
 
+        const newStoreLogos = updatedSettings.storeLogosInternally !== false;
+        const newSmartLogos = updatedSettings.smartLogoMatching !== false;
+        const logoSettingsChanged = (newStoreLogos !== oldStoreLogos) || (newSmartLogos !== oldSmartLogos);
+
+        if (logoSettingsChanged) {
+            updatedSettings.sourcesLastUpdated = new Date().toISOString();
+        }
+
         saveSettings(updatedSettings);
 
         if (updatedSettings.timezoneOffset !== oldTimezone) {
@@ -3484,6 +5135,16 @@ app.post('/api/save/settings', requireAuth, async (req, res) => {
             const result = await processAndMergeSources();
             if (result.success) {
                 fs.writeFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
+            }
+        } else if (logoSettingsChanged) {
+            console.log(`[API] Logo settings changed (storeLogosInternally=${newStoreLogos}, smartLogoMatching=${newSmartLogos}). Updating M3U logos...`);
+            await ensureChannelLogosSeededFromM3u();
+            await applySmartLogoMatchesInDb();
+            await rewriteLiveM3uLogosFromStore();
+            if (newStoreLogos && !oldStoreLogos) {
+                syncChannelLogos({ forceVerify: false, req }).catch(err => {
+                    console.error('[LOGO_STORE] Background sync after enabling internal logos failed:', err.message);
+                });
             }
         }
 
@@ -3843,13 +5504,16 @@ app.delete('/api/data', requireAuth, requireAdmin, (req, res) => {
         }
         runningFFmpegProcesses.clear();
 
+        logoSyncState.cancelRequested = true;
+        recentFailedLogoChannels.clear();
+
         console.log('[API_RESET] Wiping all data files...');
         const filesToDelete = [LIVE_CHANNELS_M3U_PATH, LIVE_EPG_JSON_PATH, VOD_MOVIES_JSON_PATH, VOD_SERIES_JSON_PATH, SETTINGS_PATH, VAPID_KEYS_PATH];
         filesToDelete.forEach(file => {
             if (fs.existsSync(file)) fs.unlinkSync(file);
         });
 
-        [SOURCES_DIR, DVR_DIR].forEach(dir => {
+        [SOURCES_DIR, DVR_DIR, LOGOS_DIR, IMAGE_CACHE_DIR].forEach(dir => {
             if (fs.existsSync(dir)) {
                 fs.rmSync(dir, { recursive: true, force: true });
                 fs.mkdirSync(dir, { recursive: true });
@@ -3857,7 +5521,7 @@ app.delete('/api/data', requireAuth, requireAdmin, (req, res) => {
         });
 
         console.log('[API_RESET] Wiping all database tables...');
-        const tables = ['stream_history', 'dvr_recordings', 'dvr_jobs', 'notification_deliveries', 'notifications', 'push_subscriptions', 'multiview_layouts', 'user_settings', 'users', 'sessions'];
+        const tables = ['stream_history', 'dvr_recordings', 'dvr_jobs', 'notification_deliveries', 'notifications', 'push_subscriptions', 'multiview_layouts', 'channel_logos', 'user_settings', 'users', 'sessions'];
         db.serialize(() => {
             tables.forEach(table => {
                 db.run(`DELETE FROM ${table}`, (err) => {
@@ -3946,10 +5610,14 @@ function allowLocalOrAuth(req, res, next) {
 
 // MODIFIED: Stream endpoint now allows local network access for Chromecast and supports fast input seeking
 app.get('/stream', allowLocalOrAuth, async (req, res) => {
-    const { url: streamUrl, profileId, userAgentId, vodName, vodLogo, startTime: seekParam } = req.query;
+    const { url: streamUrl, profileId, userAgentId, vodName, vodLogo, mediaType: rawMediaType, startTime: seekParam } = req.query;
+    if (!streamUrl || !isValidHttpStreamUrl(streamUrl)) {
+        return res.status(400).send('Error: Valid http(s) `url` query parameter is required.');
+    }
     const userId = req.session.userId;
     const username = req.session.username;
-    const clientIp = req.clientIp;
+    const clientIp = cleanClientIp(req.clientIp);
+    const clientInfo = parseClientPlatform(req.headers['user-agent']);
 
     const seekSec = parseFloat(seekParam);
     const isSeek = seekParam !== undefined && !isNaN(seekSec);
@@ -4056,20 +5724,22 @@ app.get('/stream', allowLocalOrAuth, async (req, res) => {
         }
     }
 
-    const commandTemplate = `-v level+${settings.playerLogLevel} ` + profileCommand
-        .replace(/{streamUrl}/g, streamUrl)
-        .replace(/{userAgent}|{clientUserAgent}/g, userAgent.value);
-
-    const args = (commandTemplate.match(/(?:[^\s"]+|"[^"]*")+/g) || []).map(arg => arg.replace(/^"|"$/g, ''));
+    const commandTemplate = `-v level+${settings.playerLogLevel} ` + profileCommand;
+    const args = buildSafeFfmpegArgs(commandTemplate, {
+        '{streamUrl}': streamUrl,
+        '{userAgent}': userAgent.value,
+        '{clientUserAgent}': userAgent.value,
+    });
 
     console.log(`[STREAM] FFmpeg command args: ffmpeg ${args.join(' ')}`);
     const ffmpeg = spawn('ffmpeg', args);
 
     //-- ENHANCEMENT: Log richer stream start data to history.
     const startTime = new Date().toISOString();
+    const mediaType = inferStreamMediaType({ mediaType: rawMediaType, vodName, channelId, channelName, streamUrl });
     db.run(
-        `INSERT INTO stream_history (user_id, username, channel_id, channel_name, start_time, status, client_ip, channel_logo, stream_profile_name) VALUES (?, ?, ?, ?, ?, 'playing', ?, ?, ?)`,
-        [userId, username, channelId, channelName, startTime, clientIp, channelLogo, streamProfileName],
+        `INSERT INTO stream_history (user_id, username, channel_id, channel_name, start_time, status, client_ip, channel_logo, stream_profile_name, media_type, client_info) VALUES (?, ?, ?, ?, ?, 'playing', ?, ?, ?, ?, ?)`,
+        [userId, username, channelId, channelName, startTime, clientIp, channelLogo, streamProfileName, mediaType, clientInfo],
         function (err) {
             if (err) {
                 console.error('[STREAM_HISTORY] Error logging stream start:', err.message);
@@ -4091,6 +5761,8 @@ app.get('/stream', allowLocalOrAuth, async (req, res) => {
                     startTime,
                     historyId,
                     clientIp,
+                    clientInfo,
+                    mediaType,
                     streamKey,
                     isTranscoded, // NEW: Store transcoding status
                 };
@@ -4312,15 +5984,17 @@ app.post('/api/stream/stop', requireAuth, (req, res) => {
 });
 
 app.post('/api/activity/start-redirect', requireAuth, (req, res) => {
-    const { streamUrl, channelId, channelName, channelLogo } = req.body;
+    const { streamUrl, channelId, channelName, channelLogo, mediaType: rawMediaType } = req.body;
     const userId = req.session.userId;
     const username = req.session.username;
-    const clientIp = req.clientIp;
+    const clientIp = cleanClientIp(req.clientIp);
+    const clientInfo = parseClientPlatform(req.headers['user-agent']);
     const startTime = new Date().toISOString();
+    const mediaType = inferStreamMediaType({ mediaType: rawMediaType, channelId, channelName, streamUrl });
 
     db.run(
-        `INSERT INTO stream_history (user_id, username, channel_id, channel_name, start_time, status, client_ip, channel_logo, stream_profile_name) VALUES (?, ?, ?, ?, ?, 'playing', ?, ?, ?)`,
-        [userId, username, channelId, channelName, startTime, clientIp, channelLogo, 'Redirect'],
+        `INSERT INTO stream_history (user_id, username, channel_id, channel_name, start_time, status, client_ip, channel_logo, stream_profile_name, media_type, client_info) VALUES (?, ?, ?, ?, ?, 'playing', ?, ?, ?, ?, ?)`,
+        [userId, username, channelId, channelName, startTime, clientIp, channelLogo, 'Redirect', mediaType, clientInfo],
         function (err) {
             if (err) {
                 console.error('[REDIRECT_LOG] Error logging redirect stream start:', err.message);
@@ -4342,6 +6016,8 @@ app.post('/api/activity/start-redirect', requireAuth, (req, res) => {
                 startTime,
                 lastHeartbeat: Date.now(),
                 clientIp,
+                clientInfo,
+                mediaType,
                 isTranscoded: false,
                 historyId,
             });
@@ -4385,23 +6061,35 @@ app.post('/api/activity/stop-redirect', requireAuth, (req, res) => {
     // --- END NEW ---
 
     const endTime = new Date().toISOString();
-    db.get("SELECT start_time FROM stream_history WHERE id = ? AND user_id = ?", [historyId, req.session.userId], (err, row) => {
-        if (err || !row) {
-            // Even if history isn't found, we should respond successfully as the client's goal is to stop.
-            return res.status(200).json({ success: true, message: 'Stream stopped, history record not found.' });
-        }
-        const duration = Math.round((new Date(endTime).getTime() - new Date(row.start_time).getTime()) / 1000);
-        db.run("UPDATE stream_history SET end_time = ?, duration_seconds = ?, status = 'stopped' WHERE id = ? AND end_time IS NULL",
+    const userId = req.session.userId;
+
+    const updateHistoryWithRetry = (startTimeIso, attempt = 0) => {
+        const duration = Math.round((new Date(endTime).getTime() - new Date(startTimeIso).getTime()) / 1000);
+        db.run(
+            "UPDATE stream_history SET end_time = ?, duration_seconds = ?, status = 'stopped' WHERE id = ? AND end_time IS NULL",
             [endTime, duration, historyId],
             (updateErr) => {
                 if (updateErr) {
-                    console.error(`[REDIRECT_LOG] Error updating redirect stream end for history ID ${historyId}:`, updateErr.message);
-                    return res.status(500).json({ error: 'Could not log stream end.' });
+                    const retryDelays = [250, 600, 1200];
+                    if (attempt < retryDelays.length) {
+                        setTimeout(() => updateHistoryWithRetry(startTimeIso, attempt + 1), retryDelays[attempt]);
+                        return;
+                    }
+                    console.warn(`[REDIRECT_LOG] Could not update stream_history after retries for history ID ${historyId}: ${updateErr.message}`);
+                    return res.status(200).json({ success: true, warning: 'Stream stopped; history log deferred.' });
                 }
                 console.log(`[REDIRECT_LOG] Logged redirect stream end for history ID: ${historyId}`);
                 res.json({ success: true });
             }
         );
+    };
+
+    db.get("SELECT start_time FROM stream_history WHERE id = ? AND user_id = ?", [historyId, userId], (err, row) => {
+        if (err || !row) {
+            // Even if history isn't found or SQLite is busy, respond successfully as activeRedirectStreams was already cleared.
+            return res.status(200).json({ success: true, message: 'Stream stopped, history record not found.' });
+        }
+        updateHistoryWithRetry(row.start_time, 0);
     });
 });
 
@@ -4421,6 +6109,110 @@ app.get('/api/version', requireAuth, (req, res) => {
     }
 });
 
+/**
+ * Builds shared SQL WHERE clauses, parameters, and ORDER BY clause for stream_history queries.
+ */
+function buildStreamHistoryFilter(query = {}) {
+    const search = (query.search || '').trim();
+    const user = (query.user || 'all').trim();
+    const mediaType = (query.mediaType || 'all').trim().toLowerCase();
+    const streamMode = (query.streamMode || 'all').trim().toLowerCase();
+    const dateFilter = (query.dateFilter || 'all').trim();
+    const customStart = query.startDate;
+    const customEnd = query.endDate;
+
+    const whereClauses = [];
+    const queryParams = [];
+
+    if (search) {
+        whereClauses.push(`(username LIKE ? OR channel_name LIKE ? OR client_ip LIKE ? OR stream_profile_name LIKE ? OR COALESCE(client_info, '') LIKE ? OR COALESCE(media_type, 'live') LIKE ?)`);
+        const searchTerm = `%${search}%`;
+        queryParams.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+    }
+
+    if (user && user !== 'all') {
+        whereClauses.push(`username = ?`);
+        queryParams.push(user);
+    }
+
+    if (mediaType && mediaType !== 'all') {
+        whereClauses.push(`LOWER(COALESCE(media_type, 'live')) = ?`);
+        queryParams.push(mediaType);
+    }
+
+    if (streamMode === 'direct') {
+        whereClauses.push(`(LOWER(COALESCE(stream_profile_name, '')) IN ('redirect', 'direct', 'direct play') OR stream_profile_name IS NULL)`);
+    } else if (streamMode === 'transcode') {
+        whereClauses.push(`(LOWER(COALESCE(stream_profile_name, '')) NOT IN ('redirect', 'direct', 'direct play') AND stream_profile_name IS NOT NULL)`);
+    }
+
+    const now = new Date();
+    if (dateFilter === 'today') {
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+        whereClauses.push(`start_time >= ?`);
+        queryParams.push(startOfToday.toISOString());
+    } else if (dateFilter === '24h') {
+        whereClauses.push(`start_time >= ?`);
+        queryParams.push(new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString());
+    } else if (dateFilter === '7d') {
+        whereClauses.push(`start_time >= ?`);
+        queryParams.push(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString());
+    } else if (dateFilter === '30d') {
+        whereClauses.push(`start_time >= ?`);
+        queryParams.push(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString());
+    } else if (dateFilter === '90d') {
+        whereClauses.push(`start_time >= ?`);
+        queryParams.push(new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString());
+    } else if (dateFilter === 'custom') {
+        if (customStart) {
+            const parts = String(customStart).split('-').map(Number);
+            const startBound = parts.length === 3
+                ? new Date(parts[0], parts[1] - 1, parts[2], 0, 0, 0, 0)
+                : new Date(customStart);
+            if (!isNaN(startBound.getTime())) {
+                whereClauses.push(`start_time >= ?`);
+                queryParams.push(startBound.toISOString());
+            }
+        }
+        if (customEnd) {
+            const parts = String(customEnd).split('-').map(Number);
+            const endBound = parts.length === 3
+                ? new Date(parts[0], parts[1] - 1, parts[2], 23, 59, 59, 999)
+                : new Date(customEnd);
+            if (!isNaN(endBound.getTime())) {
+                whereClauses.push(`start_time <= ?`);
+                queryParams.push(endBound.toISOString());
+            }
+        }
+    }
+
+    const sortColumns = {
+        date: 'start_time',
+        start_time: 'start_time',
+        end_time: 'COALESCE(end_time, start_time)',
+        username: 'username COLLATE NOCASE',
+        client_ip: 'client_ip',
+        channel_name: 'channel_name COLLATE NOCASE',
+        stream_profile_name: 'stream_profile_name COLLATE NOCASE',
+        duration_seconds: 'COALESCE(duration_seconds, 0)'
+    };
+    const orderCol = sortColumns[query.sortBy] || 'start_time';
+    const orderDir = String(query.sortDir || 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+
+    const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    return { whereClauses, whereString, queryParams, orderCol, orderDir };
+}
+
+function formatHistoryDurationCsv(seconds) {
+    if (seconds === null || seconds === undefined || isNaN(seconds) || seconds < 0) return 'N/A';
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    if (hrs > 0) return `${hrs}h ${mins}m ${secs}s`;
+    if (mins > 0) return `${mins}m ${secs}s`;
+    return `${secs}s`;
+}
+
 // --- NEW/MODIFIED: Admin Monitoring Endpoints ---
 app.get('/api/admin/activity', requireAuth, requireAdmin, async (req, res) => {
     // 1. Get Live Activity (already up-to-date in memory)
@@ -4432,7 +6224,9 @@ app.get('/api/admin/activity', requireAuth, requireAdmin, async (req, res) => {
         channelLogo: info.channelLogo,
         streamProfileName: info.streamProfileName,
         startTime: info.startTime,
-        clientIp: info.clientIp,
+        clientIp: cleanClientIp(info.clientIp),
+        clientInfo: info.clientInfo || 'Web Client',
+        mediaType: info.mediaType || 'live',
         isTranscoded: true,
     }));
 
@@ -4444,7 +6238,9 @@ app.get('/api/admin/activity', requireAuth, requireAdmin, async (req, res) => {
         channelLogo: info.channelLogo,
         streamProfileName: info.streamProfileName,
         startTime: info.startTime,
-        clientIp: info.clientIp,
+        clientIp: cleanClientIp(info.clientIp),
+        clientInfo: info.clientInfo || 'Web Client',
+        mediaType: info.mediaType || 'live',
         isTranscoded: false,
     }));
 
@@ -4452,69 +6248,196 @@ app.get('/api/admin/activity', requireAuth, requireAdmin, async (req, res) => {
 
     // 2. Get Paginated and Filtered History
     try {
-        const page = parseInt(req.query.page, 10) || 1;
-        const pageSize = parseInt(req.query.pageSize, 10) || 25;
-        const search = req.query.search || '';
-        const dateFilter = req.query.dateFilter || 'all';
-        const customStart = req.query.startDate;
-        const customEnd = req.query.endDate;
-
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const pageSize = Math.max(1, Math.min(500, parseInt(req.query.pageSize, 10) || 25));
         const offset = (page - 1) * pageSize;
 
-        let whereClauses = [];
-        let queryParams = [];
+        const { whereString, queryParams, orderCol, orderDir } = buildStreamHistoryFilter(req.query);
 
-        if (search) {
-            whereClauses.push(`(username LIKE ? OR channel_name LIKE ? OR client_ip LIKE ? OR stream_profile_name LIKE ?)`);
-            const searchTerm = `%${search}%`;
-            queryParams.push(searchTerm, searchTerm, searchTerm, searchTerm);
-        }
-
-        const now = new Date();
-        if (dateFilter === '24h') {
-            whereClauses.push(`start_time >= ?`);
-            queryParams.push(new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString());
-        } else if (dateFilter === '7d') {
-            whereClauses.push(`start_time >= ?`);
-            queryParams.push(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString());
-        } else if (dateFilter === 'custom' && customStart && customEnd) {
-            whereClauses.push(`start_time BETWEEN ? AND ?`);
-            queryParams.push(new Date(customStart).toISOString(), new Date(customEnd).toISOString());
-        }
-
-        const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
-
-        // Count total items with filters
-        const countResult = await new Promise((resolve, reject) => {
-            db.get(`SELECT COUNT(*) as total FROM stream_history ${whereString}`, queryParams, (err, row) => {
-                if (err) reject(err);
-                else resolve(row);
-            });
+        // Count total items and total duration with filters
+        const summaryResult = await new Promise((resolve, reject) => {
+            db.get(
+                `SELECT COUNT(*) as total, COALESCE(SUM(duration_seconds), 0) as totalDuration FROM stream_history ${whereString}`,
+                queryParams,
+                (err, row) => err ? reject(err) : resolve(row)
+            );
         });
-        const totalItems = countResult.total;
+        const totalItems = summaryResult.total || 0;
+        const totalDurationSeconds = summaryResult.totalDuration || 0;
 
         // Get paginated items with filters
-        const historyItems = await new Promise((resolve, reject) => {
-            const query = `SELECT * FROM stream_history ${whereString} ORDER BY start_time DESC LIMIT ? OFFSET ?`;
+        const rawItems = await new Promise((resolve, reject) => {
+            const query = `SELECT * FROM stream_history ${whereString} ORDER BY ${orderCol} ${orderDir} LIMIT ? OFFSET ?`;
             db.all(query, [...queryParams, pageSize, offset], (err, rows) => {
                 if (err) reject(err);
-                else resolve(rows);
+                else resolve(rows || []);
             });
         });
+
+        const historyItems = rawItems.map(r => ({
+            ...r,
+            client_ip: cleanClientIp(r.client_ip),
+            media_type: r.media_type || inferStreamMediaType({ channelId: r.channel_id, channelName: r.channel_name }),
+            client_info: r.client_info || 'Web Client'
+        }));
+
+        // Distinct users for the user filter dropdown
+        const userRows = await new Promise((resolve, reject) => {
+            db.all(`SELECT DISTINCT username FROM stream_history WHERE username IS NOT NULL AND username != '' ORDER BY username COLLATE NOCASE ASC`, [], (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows || []);
+            });
+        });
+        const users = userRows.map(u => u.username);
 
         const history = {
             items: historyItems,
             totalItems: totalItems,
-            totalPages: Math.ceil(totalItems / pageSize),
+            totalDurationSeconds: totalDurationSeconds,
+            totalPages: Math.max(1, Math.ceil(totalItems / pageSize)),
             currentPage: page,
             pageSize: pageSize,
         };
 
-        res.json({ live: liveActivity, history });
+        res.json({ live: liveActivity, history, users });
 
     } catch (err) {
         console.error('[ADMIN_API] Error fetching paginated stream history:', err.message);
         return res.status(500).json({ error: "Could not retrieve stream history." });
+    }
+});
+
+// NEW: Export Watch History (CSV or JSON) with current filters applied
+app.get('/api/admin/activity/export', requireAuth, requireAdmin, async (req, res) => {
+    try {
+        const format = String(req.query.format || 'csv').toLowerCase() === 'json' ? 'json' : 'csv';
+        const { whereString, queryParams, orderCol, orderDir } = buildStreamHistoryFilter(req.query);
+
+        const rows = await new Promise((resolve, reject) => {
+            const query = `SELECT * FROM stream_history ${whereString} ORDER BY ${orderCol} ${orderDir}`;
+            db.all(query, queryParams, (err, result) => err ? reject(err) : resolve(result || []));
+        });
+
+        const dateStamp = new Date().toISOString().split('T')[0];
+        const enrichedRows = rows.map(r => {
+            const profile = r.stream_profile_name || 'N/A';
+            const isDirect = ['redirect', 'direct', 'direct play'].includes(profile.toLowerCase());
+            const startDt = r.start_time ? new Date(r.start_time) : null;
+            const endDt = r.end_time ? new Date(r.end_time) : null;
+            return {
+                id: r.id,
+                date: startDt && !isNaN(startDt.getTime()) ? startDt.toISOString().split('T')[0] : '',
+                startTime: r.start_time || '',
+                endTime: r.end_time || '',
+                durationSeconds: r.duration_seconds !== null && r.duration_seconds !== undefined ? r.duration_seconds : null,
+                durationFormatted: formatHistoryDurationCsv(r.duration_seconds),
+                username: r.username || '',
+                clientIp: cleanClientIp(r.client_ip),
+                clientInfo: r.client_info || 'Web Client',
+                mediaType: r.media_type || inferStreamMediaType({ channelId: r.channel_id, channelName: r.channel_name }),
+                title: r.channel_name || '',
+                channelId: r.channel_id || '',
+                streamMode: isDirect ? 'Direct' : 'Transcode',
+                streamProfile: profile,
+                status: r.status || ''
+            };
+        });
+
+        if (format === 'json') {
+            const filename = `viniplay-watch-history-${dateStamp}.json`;
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            return res.send(JSON.stringify(enrichedRows, null, 2));
+        }
+
+        // CSV Export
+        const escapeCsv = (val) => {
+            const str = val === null || val === undefined ? '' : String(val);
+            if (/[",\r\n]/.test(str)) {
+                return `"${str.replace(/"/g, '""')}"`;
+            }
+            return str;
+        };
+
+        const headers = [
+            'ID',
+            'Date',
+            'Start Time (ISO)',
+            'Stop Time (ISO)',
+            'Duration (Seconds)',
+            'Duration',
+            'User',
+            'IP Address',
+            'Client / Platform',
+            'Media Type',
+            'Title / Channel',
+            'Stream Mode',
+            'Stream Profile',
+            'Status'
+        ];
+
+        const csvLines = [headers.map(escapeCsv).join(',')];
+        for (const item of enrichedRows) {
+            csvLines.push([
+                item.id,
+                item.date,
+                item.startTime,
+                item.endTime,
+                item.durationSeconds !== null ? item.durationSeconds : '',
+                item.durationFormatted,
+                item.username,
+                item.clientIp,
+                item.clientInfo,
+                item.mediaType,
+                item.title,
+                item.streamMode,
+                item.streamProfile,
+                item.status
+            ].map(escapeCsv).join(','));
+        }
+
+        const filename = `viniplay-watch-history-${dateStamp}.csv`;
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        return res.send(csvLines.join('\r\n'));
+    } catch (err) {
+        console.error('[ADMIN_API] Error exporting watch history:', err.message);
+        return res.status(500).json({ error: 'Could not export watch history.' });
+    }
+});
+
+// NEW: Delete a single watch history entry
+app.delete('/api/admin/activity/history/:id', requireAuth, requireAdmin, (req, res) => {
+    const entryId = parseInt(req.params.id, 10);
+    if (!entryId) {
+        return res.status(400).json({ error: 'Valid history entry ID is required.' });
+    }
+    db.run(`DELETE FROM stream_history WHERE id = ?`, [entryId], function (err) {
+        if (err) {
+            console.error('[ADMIN_API] Error deleting history entry:', err.message);
+            return res.status(500).json({ error: 'Failed to delete history entry.' });
+        }
+        return res.json({ success: true, deletedCount: this.changes });
+    });
+});
+
+// NEW: Delete all watch history entries matching the current filter (excluding currently playing streams)
+app.delete('/api/admin/activity/history', requireAuth, requireAdmin, (req, res) => {
+    try {
+        const { whereClauses, queryParams } = buildStreamHistoryFilter(req.query);
+        const clauses = [...whereClauses, `status != 'playing'`];
+        const whereString = `WHERE ${clauses.join(' AND ')}`;
+        db.run(`DELETE FROM stream_history ${whereString}`, queryParams, function (err) {
+            if (err) {
+                console.error('[ADMIN_API] Error clearing filtered history:', err.message);
+                return res.status(500).json({ error: 'Failed to clear filtered watch history.' });
+            }
+            console.log(`[ADMIN_API] Admin ${req.session.username} deleted ${this.changes} watch history entries.`);
+            return res.json({ success: true, deletedCount: this.changes });
+        });
+    } catch (err) {
+        console.error('[ADMIN_API] Error in bulk history delete:', err.message);
+        return res.status(500).json({ error: 'Failed to clear watch history.' });
     }
 });
 
@@ -4635,31 +6558,37 @@ app.get('/api/admin/system-health', requireAuth, requireAdmin, async (req, res) 
     }
 });
 
-// NEW: Endpoint for analytics widgets
+// MODIFIED: Endpoint for analytics widgets supporting dynamic date and filter ranges
 app.get('/api/admin/analytics', requireAuth, requireAdmin, async (req, res) => {
     try {
+        const { whereClauses, queryParams } = buildStreamHistoryFilter(req.query);
+
+        const chClauses = [...whereClauses, `channel_name IS NOT NULL`, `duration_seconds IS NOT NULL`];
+        const chWhere = `WHERE ${chClauses.join(' AND ')}`;
         const topChannelsQuery = `
-            SELECT channel_name, SUM(duration_seconds) as total_duration
+            SELECT channel_name, COUNT(*) as play_count, SUM(duration_seconds) as total_duration
             FROM stream_history
-            WHERE channel_name IS NOT NULL AND duration_seconds IS NOT NULL
+            ${chWhere}
             GROUP BY channel_name
             ORDER BY total_duration DESC
             LIMIT 5`;
 
+        const usrClauses = [...whereClauses, `duration_seconds IS NOT NULL`];
+        const usrWhere = `WHERE ${usrClauses.join(' AND ')}`;
         const topUsersQuery = `
-            SELECT username, SUM(duration_seconds) as total_duration
+            SELECT username, COUNT(*) as play_count, SUM(duration_seconds) as total_duration
             FROM stream_history
-            WHERE duration_seconds IS NOT NULL
+            ${usrWhere}
             GROUP BY username
             ORDER BY total_duration DESC
             LIMIT 5`;
 
         const topChannels = await new Promise((resolve, reject) => {
-            db.all(topChannelsQuery, [], (err, rows) => err ? reject(err) : resolve(rows));
+            db.all(topChannelsQuery, queryParams, (err, rows) => err ? reject(err) : resolve(rows || []));
         });
 
         const topUsers = await new Promise((resolve, reject) => {
-            db.all(topUsersQuery, [], (err, rows) => err ? reject(err) : resolve(rows));
+            db.all(topUsersQuery, queryParams, (err, rows) => err ? reject(err) : resolve(rows || []));
         });
 
         res.json({ topChannels, topUsers });
@@ -4846,8 +6775,14 @@ async function checkAndSendNotifications() {
 
 async function getMediaDurationSeconds(filePath) {
     return new Promise((resolve) => {
-        if (!filePath || !fs.existsSync(filePath)) return resolve(null);
-        exec(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`, { timeout: 10000 }, (error, stdout) => {
+        if (!filePath || typeof filePath !== 'string' || !fs.existsSync(filePath)) return resolve(null);
+        const args = [
+            '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            '-i', filePath
+        ];
+        execFile('ffprobe', args, { timeout: 10000, windowsHide: true }, (error, stdout) => {
             if (error || !stdout) {
                 return resolve(null);
             }
@@ -5058,18 +6993,18 @@ class DvrSupervisor {
             await new Promise(r => setTimeout(r, 400));
         }
 
-        let commandStr = this.recProfile.command
-            .replace(/{streamUrl}/g, currentUrl)
-            .replace(/{userAgent}/g, this.userAgent.value);
-
-        if (this.isTs) {
-            commandStr = commandStr.replace(/{filePath}/g, 'pipe:1');
-        } else {
-            commandStr = commandStr.replace(/{filePath}/g, this.fullFilePath);
+        if (!isValidHttpStreamUrl(currentUrl)) {
+            console.error(`[DVR_SUPERVISOR][${this.job.id}] Refusing to spawn FFmpeg for invalid stream URL.`);
+            this.handleProcessExit(1);
+            return;
         }
 
-        const fullCommand = `-v level+${this.settings.dvrLogLevel || 'warning'} ` + commandStr;
-        const args = (fullCommand.match(/(?:[^\s"]+|"[^"]*")+/g) || []).map(arg => arg.replace(/^"|"$/g, ''));
+        const fullCommand = `-v level+${this.settings.dvrLogLevel || 'warning'} ` + this.recProfile.command;
+        const args = buildSafeFfmpegArgs(fullCommand, {
+            '{streamUrl}': currentUrl,
+            '{userAgent}': this.userAgent.value,
+            '{filePath}': this.isTs ? 'pipe:1' : this.fullFilePath,
+        });
 
         console.log(`[DVR_SUPERVISOR][${this.job.id}] Spawning FFmpeg (attempt ${this.retryCount + 1}/${this.maxRetries + 1}): ffmpeg ${args.join(' ')}`);
 
@@ -6182,8 +8117,8 @@ app.get('/api/public-ip', requireAuth, (req, res) => {
 
 // --- Image Proxy Endpoint (for VOD posters) ---
 // Proxies HTTP/HTTPS images to avoid mixed content warnings
-// Now with server-side disk caching for performance
-app.get('/api/image-proxy', allowLocalOrAuth, (req, res) => {
+// Now with validated server-side disk caching and in-flight request deduplication
+app.get('/api/image-proxy', allowLocalOrAuth, async (req, res) => {
     const imageUrl = req.query.url;
 
     if (!imageUrl) {
@@ -6202,140 +8137,510 @@ app.get('/api/image-proxy', allowLocalOrAuth, (req, res) => {
     const cacheFilePath = path.join(IMAGE_CACHE_DIR, urlHash);
     const cacheMetaPath = path.join(IMAGE_CACHE_DIR, `${urlHash}.meta`);
 
-    // Check if image exists in cache
+    // Check if image exists in cache and is non-empty
     if (fs.existsSync(cacheFilePath) && fs.existsSync(cacheMetaPath)) {
         try {
-            const meta = JSON.parse(fs.readFileSync(cacheMetaPath, 'utf-8'));
-            console.log(`[IMAGE_PROXY] Serving from cache: ${imageUrl}`);
+            const stat = fs.statSync(cacheFilePath);
+            if (stat.size >= 64) {
+                const meta = JSON.parse(fs.readFileSync(cacheMetaPath, 'utf-8'));
+                res.setHeader('Content-Type', meta.contentType || 'image/jpeg');
+                res.setHeader('Cache-Control', 'public, max-age=2592000'); // 30 days for cached images
+                res.setHeader('X-Cache', 'HIT');
 
-            // Set headers from cached metadata
-            res.setHeader('Content-Type', meta.contentType);
-            res.setHeader('Cache-Control', 'public, max-age=2592000'); // 30 days for cached images
-            res.setHeader('X-Cache', 'HIT');
+                const fileStream = fs.createReadStream(cacheFilePath);
+                fileStream.pipe(res);
 
-            // Stream cached file
-            const fileStream = fs.createReadStream(cacheFilePath);
-            fileStream.pipe(res);
+                fileStream.on('error', (err) => {
+                    console.error(`[IMAGE_PROXY] Error reading cached file:`, err.message);
+                    try {
+                        fs.unlinkSync(cacheFilePath);
+                        fs.unlinkSync(cacheMetaPath);
+                    } catch (e) { }
+                    if (!res.headersSent) res.status(500).send('Cache read error');
+                });
 
-            fileStream.on('error', (err) => {
-                console.error(`[IMAGE_PROXY] Error reading cached file:`, err.message);
-                // If cache is corrupted, delete and fall through to fetch
+                return;
+            } else {
                 try {
                     fs.unlinkSync(cacheFilePath);
                     fs.unlinkSync(cacheMetaPath);
                 } catch (e) { }
-                res.status(500).send('Cache read error');
-            });
-
-            return;
+            }
         } catch (err) {
             console.error(`[IMAGE_PROXY] Error reading cache metadata:`, err.message);
-            // Fall through to fetch fresh
         }
     }
 
-    console.log(`[IMAGE_PROXY] Fetching and caching image: ${imageUrl}`);
-
-    // Helper function to fetch image with redirect support
-    const fetchImage = (url, redirectCount = 0) => {
-        if (redirectCount > 5) {
-            console.error(`[IMAGE_PROXY] Too many redirects for: ${imageUrl}`);
-            if (!res.headersSent) res.status(400).send('Too many redirects');
-            return;
-        }
-
-        // Determine protocol (http or https)
-        const protocol = url.startsWith('https') ? https : http;
-
-        // Parse URL for proper request options
-        let parsedUrl;
-        try {
-            parsedUrl = new URL(url);
-        } catch (parseErr) {
-            console.error(`[IMAGE_PROXY] Invalid redirect URL: ${url}`);
-            if (!res.headersSent) res.status(400).send('Invalid image URL');
-            return;
-        }
-
-        const requestOptions = {
-            hostname: parsedUrl.hostname,
-            port: parsedUrl.port || (protocol === https ? 443 : 80),
-            path: parsedUrl.pathname + parsedUrl.search,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Referer': parsedUrl.origin + '/'
-            }
-        };
-
-        const imageReq = protocol.get(requestOptions, (imageRes) => {
-            // Handle redirects (301, 302, 303, 307, 308)
-            if ([301, 302, 303, 307, 308].includes(imageRes.statusCode) && imageRes.headers.location) {
-                const redirectUrl = imageRes.headers.location.startsWith('http')
-                    ? imageRes.headers.location
-                    : new URL(imageRes.headers.location, url).href;
-                console.log(`[IMAGE_PROXY] Following redirect to: ${redirectUrl}`);
-                return fetchImage(redirectUrl, redirectCount + 1);
-            }
-
-            // Check if response is an image
-            const contentType = imageRes.headers['content-type'];
-            if (!contentType || !contentType.startsWith('image/')) {
-                console.error(`[IMAGE_PROXY] Invalid content type: ${contentType} (status: ${imageRes.statusCode})`);
-                if (!res.headersSent) res.status(400).send('URL does not point to an image');
-                return;
-            }
-
-            // Set response headers
-            res.setHeader('Content-Type', contentType);
-            res.setHeader('Cache-Control', 'public, max-age=2592000'); // 30 days
-            res.setHeader('X-Cache', 'MISS');
-
-            // Create write stream to save to cache
-            const fileStream = fs.createWriteStream(cacheFilePath);
-
-            // Pipe to both cache and response
-            imageRes.pipe(fileStream);
-            imageRes.pipe(res);
-
-            // Save metadata when done
-            fileStream.on('finish', () => {
-                const meta = {
-                    url: imageUrl,
-                    contentType: contentType,
-                    cachedAt: new Date().toISOString()
-                };
-                try {
-                    fs.writeFileSync(cacheMetaPath, JSON.stringify(meta, null, 2));
-                    console.log(`[IMAGE_PROXY] Cached image: ${urlHash}`);
-                } catch (err) {
-                    console.error(`[IMAGE_PROXY] Failed to write cache metadata:`, err.message);
+    let downloadPromise = inFlightPosterDownloads.get(urlHash);
+    if (!downloadPromise) {
+        downloadPromise = new Promise((resolve, reject) => {
+            const fetchImage = (url, redirectCount = 0) => {
+                if (redirectCount > 5) {
+                    return reject({ status: 400, message: 'Too many redirects' });
                 }
-            });
 
-            fileStream.on('error', (err) => {
-                console.error(`[IMAGE_PROXY] Error writing to cache:`, err.message);
-                // Continue serving even if cache write fails
-            });
+                const protocol = url.startsWith('https') ? https : http;
+                let parsedUrl;
+                try {
+                    parsedUrl = new URL(url);
+                } catch (parseErr) {
+                    return reject({ status: 400, message: 'Invalid image URL' });
+                }
 
+                const requestOptions = {
+                    hostname: parsedUrl.hostname,
+                    port: parsedUrl.port || (protocol === https ? 443 : 80),
+                    path: parsedUrl.pathname + parsedUrl.search,
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Referer': parsedUrl.origin + '/'
+                    }
+                };
+
+                const imageReq = protocol.get(requestOptions, (imageRes) => {
+                    if ([301, 302, 303, 307, 308].includes(imageRes.statusCode) && imageRes.headers.location) {
+                        imageRes.resume();
+                        const redirectUrl = imageRes.headers.location.startsWith('http')
+                            ? imageRes.headers.location
+                            : new URL(imageRes.headers.location, url).href;
+                        return fetchImage(redirectUrl, redirectCount + 1);
+                    }
+
+                    if (imageRes.statusCode !== 200) {
+                        imageRes.resume();
+                        return reject({ status: imageRes.statusCode || 404, message: 'Upstream image not found' });
+                    }
+
+                    const chunks = [];
+                    let totalBytes = 0;
+                    const MAX_IMAGE_BYTES = 15 * 1024 * 1024; // 15 MB cap
+                    let aborted = false;
+
+                    imageRes.on('data', (chunk) => {
+                        totalBytes += chunk.length;
+                        if (totalBytes > MAX_IMAGE_BYTES) {
+                            aborted = true;
+                            imageReq.destroy();
+                            return reject({ status: 413, message: 'Image too large' });
+                        }
+                        chunks.push(chunk);
+                    });
+
+                    imageRes.on('end', () => {
+                        if (aborted) return;
+                        if (!imageRes.complete) {
+                            return reject({ status: 502, message: 'Incomplete upstream image' });
+                        }
+
+                        const buffer = Buffer.concat(chunks);
+                        const format = detectValidImageFormat(buffer, imageRes.headers['content-type']);
+                        if (!format.valid) {
+                            return reject({ status: 400, message: 'Invalid image payload' });
+                        }
+
+                        try {
+                            if (!fs.existsSync(IMAGE_CACHE_DIR)) {
+                                fs.mkdirSync(IMAGE_CACHE_DIR, { recursive: true });
+                            }
+                            const tmpPath = `${cacheFilePath}.tmp.${process.pid}.${Date.now()}`;
+                            fs.writeFileSync(tmpPath, buffer);
+                            fs.renameSync(tmpPath, cacheFilePath);
+                            fs.writeFileSync(cacheMetaPath, JSON.stringify({
+                                url: imageUrl,
+                                contentType: format.mime,
+                                cachedAt: new Date().toISOString()
+                            }, null, 2));
+                        } catch (err) {
+                            console.error(`[IMAGE_PROXY] Failed to write image cache:`, err.message);
+                        }
+
+                        resolve({ buffer, mime: format.mime });
+                    });
+
+                    imageRes.on('error', (err) => {
+                        reject({ status: 500, message: 'Error reading image stream' });
+                    });
+                });
+
+                imageReq.setTimeout(15000, () => {
+                    imageReq.destroy(new Error('Image fetch timeout'));
+                });
+
+                imageReq.on('error', (err) => {
+                    reject({ status: 500, message: 'Failed to fetch image' });
+                });
+            };
+
+            fetchImage(imageUrl);
+        }).finally(() => {
+            inFlightPosterDownloads.delete(urlHash);
         });
 
-        // 15-second timeout to prevent hanging sockets
-        imageReq.setTimeout(15000, () => {
-            imageReq.destroy(new Error('Image fetch timeout'));
-        });
+        inFlightPosterDownloads.set(urlHash, downloadPromise);
+    }
 
-        imageReq.on('error', (err) => {
-            console.error(`[IMAGE_PROXY] Error fetching image from ${url}:`, err.message);
-            if (!res.headersSent) {
-                res.status(500).send('Failed to fetch image');
+    try {
+        const result = await downloadPromise;
+        if (!res.headersSent) {
+            res.setHeader('Content-Type', result.mime);
+            res.setHeader('Cache-Control', 'public, max-age=2592000');
+            res.setHeader('X-Cache', 'MISS');
+            res.send(result.buffer);
+        }
+    } catch (errObj) {
+        if (!res.headersSent) {
+            res.status(errObj?.status || 500).send(errObj?.message || 'Failed to fetch image');
+        }
+    }
+});
+
+// --- Smart Channel Logo Store & Image Cache Management Endpoints ---
+
+/**
+ * GET /api/logos/channel/:channelId
+ * Serves the internally stored logo for a channel (locked once stored until manual sync).
+ * If a channel currently has no stored logo on disk ("?"), attempts an on-demand download with a 60s failure cooldown
+ * so visible Guide channels load immediately and broken logos auto-heal when scrolling later once upstream fixes them.
+ */
+app.get('/api/logos/channel/:channelId', allowLocalOrAuth, async (req, res) => {
+    const channelKey = req.params.channelId;
+    if (!channelKey) {
+        return res.status(400).send('Missing channelId');
+    }
+
+    try {
+        const storeInternally = cachedLogoSettings.storeLogosInternally !== false;
+        const smartMatching = cachedLogoSettings.smartLogoMatching !== false;
+
+        const row = await dbGet(
+            db,
+            `SELECT channel_key, channel_id, tvg_id, normalized_name, file_name, content_type, match_type, source_url, epg_icon_url
+             FROM channel_logos WHERE channel_key = ? OR channel_id = ? LIMIT 1`,
+            [channelKey, channelKey]
+        );
+
+        if (!storeInternally) {
+            const upstreamUrl = row ? (row.source_url || row.epg_icon_url) : '';
+            if (upstreamUrl && upstreamUrl.startsWith('http')) {
+                return res.redirect(302, upstreamUrl);
+            }
+            res.setHeader('Cache-Control', 'no-store');
+            return res.status(404).send('Internal logo store disabled and no upstream URL found');
+        }
+
+        // 1. If a valid logo file is already stored on disk, serve it immediately (locked until manual update)
+        if (row && row.file_name && (smartMatching || row.match_type !== 'smart')) {
+            const fullPath = path.join(LOGOS_DIR, row.file_name);
+            if (fs.existsSync(fullPath)) {
+                try {
+                    const stat = fs.statSync(fullPath);
+                    if (stat.size >= 64) {
+                        res.setHeader('Content-Type', row.content_type || 'image/png');
+                        res.setHeader('Cache-Control', 'public, max-age=604800'); // 7 days (versioned by ?v=hash)
+                        res.setHeader('X-Logo-Match', row.match_type || 'direct');
+                        fs.createReadStream(fullPath).pipe(res);
+                        return;
+                    }
+                } catch (e) { }
+            }
+        }
+
+        // 2. No stored logo on disk yet ("?"): attempt lazy on-demand fetch if not in 60s failure cooldown
+        if (row) {
+            const lastFailedAt = recentFailedLogoChannels.get(channelKey) || (row.channel_key ? recentFailedLogoChannels.get(row.channel_key) : 0) || 0;
+            if (!lastFailedAt || (Date.now() - lastFailedAt) >= LOGO_RETRY_COOLDOWN_MS) {
+                const candidateUrls = [];
+                if (row.source_url && row.source_url.startsWith('http')) {
+                    candidateUrls.push({ url: row.source_url, matchType: 'direct' });
+                }
+                if (smartMatching && row.epg_icon_url && row.epg_icon_url.startsWith('http') && row.epg_icon_url !== row.source_url) {
+                    candidateUrls.push({ url: row.epg_icon_url, matchType: 'epg' });
+                }
+
+                for (const candidate of candidateUrls) {
+                    const dl = await downloadAndValidateLogo(candidate.url, 10000);
+                    const dlPath = (dl && dl.success && dl.fileName) ? path.join(LOGOS_DIR, dl.fileName) : null;
+                    if (dlPath && fs.existsSync(dlPath)) {
+                        try {
+                            await dbRun(
+                                db,
+                                `UPDATE channel_logos SET file_name = ?, content_type = ?, content_hash = ?, file_size = ?, match_type = ?, updated_at = CURRENT_TIMESTAMP WHERE channel_key = ?`,
+                                [dl.fileName, dl.contentType, dl.contentHash, dl.fileSize, candidate.matchType, row.channel_key]
+                            );
+                            if (smartMatching && (row.tvg_id || row.normalized_name)) {
+                                await dbRun(
+                                    db,
+                                    `UPDATE channel_logos SET file_name = ?, content_type = ?, content_hash = ?, file_size = ?, match_type = 'smart', updated_at = CURRENT_TIMESTAMP
+                                     WHERE (file_name IS NULL OR file_name = '')
+                                       AND ((? != '' AND tvg_id = ?) OR (? != '' AND normalized_name = ?))`,
+                                    [dl.fileName, dl.contentType, dl.contentHash, dl.fileSize, row.tvg_id || '', row.tvg_id || '', row.normalized_name || '', row.normalized_name || '']
+                                );
+                            }
+                        } catch (dbErr) {
+                            console.warn(`[LOGO_STORE] On-demand DB update warning for ${row.channel_key}:`, dbErr.message);
+                        }
+
+                        recentFailedLogoChannels.delete(channelKey);
+                        if (row.channel_key) recentFailedLogoChannels.delete(row.channel_key);
+
+                        res.setHeader('Content-Type', dl.contentType || 'image/png');
+                        res.setHeader('Cache-Control', 'public, max-age=604800');
+                        res.setHeader('X-Logo-Match', candidate.matchType);
+                        fs.createReadStream(dlPath).pipe(res);
+                        return;
+                    }
+                }
+
+                // Record cooldown so virtual scrolling does not hammer dead upstream URLs
+                const failTs = Date.now();
+                recentFailedLogoChannels.set(channelKey, failTs);
+                if (row.channel_key) recentFailedLogoChannels.set(row.channel_key, failTs);
+            }
+        }
+
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(404).send('Logo not available');
+    } catch (err) {
+        console.error(`[LOGO_STORE] Error serving logo for ${channelKey}:`, err.message);
+        if (!res.headersSent) res.status(500).send('Internal server error');
+    }
+});
+
+/**
+ * GET /api/logos/stats
+ * Returns storage and matching metrics for both Stored Channel Logos and Cached VOD Posters.
+ */
+app.get('/api/logos/stats', requireAuth, requireAdmin, async (req, res) => {
+    try {
+        await ensureChannelLogosSeededFromM3u();
+        const smartMatching = cachedLogoSettings.smartLogoMatching !== false;
+
+        // 1. Channel Logo disk files
+        let logoFileCount = 0;
+        let logoTotalSize = 0;
+        const existingLogoFiles = new Set();
+        if (fs.existsSync(LOGOS_DIR)) {
+            const files = fs.readdirSync(LOGOS_DIR);
+            for (const f of files) {
+                if (f.includes('.tmp')) continue;
+                try {
+                    const st = fs.statSync(path.join(LOGOS_DIR, f));
+                    if (st.isFile()) {
+                        logoFileCount++;
+                        logoTotalSize += st.size;
+                        existingLogoFiles.add(f);
+                    }
+                } catch (e) { }
+            }
+        }
+
+        // 2. Channel Logo DB rows
+        const rows = await dbAll(db, `SELECT file_name, match_type FROM channel_logos`);
+        const totalChannels = rows.length;
+        let storedChannels = 0;
+        let directMatches = 0;
+        let smartMatches = 0;
+
+        for (const r of rows) {
+            if (r.file_name && existingLogoFiles.has(r.file_name)) {
+                if (r.match_type === 'smart') {
+                    if (smartMatching) {
+                        storedChannels++;
+                        smartMatches++;
+                    }
+                } else {
+                    storedChannels++;
+                    directMatches++;
+                }
+            }
+        }
+
+        // 3. VOD Poster Cache disk files
+        let posterFileCount = 0;
+        let posterTotalSize = 0;
+        if (fs.existsSync(IMAGE_CACHE_DIR)) {
+            const files = fs.readdirSync(IMAGE_CACHE_DIR);
+            for (const f of files) {
+                if (f.includes('.tmp')) continue;
+                try {
+                    const st = fs.statSync(path.join(IMAGE_CACHE_DIR, f));
+                    if (st.isFile()) {
+                        posterTotalSize += st.size;
+                        if (!f.endsWith('.meta')) {
+                            posterFileCount++;
+                        }
+                    }
+                } catch (e) { }
+            }
+        }
+
+        res.json({
+            logos: {
+                fileCount: logoFileCount,
+                totalSize: logoTotalSize,
+                totalChannels,
+                storedChannels,
+                directMatches,
+                smartMatches,
+                missingLogos: Math.max(0, totalChannels - storedChannels),
+                syncState: logoSyncState
+            },
+            posters: {
+                fileCount: posterFileCount,
+                totalSize: posterTotalSize
             }
         });
-    };
+    } catch (error) {
+        console.error('[LOGO_STORE] Error getting logo & poster cache stats:', error.message);
+        res.status(500).json({ error: 'Failed to retrieve logo & poster cache statistics.' });
+    }
+});
 
-    // Start fetching
-    fetchImage(imageUrl);
+/**
+ * POST /api/logos/sync
+ * Manually triggers a full verification & update check of all channel logos against upstream sources.
+ */
+app.post('/api/logos/sync', requireAuth, requireAdmin, async (req, res) => {
+    try {
+        if (logoSyncState.inProgress) {
+            return res.json({
+                success: true,
+                alreadyRunning: true,
+                runningInBackground: true,
+                syncState: logoSyncState
+            });
+        }
+
+        await ensureChannelLogosSeededFromM3u();
+        const syncPromise = syncChannelLogos({ forceVerify: true, req });
+
+        const raceResult = await Promise.race([
+            syncPromise.then(r => ({ finished: true, result: r })),
+            new Promise(resolve => setTimeout(() => resolve({ finished: false }), 3500))
+        ]);
+
+        if (raceResult.finished) {
+            return res.json({
+                success: true,
+                completed: true,
+                result: raceResult.result,
+                syncState: logoSyncState
+            });
+        } else {
+            return res.json({
+                success: true,
+                runningInBackground: true,
+                syncState: logoSyncState
+            });
+        }
+    } catch (error) {
+        console.error('[LOGO_STORE] Error triggering manual logo sync:', error.message);
+        res.status(500).json({ error: 'Failed to start channel logo sync.' });
+    }
+});
+
+/**
+ * DELETE /api/logos/cache
+ * Wipes all stored channel logo files in /data/logos and resets stored file bindings in channel_logos
+ * (while preserving upstream/EPG URLs). Does not auto-trigger a background download so behavior is
+ * consistent with Clear VOD Poster Cache; admins can click "Check & Update Logos Now" when ready.
+ */
+app.delete('/api/logos/cache', requireAuth, requireAdmin, async (req, res) => {
+    try {
+        if (logoSyncState.inProgress) {
+            logoSyncState.cancelRequested = true;
+            await new Promise(resolve => setTimeout(resolve, 450));
+        }
+        recentFailedLogoChannels.clear();
+
+        let deletedFiles = 0;
+        if (fs.existsSync(LOGOS_DIR)) {
+            const files = fs.readdirSync(LOGOS_DIR);
+            for (const f of files) {
+                try {
+                    fs.unlinkSync(path.join(LOGOS_DIR, f));
+                    if (!f.includes('.tmp')) deletedFiles++;
+                } catch (e) {
+                    console.error(`[LOGO_STORE] Failed to delete logo file ${f}:`, e.message);
+                }
+            }
+        }
+
+        // Reset sync status badge state so UI reflects the clean reset
+        logoSyncState.inProgress = false;
+        logoSyncState.cancelRequested = false;
+        logoSyncState.processed = 0;
+        logoSyncState.total = 0;
+        logoSyncState.updated = 0;
+        logoSyncState.matched = 0;
+        logoSyncState.keptSafe = 0;
+        logoSyncState.failed = 0;
+        logoSyncState.lastCompletedAt = null;
+
+        await ensureChannelLogosSeededFromM3u();
+        await dbRun(
+            db,
+            `UPDATE channel_logos SET file_name = NULL, content_type = NULL, content_hash = NULL, file_size = 0, match_type = NULL, updated_at = CURRENT_TIMESTAMP`
+        );
+
+        const settings = getSettings();
+        settings.logoCacheClearedAt = Date.now();
+        settings.sourcesLastUpdated = new Date().toISOString();
+        saveSettings(settings);
+
+        await rewriteLiveM3uLogosFromStore();
+
+        console.log(`[LOGO_STORE] Admin ${req.session.username} cleared ${deletedFiles} stored channel logo files.`);
+        res.json({
+            success: true,
+            deletedFiles,
+            message: `Cleared ${deletedFiles} stored channel logo files.`
+        });
+    } catch (error) {
+        console.error('[LOGO_STORE] Error clearing channel logo cache:', error.message);
+        res.status(500).json({ error: 'Failed to clear channel logo cache.' });
+    }
+});
+
+/**
+ * DELETE /api/image-cache
+ * Wipes all cached VOD poster files in /data/image_cache and records posterCacheClearedAt to bust browser cache.
+ */
+app.delete('/api/image-cache', requireAuth, requireAdmin, (req, res) => {
+    try {
+        let deletedFiles = 0;
+        if (fs.existsSync(IMAGE_CACHE_DIR)) {
+            const files = fs.readdirSync(IMAGE_CACHE_DIR);
+            for (const f of files) {
+                try {
+                    fs.unlinkSync(path.join(IMAGE_CACHE_DIR, f));
+                    if (!f.endsWith('.meta') && !f.includes('.tmp')) {
+                        deletedFiles++;
+                    }
+                } catch (e) {
+                    console.error(`[IMAGE_PROXY] Failed to delete cached poster file ${f}:`, e.message);
+                }
+            }
+        }
+
+        const posterCacheClearedAt = Date.now();
+        const settings = getSettings();
+        settings.posterCacheClearedAt = posterCacheClearedAt;
+        saveSettings(settings);
+
+        console.log(`[IMAGE_PROXY] Admin ${req.session.username} cleared ${deletedFiles} cached VOD posters.`);
+        res.json({
+            success: true,
+            deletedFiles,
+            posterCacheClearedAt,
+            message: `Cleared ${deletedFiles} cached VOD poster images.`
+        });
+    } catch (error) {
+        console.error('[IMAGE_PROXY] Error clearing VOD poster cache:', error.message);
+        res.status(500).json({ error: 'Failed to clear VOD poster cache.' });
+    }
 });
 
 
@@ -6542,14 +8847,18 @@ app.post('/api/logs/client', requireAuth, express.text({ type: ['text/*', 'appli
 app.get('*', (req, res) => {
     const filePath = path.join(PUBLIC_DIR, req.path);
     if (fs.existsSync(filePath) && fs.lstatSync(filePath).isFile()) {
+        if (/\.(html|js|css)$/i.test(filePath)) {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        }
         return res.sendFile(filePath);
     }
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
 });
 
 // --- Server Start ---
-// NEW: Run hardware detection before starting the server
-detectHardwareAcceleration().then(() => {
+// NEW: Run hardware detection and ensure DB schema is ready before starting the server
+Promise.all([detectHardwareAcceleration(), dbReady]).then(() => {
     app.listen(port, () => {
         console.log(`\n======================================================`);
         console.log(` VINI PLAY server listening at http://localhost:${port}`);

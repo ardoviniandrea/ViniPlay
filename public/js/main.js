@@ -8,10 +8,10 @@
 import { appState, guideState, UIElements } from './modules/state.js';
 import { apiFetch, fetchConfig, getDeviceSetting, saveDeviceSetting } from './modules/api.js'; // IMPORTED fetchConfig & device settings
 import { checkAuthStatus, setupAuthEventListeners } from './modules/auth.js';
-import { handleGuideLoad, finalizeGuideLoad, setupGuideEventListeners } from './modules/guide.js';
+import { handleGuideLoad, finalizeGuideLoad, setupGuideEventListeners, onGuideTabActivated } from './modules/guide.js';
 //-- ENHANCEMENT: Import playChannel to handle the remote channel change event.
 import { setupPlayerEventListeners, playChannel, stopAndCleanupPlayer, shouldMaintainAspectRatio } from './modules/player.js';
-import { setupSettingsEventListeners, populateTimezoneSelector, updateUIFromSettings } from './modules/settings.js';
+import { setupSettingsEventListeners, populateTimezoneSelector, updateUIFromSettings, handleLogoSyncStatusUpdate, renderUserTableRows } from './modules/settings.js';
 // MODIFIED: Imported showBroadcastMessage
 import { makeModalResizable, handleRouteChange, switchTab, handleConfirm, closeModal, makeColumnResizable, openMobileMenu, closeMobileMenu, showNotification, showBroadcastMessage, updateProcessingStatus, showConfirm, refreshGuideAfterProcessing } from './modules/ui.js';
 // MODIFIED: Import navigateToProgramInGuide to handle deep links from notifications.
@@ -164,6 +164,16 @@ function initializeSse() {
             initDvrPage();
         }
     });
+
+    // Listen for real-time channel logo sync updates
+    eventSource.addEventListener('logo-sync-status', (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            handleLogoSyncStatusUpdate(data);
+        } catch (e) {
+            console.warn('[SSE] Failed to parse logo-sync-status event:', e);
+        }
+    });
 }
 
 
@@ -264,7 +274,7 @@ export async function initMainApp() {
         if (!loadedFromCache) {
             if (config.m3uContent) {
                 console.log('[MAIN] Processing guide data from server config.');
-                await handleGuideLoad(config.m3uContent, config.epgContent);
+                await handleGuideLoad(config.m3uContent, config.epgContent, true);
                 // After successfully loading from server, update the local timestamp and signature.
                 await saveDataToDB('sourcesLastUpdated', serverTimestamp);
                 await saveDataToDB('userPermissionsSignature', serverUserSig);
@@ -274,6 +284,10 @@ export async function initMainApp() {
                 UIElements.initialLoadingIndicator.classList.add('hidden');
                 UIElements.noDataMessage.classList.remove('hidden');
             }
+        }
+
+        if (appState.currentUser?.isAdmin) {
+            renderUserTableRows();
         }
 
         // Load the list of scheduled notifications for the UI
@@ -434,7 +448,7 @@ function restoreDimensions() {
     const defaultChannelWidth = window.innerWidth < 768 ? 64 : 180;
     const channelWidth = getDeviceSetting('channelColumnWidth', guideState.settings?.channelColumnWidth || defaultChannelWidth);
     if (UIElements.guideGrid) {
-        const safeWidth = Math.min(window.innerWidth - 80, Math.max(50, channelWidth));
+        const safeWidth = window.innerWidth < 768 ? 64 : Math.min(window.innerWidth - 80, Math.max(50, channelWidth));
         UIElements.guideGrid.style.setProperty('--channel-col-width', `${safeWidth}px`);
         if (guideState.settings) guideState.settings.channelColumnWidth = safeWidth;
         console.log(`[MAIN] Restored channel column width for this device: ${safeWidth}px`);
@@ -462,7 +476,7 @@ function setupCoreEventListeners() {
     };
 
     // Desktop Tabs
-    setupTabListener(UIElements.tabGuide, 'guide');
+    setupTabListener(UIElements.tabGuide, 'guide', onGuideTabActivated);
     setupTabListener(UIElements.tabMultiview, 'multiview', initMultiView);
     setupTabListener(UIElements.tabPlayer, 'player', initDirectPlayer);
     setupTabListener(UIElements.tabDvr, 'dvr', initDvrPage);
@@ -494,12 +508,14 @@ function setupCoreEventListeners() {
     // --- Browser and Document Listeners ---
     window.addEventListener('popstate', () => { console.log('[NAV] Popstate event (browser back/forward).'); handleRouteChange(); });
 
-    // NEW: Refresh data when tab becomes visible again
+    // Refresh data when tab becomes visible again
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
             console.log('[MAIN] Tab is visible again, refreshing data for current page.');
             const currentPage = window.location.pathname;
-            if (currentPage.startsWith('/dvr')) {
+            if (currentPage === '/' || currentPage.startsWith('/tvguide')) {
+                onGuideTabActivated();
+            } else if (currentPage.startsWith('/dvr')) {
                 initDvrPage();
             } else if (currentPage.startsWith('/notifications')) {
                 loadAndScheduleNotifications();
@@ -507,6 +523,18 @@ function setupCoreEventListeners() {
                 initActivityPage();
             }
         }
+    });
+
+    // Keep TV Guide timeline and channel column width aligned across viewport/orientation changes
+    let guideResizeTimer = null;
+    window.addEventListener('resize', () => {
+        clearTimeout(guideResizeTimer);
+        guideResizeTimer = setTimeout(() => {
+            const currentPage = window.location.pathname;
+            if (currentPage === '/' || currentPage.startsWith('/tvguide')) {
+                onGuideTabActivated();
+            }
+        }, 150);
     });
 
     // --- Modal Listeners ---
@@ -600,6 +628,11 @@ function setupCoreEventListeners() {
 
 
 // --- App Start ---
+window.__viniAndroidNavigateToProgram = (channelId, programStart, programId) => {
+    console.log('[ANDROID_BRIDGE] Navigating to program in guide from native notification:', { channelId, programStart, programId });
+    navigateToProgramInGuide(channelId, programStart, programId);
+};
+
 document.addEventListener('DOMContentLoaded', () => {
     initTelemetry();
     // NEW: Check for notification deep link parameters on initial load.
@@ -621,7 +654,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Register Service Worker
-    if ('serviceWorker' in navigator && 'PushManager' in window) {
+    if (window.ViniAndroid) {
+        console.log('[APP_START] Running inside Native ViniPlay Android App. Using native notification & media engine.');
+        subscribeUserToPush();
+    } else if ('serviceWorker' in navigator && 'PushManager' in window) {
         console.log('[APP_START] Service Worker and Push API are supported by browser.');
         navigator.serviceWorker.register('/sw.js')
             .then(swReg => {
